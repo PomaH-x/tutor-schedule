@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Расписание</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1a1a2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="apple-touch-icon" href="assets/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <div id="screen-auth" class="screen active">
+      <div class="auth-container">
+        <div class="auth-logo">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <rect width="48" height="48" rx="12" fill="var(--accent)"/>
+            <path d="M14 16h6v6h-6zM20 22h6v6h-6zM26 16h6v6h-6zM14 28h6v6h-6zM26 28h6v6h-6z" fill="white" opacity="0.9"/>
+          </svg>
+          <h1>Расписание</h1>
+        </div>
+
+        <div id="auth-step-role" class="auth-step active">
+          <p class="auth-subtitle">Выберите роль</p>
+          <div class="role-cards">
+            <button class="role-card" data-role="teacher">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M12 14l9-5-9-5-9 5 9 5z"/>
+                <path d="M12 14l6.16-3.422A12 12 0 0 1 12 21a12 12 0 0 1-6.16-10.422L12 14z"/>
+              </svg>
+              <span>Преподаватель</span>
+            </button>
+            <button class="role-card" data-role="student">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+              <span>Ученик</span>
+            </button>
+            <button class="role-card" data-role="admin">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+              <span>Админ</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="auth-step-login" class="auth-step">
+          <button class="auth-back" id="btn-back-to-role">← Назад</button>
+          <p class="auth-subtitle">Вход</p>
+          <div class="auth-form">
+            <input type="email" id="input-email" placeholder="Email" autocomplete="email">
+            <input type="password" id="input-password" placeholder="Пароль" autocomplete="current-password">
+            <button class="btn-primary" id="btn-login">Войти</button>
+            <button class="btn-link" id="btn-show-register">Нет аккаунта? Зарегистрироваться</button>
+          </div>
+        </div>
+
+        <div id="auth-step-register" class="auth-step">
+          <button class="auth-back" id="btn-back-to-login">← Назад</button>
+          <p class="auth-subtitle">Регистрация</p>
+          <div class="auth-form">
+            <input type="text" id="input-fullname" placeholder="Полное имя" autocomplete="name">
+            <input type="email" id="input-reg-email" placeholder="Email" autocomplete="email">
+            <input type="password" id="input-reg-password" placeholder="Пароль" autocomplete="new-password">
+            <input type="password" id="input-reg-password2" placeholder="Повторите пароль" autocomplete="new-password">
+            <button class="btn-primary" id="btn-register">Зарегистрироваться</button>
+          </div>
+        </div>
+
+        <div id="auth-step-pending" class="auth-step">
+          <div class="pending-box">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+            <p>Заявка отправлена</p>
+            <span class="pending-hint">Ожидайте подтверждения от администратора</span>
+            <button class="btn-link" id="btn-logout-pending">Выйти</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="screen-schedule" class="screen">
+      <header class="top-bar">
+        <div class="top-bar-left">
+          <h2 id="current-week-label"></h2>
+        </div>
+        <div class="top-bar-center">
+          <button class="week-nav" id="btn-prev-week">‹</button>
+          <button class="btn-today" id="btn-today">Сегодня</button>
+          <button class="week-nav" id="btn-next-week">›</button>
+        </div>
+        <div class="top-bar-right">
+          <button class="btn-icon" id="btn-profile" title="Профиль">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+      <div id="schedule-grid" class="schedule-grid"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="modules/config.js"></script>
+  <script src="modules/state.js"></script>
+  <script src="modules/auth.js"></script>
+  <script src="modules/toast.js"></script>
+  <script src="modules/schedule.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
