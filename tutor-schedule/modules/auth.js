@@ -10,7 +10,7 @@ function loginToEmail(login) {
 }
 
 function generateShortName(name1, name2) {
-  return name1[0].toUpperCase() + '.' + name2[0].toUpperCase() + '.';
+  return name1[0].toUpperCase() + name2[0].toUpperCase();
 }
 
 async function getRandomColor() {
