@@ -179,7 +179,13 @@ function handleCellTooltip(e, grid) {
 
   hoveredTooltip.textContent = text;
   const rect = cell.getBoundingClientRect();
-  hoveredTooltip.style.left = `${rect.right + 8}px`;
+  const tooltipWidth = hoveredTooltip.offsetWidth || 120;
+  const spaceRight = window.innerWidth - rect.right;
+  if (spaceRight > tooltipWidth + 16) {
+    hoveredTooltip.style.left = `${rect.right + 8}px`;
+  } else {
+    hoveredTooltip.style.left = `${rect.left - tooltipWidth - 8}px`;
+  }
   hoveredTooltip.style.top = `${rect.top + rect.height / 2}px`;
 
   if (!selecting) {
@@ -294,12 +300,10 @@ function renderLessons() {
 function buildModalTitle(dayIndex, room, slotFrom, slotTo) {
   const dates = getWeekDates(state.currentWeekStart);
   const date = dates[dayIndex];
-  const dayName = DAYS[dayIndex];
-  const dayNum = date.getDate();
-  const month = MONTHS_SHORT[date.getMonth()];
+  const dayName = DAYS_FULL[dayIndex];
   const roomName = ROOM_FULL[room - 1];
   const time = `${slotToTime(slotFrom)}–${slotToTime(slotTo)}`;
-  return `${dayName}, ${dayNum} ${month} · ${roomName} · ${time}`;
+  return `${dayName} · ${roomName} · ${time}`;
 }
 
 async function loadTeacherStudentsForModal(teacherId) {
@@ -308,7 +312,12 @@ async function loadTeacherStudentsForModal(teacherId) {
     .select('id, first_name, last_name, subject')
     .eq('teacher_id', teacherId)
     .order('first_name');
-  allTeacherStudents = data || [];
+  const seen = new Set();
+  allTeacherStudents = (data || []).filter(s => {
+    if (seen.has(s.id)) return false;
+    seen.add(s.id);
+    return true;
+  });
 }
 
 function openLessonModal(sel) {
@@ -454,6 +463,12 @@ async function saveLesson() {
 
   const btn = document.getElementById('btn-save-lesson');
   btn.disabled = true;
+
+  if (m.selectedIds.size === 0) {
+    showToast('Добавьте хотя бы одного ученика', 'error');
+    btn.disabled = false;
+    return;
+  }
 
   const conflict = await checkConflict(m.day, m.room, m.slotFrom, m.slotTo, m.mode === 'edit' ? m.lessonId : null);
   if (conflict) { showToast('Кабинет занят в это время', 'error'); btn.disabled = false; return; }

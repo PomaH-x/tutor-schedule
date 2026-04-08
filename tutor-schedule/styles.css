@@ -412,7 +412,7 @@ input, button {
   align-items: center;
   justify-content: center;
   font-size: 10px;
-  color: var(--text-muted);
+  color: var(--text);
   font-weight: 500;
 }
 
@@ -455,21 +455,21 @@ input, button {
   position: fixed;
   z-index: 50;
   padding: 5px 10px;
-  background: #e8a838;
-  color: #1a1a2e;
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
   font-family: var(--font);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   border-radius: 6px;
   white-space: nowrap;
   pointer-events: none;
   transform: translateY(-50%);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.4);
 }
 
 .cell-tooltip::before {
-  content: '+';
-  margin-right: 4px;
+  content: none;
 }
 
 .schedule-grid {
@@ -478,6 +478,7 @@ input, button {
   display: grid;
   position: relative;
   border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 .now-line {
@@ -539,6 +540,24 @@ input, button {
   margin-top: 8px;
 }
 
+.lesson-students-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.lesson-students-list::-webkit-scrollbar-track {
+  background: var(--bg-elevated);
+  border-radius: 3px;
+}
+
+.lesson-students-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.lesson-students-list::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
 .lesson-no-students {
   font-size: 13px;
   color: var(--text-muted);
@@ -579,11 +598,33 @@ input, button {
 }
 
 .lesson-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
   width: 18px;
   height: 18px;
-  accent-color: var(--accent);
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elevated);
   cursor: pointer;
   flex-shrink: 0;
+  position: relative;
+  transition: all 0.15s;
+}
+
+.lesson-checkbox:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.lesson-checkbox:checked::after {
+  content: '✓';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  color: white;
+  font-weight: 700;
 }
 
 .lesson-check-mark {
@@ -912,6 +953,11 @@ input, button {
   font-family: var(--font);
   outline: none;
   transition: border-color 0.2s;
+}
+
+.modal-body .search-field input {
+  padding: 10px 12px 10px 36px;
+  background: var(--bg-elevated);
 }
 
 .modal-body input:focus,
