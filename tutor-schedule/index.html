@@ -58,8 +58,13 @@
           <button class="auth-back" id="btn-back-to-role">← Назад</button>
           <p class="auth-subtitle">Вход</p>
           <div class="auth-form">
-            <input type="email" id="input-email" placeholder="Email" autocomplete="email">
-            <input type="password" id="input-password" placeholder="Пароль" autocomplete="current-password">
+            <input type="text" id="input-login" placeholder="Логин" autocomplete="username">
+            <div class="password-field">
+              <input type="password" id="input-password" placeholder="Пароль" autocomplete="current-password">
+              <button type="button" class="btn-eye" data-target="input-password">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
             <button class="btn-primary" id="btn-login">Войти</button>
             <button class="btn-link" id="btn-show-register">Нет аккаунта? Зарегистрироваться</button>
           </div>
@@ -67,12 +72,17 @@
 
         <div id="auth-step-register" class="auth-step">
           <button class="auth-back" id="btn-back-to-login">← Назад</button>
-          <p class="auth-subtitle">Регистрация</p>
+          <p class="auth-subtitle" id="register-subtitle">Регистрация</p>
           <div class="auth-form">
-            <input type="text" id="input-fullname" placeholder="Полное имя" autocomplete="name">
-            <input type="email" id="input-reg-email" placeholder="Email" autocomplete="email">
-            <input type="password" id="input-reg-password" placeholder="Пароль" autocomplete="new-password">
-            <input type="password" id="input-reg-password2" placeholder="Повторите пароль" autocomplete="new-password">
+            <input type="text" id="input-name1" placeholder="" autocomplete="given-name">
+            <input type="text" id="input-name2" placeholder="" autocomplete="family-name">
+            <input type="text" id="input-reg-login" placeholder="Логин" autocomplete="username">
+            <div class="password-field">
+              <input type="password" id="input-reg-password" placeholder="Пароль" autocomplete="new-password">
+              <button type="button" class="btn-eye" data-target="input-reg-password">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
             <button class="btn-primary" id="btn-register">Зарегистрироваться</button>
           </div>
         </div>
@@ -112,6 +122,113 @@
       </header>
       <div id="schedule-grid" class="schedule-grid"></div>
     </div>
+
+    <div id="screen-profile" class="screen">
+      <header class="top-bar">
+        <div class="top-bar-left">
+          <button class="auth-back" id="btn-back-to-schedule">← Расписание</button>
+        </div>
+        <div class="top-bar-center">
+          <h2>Личный кабинет</h2>
+        </div>
+        <div class="top-bar-right">
+          <button class="btn-icon btn-logout-icon" id="btn-logout" title="Выйти">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="profile-content">
+        <div class="profile-info">
+          <div class="profile-avatar" id="profile-avatar"></div>
+          <div class="profile-details">
+            <h3 id="profile-name"></h3>
+            <span class="profile-role" id="profile-role"></span>
+          </div>
+        </div>
+
+        <div class="students-section">
+          <div class="students-header">
+            <h3>База учеников</h3>
+            <div class="students-controls">
+              <div class="search-field">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" id="student-search" placeholder="Поиск по имени или фамилии">
+              </div>
+              <button class="btn-primary btn-add-student" id="btn-add-student">+ Добавить</button>
+            </div>
+          </div>
+
+          <div id="students-list" class="students-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="modal-overlay" class="modal-overlay">
+      <div class="modal" id="modal-student">
+        <div class="modal-header">
+          <h3 id="modal-student-title">Добавить ученика</h3>
+          <button class="btn-modal-close" id="btn-modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <input type="text" id="student-first-name" placeholder="Имя">
+          <input type="text" id="student-last-name" placeholder="Фамилия">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Предмет</label>
+              <select id="student-subject">
+                <option value="math">Математика</option>
+                <option value="informatics">Информатика</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Занятий в неделю</label>
+              <select id="student-lessons-per-week">
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Длительность (мин)</label>
+              <select id="student-duration">
+                <option value="60">60</option>
+                <option value="90" selected>90</option>
+                <option value="120">120</option>
+              </select>
+            </div>
+          </div>
+          <textarea id="student-notes" placeholder="Примечание (опционально)" rows="2"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-danger" id="btn-delete-student" style="display:none">Удалить</button>
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-cancel-student">Отмена</button>
+            <button class="btn-primary" id="btn-save-student">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirm-overlay" class="modal-overlay">
+      <div class="modal modal-sm">
+        <div class="modal-body" style="text-align:center;padding:24px">
+          <p id="confirm-text">Удалить ученика?</p>
+        </div>
+        <div class="modal-footer" style="justify-content:center">
+          <button class="btn-secondary" id="btn-confirm-cancel">Отмена</button>
+          <button class="btn-danger" id="btn-confirm-ok">Удалить</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="toast"></div>
@@ -122,6 +239,7 @@
   <script src="modules/auth.js"></script>
   <script src="modules/toast.js"></script>
   <script src="modules/schedule.js"></script>
+  <script src="modules/students.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
