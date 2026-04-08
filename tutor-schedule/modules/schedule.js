@@ -75,7 +75,7 @@ function renderGrid() {
 async function loadLessons() {
   const weekStart = formatDate(state.currentWeekStart);
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('lessons')
     .select(`
       *,

@@ -12,7 +12,7 @@ function generateShortName(fullName) {
 }
 
 async function getRandomColor() {
-  const { data } = await supabase
+  const { data } = await db
     .from('profiles')
     .select('color')
     .eq('role', 'teacher');
@@ -32,7 +32,7 @@ function showScreen(screenId) {
 }
 
 async function loadProfile(userId) {
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('profiles')
     .select('*')
     .eq('id', userId)
@@ -53,7 +53,7 @@ async function handleLogin() {
   const btn = document.getElementById('btn-login');
   btn.disabled = true;
 
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await db.auth.signInWithPassword({ email, password });
 
   btn.disabled = false;
 
@@ -89,7 +89,7 @@ async function handleRegister() {
   const btn = document.getElementById('btn-register');
   btn.disabled = true;
 
-  const { data, error } = await supabase.auth.signUp({ email, password });
+  const { data, error } = await db.auth.signUp({ email, password });
 
   if (error) {
     btn.disabled = false;
@@ -101,7 +101,7 @@ async function handleRegister() {
   const shortName = (role === 'teacher' || role === 'admin') ? generateShortName(fullName) : null;
   const color = role === 'teacher' ? await getRandomColor() : null;
 
-  const { error: profileError } = await supabase
+  const { error: profileError } = await db
     .from('profiles')
     .insert({
       id: data.user.id,
@@ -139,7 +139,7 @@ async function onAuthSuccess(user) {
 
   if (profile.status === 'rejected') {
     showToast('Заявка отклонена', 'error');
-    await supabase.auth.signOut();
+    await db.auth.signOut();
     return;
   }
 
@@ -148,7 +148,7 @@ async function onAuthSuccess(user) {
 }
 
 async function handleLogout() {
-  await supabase.auth.signOut();
+  await db.auth.signOut();
   state.user = null;
   state.profile = null;
   showScreen('screen-auth');
