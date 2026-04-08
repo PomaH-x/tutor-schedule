@@ -229,6 +229,38 @@
         </div>
       </div>
     </div>
+
+    <div id="lesson-overlay" class="modal-overlay">
+      <div class="modal" id="modal-lesson">
+        <div class="modal-header">
+          <h3 id="lesson-modal-title">Новое занятие</h3>
+          <button class="btn-modal-close" id="btn-close-lesson">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="lesson-info">
+            <span id="lesson-info-day"></span>
+            <span id="lesson-info-room"></span>
+            <span id="lesson-info-time"></span>
+          </div>
+          <div class="lesson-students-block">
+            <label>Ученики (макс. 4)</label>
+            <div id="lesson-students-list" class="lesson-students-list"></div>
+            <div class="search-field" style="margin-top:8px">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="lesson-student-search" placeholder="Найти ученика">
+            </div>
+            <div id="lesson-search-results" class="lesson-search-results"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-danger" id="btn-delete-lesson" style="display:none">Удалить</button>
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-cancel-lesson">Отмена</button>
+            <button class="btn-primary" id="btn-save-lesson">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="toast"></div>

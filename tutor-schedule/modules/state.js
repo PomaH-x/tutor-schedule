@@ -4,7 +4,8 @@ const state = {
   currentWeekStart: null,
   lessons: [],
   students: [],
-  selectedRole: null
+  selectedRole: null,
+  lessonModal: null
 };
 
 function getMonday(date) {

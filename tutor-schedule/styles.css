@@ -338,9 +338,6 @@ input, button {
   flex: 1;
   overflow: auto;
   display: grid;
-  grid-template-columns: 60px repeat(7, 1fr);
-  grid-template-rows: 48px;
-  grid-auto-rows: 30px;
   position: relative;
 }
 
@@ -350,6 +347,7 @@ input, button {
   z-index: 10;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -370,7 +368,7 @@ input, button {
 }
 
 .grid-header .day-num {
-  font-size: 16px;
+  font-size: 14px;
   color: var(--text);
   font-weight: 700;
 }
@@ -379,11 +377,33 @@ input, button {
   color: var(--accent);
 }
 
+.grid-room-label {
+  position: sticky;
+  top: 40px;
+  z-index: 10;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid rgba(42, 42, 69, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.grid-room-label-today {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .grid-corner {
   position: sticky;
   top: 0;
   left: 0;
-  z-index: 11;
+  z-index: 12;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   border-right: 1px solid var(--border);
@@ -396,70 +416,182 @@ input, button {
   background: var(--bg);
   border-right: 1px solid var(--border);
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding-top: 2px;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-muted);
-  font-weight: 500;
+  font-weight: 400;
+  opacity: 0.5;
+}
+
+.grid-time-hour {
+  font-weight: 600;
+  opacity: 1;
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .grid-cell {
-  border-right: 1px solid var(--border);
-  border-bottom: 1px solid rgba(42, 42, 69, 0.4);
+  border-right: 1px solid rgba(42, 42, 69, 0.3);
+  border-bottom: 1px solid rgba(42, 42, 69, 0.25);
   position: relative;
+  cursor: crosshair;
 }
 
 .grid-cell-hour {
   border-bottom: 1px solid var(--border);
 }
 
-.grid-cell-rooms {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+.grid-cell-day-end {
+  border-right: 1px solid var(--border);
+}
+
+.grid-cell-selected {
+  background: var(--accent-soft);
+}
+
+.now-line {
+  position: relative;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.now-line::after {
+  content: '';
   position: absolute;
-  inset: 0;
-}
-
-.grid-cell-rooms > div {
-  border-right: 1px solid rgba(42, 42, 69, 0.2);
-}
-
-.grid-cell-rooms > div:last-child {
-  border-right: none;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: var(--danger);
+  border-radius: 1px;
 }
 
 /* ===== LESSON CARD ===== */
 
 .lesson-card {
-  position: absolute;
-  left: 2px;
-  right: 2px;
   border-radius: var(--radius-sm);
-  padding: 4px 6px;
-  font-size: 11px;
+  padding: 3px 5px;
+  font-size: 10px;
   font-weight: 600;
   cursor: pointer;
   overflow: hidden;
   z-index: 2;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid;
+  margin: 1px;
   transition: box-shadow 0.15s, transform 0.15s;
 }
 
 .lesson-card:hover {
   box-shadow: var(--shadow);
-  transform: scale(1.02);
+  transform: scale(1.03);
   z-index: 3;
 }
 
 .lesson-card .lc-teacher {
   font-weight: 700;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .lesson-card .lc-count {
-  font-size: 10px;
+  font-size: 9px;
   opacity: 0.8;
+}
+
+/* ===== LESSON MODAL ===== */
+
+.lesson-info {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.lesson-students-block label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.lesson-students-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  min-height: 32px;
+}
+
+.lesson-no-students {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 6px 0;
+}
+
+.lesson-student-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 10px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.chip-remove {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.chip-remove:hover {
+  opacity: 1;
+}
+
+.lesson-search-results {
+  margin-top: 4px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.search-result-item {
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+}
+
+.search-result-item:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.search-result-item:last-child {
+  border-bottom: none;
+}
+
+.search-no-results {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
 }
 
 /* ===== TOAST ===== */
@@ -518,7 +650,7 @@ input, button {
   }
 
   .schedule-grid {
-    grid-template-columns: 44px repeat(7, minmax(100px, 1fr));
+    grid-template-columns: 36px repeat(21, minmax(36px, 1fr)) !important;
   }
 
   .students-controls {

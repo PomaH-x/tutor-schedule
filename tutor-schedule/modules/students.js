@@ -134,8 +134,9 @@ async function saveStudent() {
     return;
   }
 
+  const isEdit = !!editingStudentId;
   closeStudentModal();
-  showToast(editingStudentId ? 'Ученик обновлён' : 'Ученик добавлен', 'success');
+  showToast(isEdit ? 'Ученик отредактирован' : 'Ученик добавлен', 'success');
   await loadStudents();
 }
 
@@ -154,18 +155,18 @@ function closeConfirm() {
 
 async function deleteStudent() {
   if (!editingStudentId) return;
-  const student = state.students.find(s => s.id === editingStudentId);
+  const id = editingStudentId;
+  const student = state.students.find(s => s.id === id);
   const name = student ? `${student.first_name} ${student.last_name}` : 'ученика';
 
   closeStudentModal();
   showConfirm(`Удалить ${name}?`, async () => {
-    const { error } = await db.from('students').delete().eq('id', editingStudentId);
+    const { error } = await db.from('students').delete().eq('id', id);
     if (error) {
       showToast('Ошибка удаления', 'error');
       return;
     }
     showToast('Ученик удалён', 'success');
-    editingStudentId = null;
     await loadStudents();
   });
 }
