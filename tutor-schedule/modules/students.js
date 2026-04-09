@@ -70,7 +70,7 @@ function studentCardHTML(s) {
     </div>
     <div class="student-card-meta">
       <span>${s.lessons_per_week}×/нед</span>
-      <span>${s.lesson_duration} мин</span>
+      <span>${s.lesson_duration >= 60 ? (s.lesson_duration / 60 === Math.floor(s.lesson_duration / 60) ? (s.lesson_duration / 60) + ' ч' : (s.lesson_duration / 60).toFixed(1).replace('.', ',') + ' ч') : s.lesson_duration + ' мин'}</span>
     </div>
   </div>`;
 }

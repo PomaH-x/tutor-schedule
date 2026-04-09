@@ -5,7 +5,8 @@ const state = {
   lessons: [],
   students: [],
   selectedRole: null,
-  lessonModal: null
+  lessonModal: null,
+  placingLesson: null
 };
 
 function getMonday(date) {

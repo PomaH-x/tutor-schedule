@@ -198,11 +198,12 @@
               </select>
             </div>
             <div class="form-group">
-              <label>Длительность (мин)</label>
+              <label>Длительность</label>
               <select id="student-duration">
-                <option value="60">60</option>
-                <option value="90" selected>90</option>
-                <option value="120">120</option>
+                <option value="60">1 час</option>
+                <option value="90" selected>1,5 часа</option>
+                <option value="120">2 часа</option>
+                <option value="180">3 часа</option>
               </select>
             </div>
           </div>
@@ -237,6 +238,7 @@
           <button class="btn-modal-close" id="btn-close-lesson">×</button>
         </div>
         <div class="modal-body">
+          <div id="lesson-current-students" class="lesson-current-students"></div>
           <label class="lesson-label">Выберите учеников</label>
           <div class="search-field">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -253,6 +255,8 @@
         </div>
       </div>
     </div>
+
+    <div id="student-drag-banner" class="student-drag-banner"></div>
   </div>
 
   <div id="toast" class="toast"></div>

@@ -451,6 +451,172 @@ input, button {
   background: rgba(108, 92, 231, 0.08);
 }
 
+.grid-cell-drop-ok {
+  background: rgba(46, 204, 113, 0.2);
+}
+
+.grid-cell-conflict {
+  background: rgba(231, 76, 92, 0.25);
+}
+
+.lesson-card-dragging {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.lc-resize {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+  border-radius: 0 0 4px 4px;
+  transition: background 0.15s;
+}
+
+.lc-resize:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.lc-drag-handle {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  font-size: 10px;
+  line-height: 1;
+  cursor: grab;
+  opacity: 0;
+  padding: 2px;
+  color: inherit;
+  transition: opacity 0.15s;
+  user-select: none;
+}
+
+.lesson-card:hover .lc-drag-handle {
+  opacity: 0.6;
+}
+
+.lc-drag-handle:hover {
+  opacity: 1 !important;
+}
+
+.selection-duration-label {
+  position: absolute;
+  z-index: 15;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  background: var(--accent);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.week-nav-hover {
+  background: var(--accent) !important;
+  color: white !important;
+  border-color: var(--accent) !important;
+}
+
+/* Current students in edit modal */
+.lesson-current-students {
+  margin-bottom: 12px;
+}
+
+.current-student-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.cs-drag-handle {
+  cursor: grab;
+  opacity: 0.4;
+  font-size: 12px;
+  user-select: none;
+  transition: opacity 0.15s;
+}
+
+.cs-drag-handle:hover {
+  opacity: 1;
+}
+
+.cs-name {
+  flex: 1;
+  font-weight: 500;
+}
+
+.cs-remove {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.cs-remove:hover {
+  color: var(--danger);
+}
+
+.student-drag-banner {
+  display: none;
+  position: fixed;
+  z-index: 200;
+  padding: 6px 14px;
+  background: var(--accent);
+  color: white;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  white-space: nowrap;
+}
+
+#placing-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+#placing-banner button {
+  padding: 5px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+#placing-banner button:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .cell-tooltip {
   position: fixed;
   z-index: 50;
@@ -488,11 +654,12 @@ input, button {
 /* ===== LESSON CARD ===== */
 
 .lesson-card {
+  position: relative;
   border-radius: var(--radius-sm);
   padding: 3px 5px;
   font-size: 10px;
   font-weight: 600;
-  cursor: pointer;
+  cursor: grab;
   overflow: hidden;
   z-index: 2;
   border: 1px solid;

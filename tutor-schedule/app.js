@@ -12,6 +12,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('btn-logout').addEventListener('click', handleLogout);
 
+  document.addEventListener('mouseup', () => {
+    if (typeof resizeState !== 'undefined' && resizeState) { finishResize(); }
+    if (typeof dragState !== 'undefined' && dragState && dragStarted) {
+      document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
+      if (typeof clearDragHighlight === 'function') clearDragHighlight();
+      dragState = null; dragMouseStart = null; dragStarted = false;
+    }
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (typeof studentDragState !== 'undefined' && studentDragState) {
+      const banner = document.getElementById('student-drag-banner');
+      if (banner) { banner.style.left = `${e.clientX + 12}px`; banner.style.top = `${e.clientY - 12}px`; }
+    }
+  });
+
   const { data: { session } } = await db.auth.getSession();
 
   if (session?.user) {
