@@ -36,10 +36,17 @@ html, body {
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 input, button {
   font-family: var(--font);
+}
+
+input, textarea, select {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .screen {
@@ -464,37 +471,29 @@ input, button {
   pointer-events: none;
 }
 
-.lc-resize {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 6px;
-  cursor: ns-resize;
-  border-radius: 0 0 4px 4px;
-  transition: background 0.15s;
-}
-
-.lc-resize:hover {
-  background: rgba(255, 255, 255, 0.15);
+.lesson-card-drop-target {
+  box-shadow: 0 0 0 2px var(--accent), var(--shadow) !important;
+  transform: scale(1.05);
+  z-index: 10 !important;
 }
 
 .lc-drag-handle {
   position: absolute;
-  top: 1px;
-  right: 1px;
-  font-size: 10px;
+  top: 2px;
+  right: 2px;
+  font-size: 16px;
   line-height: 1;
   cursor: grab;
   opacity: 0;
-  padding: 2px;
+  padding: 4px;
   color: inherit;
   transition: opacity 0.15s;
   user-select: none;
+  z-index: 1;
 }
 
 .lesson-card:hover .lc-drag-handle {
-  opacity: 0.6;
+  opacity: 0.5;
 }
 
 .lc-drag-handle:hover {
@@ -645,9 +644,11 @@ input, button {
   position: relative;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
-.now-line {
+.schedule-grid::-webkit-scrollbar {
   display: none;
 }
 
@@ -659,7 +660,7 @@ input, button {
   padding: 3px 5px;
   font-size: 10px;
   font-weight: 600;
-  cursor: grab;
+  cursor: pointer;
   overflow: hidden;
   z-index: 2;
   border: 1px solid;

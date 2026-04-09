@@ -124,7 +124,7 @@ async function handleRegister() {
 
   const fullName = name1 + ' ' + name2;
   const shortName = (role === 'teacher' || role === 'admin') ? generateShortName(name1, name2) : null;
-  const color = role === 'teacher' ? await getRandomColor() : null;
+  const color = (role === 'teacher' || role === 'admin') ? await getRandomColor() : null;
 
   const { error: profileError } = await db
     .from('profiles')
