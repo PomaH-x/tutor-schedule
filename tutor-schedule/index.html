@@ -117,6 +117,7 @@
               <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
               <circle cx="12" cy="7" r="4"/>
             </svg>
+            <span class="badge" id="badge-pending" style="display:none"></span>
           </button>
         </div>
       </header>
@@ -151,19 +152,36 @@
           </div>
         </div>
 
-        <div class="students-section">
-          <div class="students-header">
-            <h3>База учеников</h3>
-            <div class="students-controls">
-              <div class="search-field">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="text" id="student-search" placeholder="Поиск по имени или фамилии">
-              </div>
-              <button class="btn-primary btn-add-student" id="btn-add-student">+ Добавить</button>
-            </div>
-          </div>
+        <div class="profile-tabs" id="profile-tabs" style="display:none">
+          <button class="profile-tab active" data-tab="tab-students">Ученики</button>
+          <button class="profile-tab" data-tab="tab-admin">Админ-панель</button>
+        </div>
 
-          <div id="students-list" class="students-list"></div>
+        <div id="tab-students" class="profile-tab-content active">
+          <div class="students-section">
+            <div class="students-header">
+              <h3>База учеников</h3>
+              <div class="students-controls">
+                <div class="search-field">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  <input type="text" id="student-search" placeholder="Поиск по имени или фамилии">
+                </div>
+                <button class="btn-primary btn-add-student" id="btn-add-student">+ Добавить</button>
+              </div>
+            </div>
+            <div id="students-list" class="students-list"></div>
+          </div>
+        </div>
+
+        <div id="tab-admin" class="profile-tab-content">
+          <div class="admin-section">
+            <h3>Заявки на регистрацию</h3>
+            <div id="pending-list" class="pending-list"></div>
+          </div>
+          <div class="admin-section">
+            <h3>Преподаватели</h3>
+            <div id="teachers-list" class="teachers-list"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -257,6 +275,18 @@
     </div>
 
     <div id="student-drag-banner" class="student-drag-banner"></div>
+
+    <div id="color-overlay" class="modal-overlay">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <h3>Цвет преподавателя</h3>
+          <button class="btn-modal-close" id="btn-close-color">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="color-grid" class="color-grid"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="toast"></div>
@@ -268,6 +298,7 @@
   <script src="modules/toast.js"></script>
   <script src="modules/schedule.js"></script>
   <script src="modules/students.js"></script>
+  <script src="modules/admin.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

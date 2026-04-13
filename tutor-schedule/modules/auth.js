@@ -1,6 +1,6 @@
 const TEACHER_COLORS = [
-  '#6c5ce7', '#e74c5c', '#00b894', '#e17055',
-  '#0984e3', '#fdcb6e', '#a29bfe', '#55a6e8'
+  '#7c6dd8', '#d4637a', '#3da88c', '#c97a5a',
+  '#4a90c4', '#c4a84d', '#8b82c8', '#5a94b8'
 ];
 
 const EMAIL_DOMAIN = '@tutor.local';
@@ -170,6 +170,7 @@ async function onAuthSuccess(user) {
 
   showScreen('screen-schedule');
   initSchedule();
+  loadPendingCount();
 }
 
 async function handleLogout() {

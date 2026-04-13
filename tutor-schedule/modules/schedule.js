@@ -142,7 +142,7 @@ function renderGrid() {
   initGridInteractions(grid);
   renderLessons();
   renderNowTime();
-  if (state.placingLesson) showPlacingBanner();
+  if (state.placingLesson || state.placingStudent) showPlacingBanner();
 }
 
 // ===== LESSONS RENDER (overlap) =====
@@ -175,9 +175,9 @@ function renderLessons() {
       const card = document.createElement('div');
       card.className = 'lesson-card'; card.dataset.lessonId = lesson.id;
       const color = lesson.teacher?.color || '#6c5ce7';
-      card.style.background = color + '22'; card.style.borderColor = color + '55'; card.style.color = color;
+      card.style.background = color + '18'; card.style.borderColor = color + '40'; card.style.color = color + 'cc';
       card.style.gridRow = `${rowForSlot(ss)} / ${rowForSlot(es)}`; card.style.gridColumn = colForDayRoom(lesson._dayIndex, lesson.room);
-      if (lesson._ov > 0) { card.style.marginLeft = `${lesson._ov * 4}px`; card.style.zIndex = 2 + lesson._ov; card.style.borderWidth = '2px'; }
+      if (lesson._ov > 0) { card.style.marginLeft = `${lesson._ov * 8}px`; card.style.zIndex = 2 + lesson._ov; card.style.borderWidth = '2px'; }
       const sn = (lesson.teacher?.short_name || '??').replace(/\./g, '');
       const sc = lesson.lesson_students?.length || 0;
       const canDrag = state.profile.role === 'admin' || lesson.teacher_id === state.user.id;
@@ -197,10 +197,18 @@ function initGridInteractions(grid) {
 function onGridMouseDown(e) {
   if (state.profile.role === 'student') return;
 
-  // Placing lesson mode
-  if (state.placingLesson) {
+  // Placing mode (lesson or student)
+  if (state.placingLesson || state.placingStudent) {
     const cell = e.target.closest('.grid-cell');
-    if (cell) { e.preventDefault(); placeTransferredLesson(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot); }
+    const cardEl = e.target.closest('.lesson-card');
+    if (cardEl && state.placingStudent) {
+      e.preventDefault();
+      placeTransferredStudentOnLesson(cardEl.dataset.lessonId);
+    } else if (cell) {
+      e.preventDefault();
+      if (state.placingLesson) placeTransferredLesson(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+      else placeTransferredStudent(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+    }
     return;
   }
 
@@ -243,6 +251,7 @@ function onGridMouseMove(e) {
       const dx = e.clientX - dragMouseStart.x; const dy = e.clientY - dragMouseStart.y;
       if (Math.sqrt(dx * dx + dy * dy) < DRAG_THRESHOLD) return;
       dragStarted = true;
+      grid.classList.add('grid-dragging');
       grid.querySelector(`.lesson-card[data-lesson-id="${dragState.lesson.id}"]`)?.classList.add('lesson-card-dragging');
       removeCellTooltip();
     }
@@ -294,15 +303,21 @@ function onGridMouseMove(e) {
     return;
   }
 
-  // Placing lesson
-  if (state.placingLesson) {
+  // Placing mode (lesson or student)
+  if (state.placingLesson || state.placingStudent) {
     clearDragHighlight();
+    document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
+    const cardEl = e.target.closest('.lesson-card');
+    if (cardEl && state.placingStudent) {
+      cardEl.classList.add('lesson-card-drop-target');
+    }
     const cell = e.target.closest('.grid-cell');
     if (cell) {
+      const p = state.placingLesson || state.placingStudent;
       const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
-      const end = ts + state.placingLesson.slotLength;
+      const end = ts + p.slotLength;
       if (end <= TOTAL_SLOTS) {
-        const conflict = hasAnyConflict(td, tr, ts, end, null, state.placingLesson.teacherId);
+        const conflict = hasAnyConflict(td, tr, ts, end, null, p.teacherId);
         for (let s = ts; s < end; s++) {
           const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
           if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
@@ -342,18 +357,6 @@ function onGridMouseUp(e) {
     const cell = e.target.closest('.grid-cell');
     if (cell) finishDrag(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
     dragState = null; dragMouseStart = null; dragStarted = false;
-    return;
-  }
-
-  // Student DnD
-  if (studentDragState) {
-    clearDragHighlight();
-    document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
-    const cardEl = e.target.closest('.lesson-card');
-    const cell = e.target.closest('.grid-cell');
-    if (cardEl) { placeStudentOnLesson(cardEl.dataset.lessonId); }
-    else if (cell) { placeStudentOnCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot); }
-    else { cancelStudentDrag(); }
     return;
   }
 
@@ -415,8 +418,10 @@ function showPlacingBanner() {
 function hidePlacingBanner() { const b = document.getElementById('placing-banner'); if (b) b.style.display = 'none'; }
 
 function cancelPlacing() {
-  const orig = state.placingLesson?.originalWeekStart;
-  state.placingLesson = null; hidePlacingBanner(); clearDragHighlight();
+  const orig = state.placingLesson?.originalWeekStart || state.placingStudent?.originalWeekStart;
+  state.placingLesson = null; state.placingStudent = null;
+  hidePlacingBanner(); clearDragHighlight();
+  document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
   if (orig) { state.currentWeekStart = new Date(orig); updateWeekLabel(); renderGrid(); loadLessons(); }
 }
 
@@ -440,6 +445,43 @@ async function placeTransferredLesson(day, room, slot) {
   await db.from('lessons').update({ status: 'transferred' }).eq('id', p.originalLessonId);
   state.placingLesson = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Занятие перенесено на следующую неделю', 'success'); await loadLessons();
+}
+
+async function placeTransferredStudent(day, room, slot) {
+  const p = state.placingStudent; if (!p) return;
+  const end = slot + p.slotLength;
+  if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); return; }
+  const ct = await checkConflictServer(day, room, slot, end, null, p.teacherId);
+  if (ct) { showToast(ct === 'room' ? 'Кабинет занят' : 'Преподаватель занят', 'error'); return; }
+
+  const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
+  const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
+  const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
+
+  const { data, error } = await db.from('lessons').insert({
+    teacher_id: p.teacherId, room, week_start: formatDate(state.currentWeekStart),
+    start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+  }).select().single();
+  if (error) { showToast('Ошибка', 'error'); return; }
+  await db.from('lesson_students').insert({ lesson_id: data.id, student_id: p.studentId });
+  await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
+  await cleanEmptyLesson(p.lessonId);
+  state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
+  showToast('Ученик перенесён на следующую неделю', 'success'); await loadLessons();
+}
+
+async function placeTransferredStudentOnLesson(targetLessonId) {
+  const p = state.placingStudent; if (!p) return;
+  const tl = state.lessons.find(l => l.id === targetLessonId);
+  if (!tl) { showToast('Занятие не найдено', 'error'); return; }
+  if (tl.teacher_id !== p.teacherId) { showToast('Можно добавить только к своему преподавателю', 'error'); return; }
+  if ((tl.lesson_students?.length || 0) >= 4) { showToast('Максимум 4 ученика', 'error'); return; }
+
+  await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: p.studentId });
+  await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
+  await cleanEmptyLesson(p.lessonId);
+  state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
+  showToast('Ученик добавлен к занятию', 'success'); await loadLessons();
 }
 
 // ===== STUDENT DND =====
@@ -482,6 +524,7 @@ async function placeStudentOnCell(day, room, slot) {
 
 async function placeStudentOnLesson(targetLessonId) {
   const s = studentDragState; if (!s) return;
+  if (targetLessonId === s.lessonId) { cancelStudentDrag(); return; }
   const tl = state.lessons.find(l => l.id === targetLessonId);
   if (!tl) { cancelStudentDrag(); return; }
   if (tl.teacher_id !== s.teacherId) { showToast('Можно добавить только к своему преподавателю', 'error'); cancelStudentDrag(); return; }
@@ -508,9 +551,24 @@ function cancelStudentDrag() {
   document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
 }
 
+function startStudentNextWeekTransfer() {
+  const s = studentDragState;
+  if (!s) return;
+  state.placingStudent = {
+    studentId: s.studentId, studentName: s.studentName,
+    lessonId: s.lessonId, teacherId: s.teacherId,
+    slotLength: s.slotLength, originalWeekStart: formatDate(state.currentWeekStart)
+  };
+  cancelStudentDrag();
+  const nw = new Date(state.currentWeekStart); nw.setDate(nw.getDate() + 7);
+  state.currentWeekStart = nw;
+  updateWeekLabel(); renderGrid(); loadLessons();
+  showPlacingBanner();
+}
+
 // ===== TOOLTIP & SELECTION =====
 function handleCellTooltip(e, grid) {
-  if (dragState || state.placingLesson || studentDragState) return;
+  if (dragState || state.placingLesson || state.placingStudent || studentDragState) return;
   const cell = e.target.closest('.grid-cell');
   if (!cell) { removeCellTooltip(); return; }
   const slot = +cell.dataset.slot; const room = +cell.dataset.room;
@@ -732,7 +790,7 @@ async function deleteLesson() {
 
 // ===== NAVIGATION =====
 function navigateWeek(offset) {
-  if (state.placingLesson) { showToast('Сначала разместите или отмените перенос', 'error'); return; }
+  if (state.placingLesson || state.placingStudent) { showToast('Сначала разместите или отмените перенос', 'error'); return; }
   const target = new Date(state.currentWeekStart); target.setDate(target.getDate() + offset * 7);
   const now = getMonday(new Date());
   const diff = Math.round((target - now) / (7 * 24 * 60 * 60 * 1000));
@@ -741,7 +799,7 @@ function navigateWeek(offset) {
 }
 
 function goToToday() {
-  if (state.placingLesson) { showToast('Сначала разместите или отмените перенос', 'error'); return; }
+  if (state.placingLesson || state.placingStudent) { showToast('Сначала разместите или отмените перенос', 'error'); return; }
   state.currentWeekStart = getMonday(new Date()); updateWeekLabel(); renderGrid(); loadLessons();
 }
 
@@ -801,10 +859,38 @@ function initSchedule() {
     if (studentDragState) {
       const banner = document.getElementById('student-drag-banner');
       if (banner) { banner.style.left = `${e.clientX + 12}px`; banner.style.top = `${e.clientY - 12}px`; }
+      // Highlight next-week arrow
+      const btn = document.getElementById('btn-next-week');
+      const r = btn?.getBoundingClientRect();
+      if (btn && r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+        btn.classList.add('week-nav-hover');
+      } else {
+        btn?.classList.remove('week-nav-hover');
+      }
+      // Highlight cells
+      clearDragHighlight();
+      document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const cell = el?.closest?.('.grid-cell');
+      const cardEl = el?.closest?.('.lesson-card');
+      if (cardEl) cardEl.classList.add('lesson-card-drop-target');
+      else if (cell) {
+        const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
+        const end = ts + studentDragState.slotLength;
+        if (end <= TOTAL_SLOTS) {
+          const grid = document.getElementById('schedule-grid');
+          const conflict = hasAnyConflict(td, tr, ts, end, null, studentDragState.teacherId);
+          for (let s = ts; s < end; s++) {
+            const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
+            if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
+          }
+        }
+      }
     }
   });
 
   document.addEventListener('mouseup', (e) => {
+    document.getElementById('schedule-grid')?.classList.remove('grid-dragging');
     if (dragState && dragStarted) {
       const btn = document.getElementById('btn-next-week');
       btn?.classList.remove('week-nav-hover');
@@ -826,6 +912,16 @@ function initSchedule() {
     if (studentDragState) {
       clearDragHighlight();
       document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
+      const btn = document.getElementById('btn-next-week');
+      btn?.classList.remove('week-nav-hover');
+      // Check if dropped on next-week arrow
+      if (btn) {
+        const r = btn.getBoundingClientRect();
+        if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+          startStudentNextWeekTransfer();
+          return;
+        }
+      }
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const cardEl = el?.closest?.('.lesson-card');
       const cell = el?.closest?.('.grid-cell');

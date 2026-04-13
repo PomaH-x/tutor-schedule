@@ -321,6 +321,7 @@ input, textarea, select {
 }
 
 .btn-icon {
+  position: relative;
   width: 40px;
   height: 40px;
   display: flex;
@@ -475,6 +476,10 @@ input, textarea, select {
   box-shadow: 0 0 0 2px var(--accent), var(--shadow) !important;
   transform: scale(1.05);
   z-index: 10 !important;
+}
+
+.grid-dragging .lesson-card {
+  pointer-events: none;
 }
 
 .lc-drag-handle {
@@ -639,7 +644,8 @@ input, textarea, select {
 
 .schedule-grid {
   flex: 1;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: auto;
   display: grid;
   position: relative;
   border-right: 1px solid var(--border);
@@ -649,7 +655,8 @@ input, textarea, select {
 }
 
 .schedule-grid::-webkit-scrollbar {
-  display: none;
+  width: 0;
+  height: 0;
 }
 
 /* ===== LESSON CARD ===== */
@@ -833,6 +840,260 @@ input, textarea, select {
 .toast.toast-success {
   border-color: var(--success);
   color: var(--success);
+}
+
+/* ===== BADGE ===== */
+
+.badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--danger);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 9px;
+  padding: 0 4px;
+}
+
+/* ===== PROFILE TABS ===== */
+
+.profile-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 24px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+
+.profile-tab {
+  flex: 1;
+  padding: 8px 16px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.profile-tab:hover {
+  color: var(--text);
+}
+
+.profile-tab.active {
+  background: var(--accent);
+  color: white;
+}
+
+.profile-tab-content {
+  display: none;
+}
+
+.profile-tab-content.active {
+  display: block;
+}
+
+/* ===== ADMIN PANEL ===== */
+
+.admin-section {
+  margin-bottom: 28px;
+}
+
+.admin-section h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.admin-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 24px 0;
+  font-size: 14px;
+}
+
+.pending-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+}
+
+.pending-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pending-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pending-role {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.pending-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.btn-approve {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(46, 204, 113, 0.15);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--success);
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-approve:hover {
+  background: var(--success);
+  color: white;
+}
+
+.btn-reject {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--danger-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-reject:hover {
+  background: var(--danger);
+  color: white;
+}
+
+.teacher-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+}
+
+.teacher-color {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+  border: 2px solid rgba(255,255,255,0.1);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.teacher-color:hover {
+  transform: scale(1.1);
+  border-color: rgba(255,255,255,0.3);
+}
+
+.teacher-color-edit {
+  opacity: 0;
+  color: white;
+  font-size: 14px;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+  transition: opacity 0.15s;
+}
+
+.teacher-color:hover .teacher-color-edit {
+  opacity: 1;
+}
+
+.teacher-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.teacher-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.teacher-role {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.btn-delete-teacher {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.btn-delete-teacher:hover {
+  color: var(--danger);
+}
+
+/* ===== COLOR PICKER ===== */
+
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.color-swatch {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 3px solid transparent;
+  transition: all 0.15s;
+}
+
+.color-swatch:hover {
+  transform: scale(1.1);
+}
+
+.color-swatch.active {
+  border-color: white;
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 /* ===== RESPONSIVE ===== */

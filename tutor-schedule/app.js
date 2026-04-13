@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', async () => {
   initAuth();
   initStudents();
+  initAdmin();
 
   document.getElementById('btn-profile').addEventListener('click', () => {
     openProfileScreen();
@@ -41,6 +42,18 @@ function openProfileScreen() {
   const roles = { admin: 'Администратор', teacher: 'Преподаватель', student: 'Ученик' };
   document.getElementById('profile-role').textContent = roles[p.role];
 
+  const tabs = document.getElementById('profile-tabs');
+  if (p.role === 'admin') {
+    tabs.style.display = 'flex';
+  } else {
+    tabs.style.display = 'none';
+    document.querySelectorAll('.profile-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.profile-tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector('[data-tab="tab-students"]').classList.add('active');
+    document.getElementById('tab-students').classList.add('active');
+  }
+
   showScreen('screen-profile');
   loadStudents();
+  loadPendingCount();
 }

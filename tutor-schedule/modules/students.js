@@ -142,8 +142,9 @@ async function saveStudent() {
 
 let confirmCallback = null;
 
-function showConfirm(text, callback) {
+function showConfirm(text, callback, btnLabel) {
   document.getElementById('confirm-text').textContent = text;
+  document.getElementById('btn-confirm-ok').textContent = btnLabel || 'Удалить';
   confirmCallback = callback;
   document.getElementById('confirm-overlay').classList.add('active');
 }
