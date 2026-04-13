@@ -106,11 +106,6 @@
         <div class="top-bar-left">
           <h2 id="current-week-label"></h2>
         </div>
-        <div class="top-bar-center">
-          <button class="week-nav" id="btn-prev-week">‹</button>
-          <button class="btn-today" id="btn-today">Сегодня</button>
-          <button class="week-nav" id="btn-next-week">›</button>
-        </div>
         <div class="top-bar-right">
           <button class="btn-icon" id="btn-profile" title="Профиль">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -121,6 +116,13 @@
           </button>
         </div>
       </header>
+      <div class="week-tabs" id="week-tabs">
+        <button class="week-tab" data-offset="-2">2 нед. назад</button>
+        <button class="week-tab" data-offset="-1">Предыдущая</button>
+        <button class="week-tab active" data-offset="0">Текущая</button>
+        <button class="week-tab" data-offset="1">Следующая</button>
+        <button class="week-tab" data-offset="2">2 нед. вперёд</button>
+      </div>
       <div id="schedule-grid" class="schedule-grid"></div>
     </div>
 

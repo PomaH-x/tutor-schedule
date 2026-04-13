@@ -283,41 +283,47 @@ input, textarea, select {
   gap: 8px;
 }
 
-.week-nav {
-  width: 36px;
-  height: 36px;
+.week-tabs {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.week-tab {
+  flex: 1;
+  padding: 8px 4px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: 20px;
+  color: var(--text-muted);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
+  text-align: center;
+  white-space: nowrap;
 }
 
-.week-nav:hover {
-  background: var(--bg-hover);
+.week-tab:hover {
+  color: var(--text);
   border-color: var(--accent);
 }
 
-.btn-today {
-  padding: 8px 16px;
-  background: var(--accent-soft);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  color: var(--accent);
-  font-size: 13px;
+.week-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
   font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s;
 }
 
-.btn-today:hover {
-  background: var(--accent);
-  color: white;
+.week-tab-drop {
+  background: var(--accent) !important;
+  color: white !important;
+  border-color: var(--accent) !important;
 }
 
 .btn-icon {
@@ -519,11 +525,7 @@ input, textarea, select {
   white-space: nowrap;
 }
 
-.week-nav-hover {
-  background: var(--accent) !important;
-  color: white !important;
-  border-color: var(--accent) !important;
-}
+/* removed week-nav-hover */
 
 /* Current students in edit modal */
 .lesson-current-students {

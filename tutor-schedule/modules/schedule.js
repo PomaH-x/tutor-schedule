@@ -257,13 +257,14 @@ function onGridMouseMove(e) {
     }
     clearDragHighlight();
     const cell = e.target.closest('.grid-cell');
-    // Highlight next-week arrow
-    const btn = document.getElementById('btn-next-week');
-    const btnRect = btn?.getBoundingClientRect();
-    if (btn && btnRect && e.clientX >= btnRect.left && e.clientX <= btnRect.right && e.clientY >= btnRect.top && e.clientY <= btnRect.bottom) {
-      btn.classList.add('week-nav-hover');
-    } else {
-      btn?.classList.remove('week-nav-hover');
+    // Highlight next-week tab
+    const nwTab = getNextWeekTab();
+    document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
+    if (nwTab) {
+      const r = nwTab.getBoundingClientRect();
+      if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+        nwTab.classList.add('week-tab-drop');
+      }
     }
     if (cell) {
       const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
@@ -342,10 +343,10 @@ function onGridMouseUp(e) {
   // Drag lesson
   if (dragState) {
     if (!dragStarted) { dragState = null; dragMouseStart = null; return; }
-    const btn = document.getElementById('btn-next-week');
-    btn?.classList.remove('week-nav-hover');
-    if (btn) {
-      const r = btn.getBoundingClientRect();
+    document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
+    const nwTab = getNextWeekTab();
+    if (nwTab) {
+      const r = nwTab.getBoundingClientRect();
       if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
         startNextWeekTransfer(dragState.lesson);
         document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
@@ -397,12 +398,13 @@ function startNextWeekTransfer(lesson) {
   const es = (et.getHours() * 60 + et.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
   state.placingLesson = {
     originalLessonId: lesson.id, originalWeekStart: formatDate(state.currentWeekStart),
+    originalWeekOffset: currentWeekOffset,
     teacherId: lesson.teacher_id, slotLength: es - ss,
     studentIds: (lesson.lesson_students || []).map(ls => ls.student_id)
   };
-  const nw = new Date(state.currentWeekStart); nw.setDate(nw.getDate() + 7);
-  state.currentWeekStart = nw;
-  updateWeekLabel(); renderGrid(); loadLessons();
+  currentWeekOffset = currentWeekOffset + 1;
+  state.currentWeekStart = getWeekByOffset(currentWeekOffset);
+  updateWeekLabel(); updateWeekTabs(); renderGrid(); loadLessons();
 }
 
 function showPlacingBanner() {
@@ -418,11 +420,15 @@ function showPlacingBanner() {
 function hidePlacingBanner() { const b = document.getElementById('placing-banner'); if (b) b.style.display = 'none'; }
 
 function cancelPlacing() {
-  const orig = state.placingLesson?.originalWeekStart || state.placingStudent?.originalWeekStart;
+  const origOffset = state.placingLesson?.originalWeekOffset ?? state.placingStudent?.originalWeekOffset;
   state.placingLesson = null; state.placingStudent = null;
   hidePlacingBanner(); clearDragHighlight();
   document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
-  if (orig) { state.currentWeekStart = new Date(orig); updateWeekLabel(); renderGrid(); loadLessons(); }
+  if (origOffset !== undefined) {
+    currentWeekOffset = origOffset;
+    state.currentWeekStart = getWeekByOffset(origOffset);
+    updateWeekLabel(); updateWeekTabs(); renderGrid(); loadLessons();
+  }
 }
 
 async function placeTransferredLesson(day, room, slot) {
@@ -557,12 +563,13 @@ function startStudentNextWeekTransfer() {
   state.placingStudent = {
     studentId: s.studentId, studentName: s.studentName,
     lessonId: s.lessonId, teacherId: s.teacherId,
-    slotLength: s.slotLength, originalWeekStart: formatDate(state.currentWeekStart)
+    slotLength: s.slotLength, originalWeekStart: formatDate(state.currentWeekStart),
+    originalWeekOffset: currentWeekOffset
   };
   cancelStudentDrag();
-  const nw = new Date(state.currentWeekStart); nw.setDate(nw.getDate() + 7);
-  state.currentWeekStart = nw;
-  updateWeekLabel(); renderGrid(); loadLessons();
+  currentWeekOffset = currentWeekOffset + 1;
+  state.currentWeekStart = getWeekByOffset(currentWeekOffset);
+  updateWeekLabel(); updateWeekTabs(); renderGrid(); loadLessons();
   showPlacingBanner();
 }
 
@@ -789,35 +796,57 @@ async function deleteLesson() {
 }
 
 // ===== NAVIGATION =====
-function navigateWeek(offset) {
-  if (state.placingLesson || state.placingStudent) { showToast('Сначала разместите или отмените перенос', 'error'); return; }
-  const target = new Date(state.currentWeekStart); target.setDate(target.getDate() + offset * 7);
+let currentWeekOffset = 0;
+
+function getWeekByOffset(offset) {
   const now = getMonday(new Date());
-  const diff = Math.round((target - now) / (7 * 24 * 60 * 60 * 1000));
-  if (diff < -2 || diff > 2) { showToast('Доступны только 2 недели назад и вперёд', 'error'); return; }
-  state.currentWeekStart = target; updateWeekLabel(); renderGrid(); loadLessons();
+  const d = new Date(now);
+  d.setDate(d.getDate() + offset * 7);
+  return d;
 }
 
-function goToToday() {
+function switchToWeekOffset(offset) {
   if (state.placingLesson || state.placingStudent) { showToast('Сначала разместите или отмените перенос', 'error'); return; }
-  state.currentWeekStart = getMonday(new Date()); updateWeekLabel(); renderGrid(); loadLessons();
+  currentWeekOffset = offset;
+  state.currentWeekStart = getWeekByOffset(offset);
+  updateWeekLabel();
+  updateWeekTabs();
+  renderGrid();
+  loadLessons();
+}
+
+function updateWeekTabs() {
+  document.querySelectorAll('.week-tab').forEach(tab => {
+    tab.classList.toggle('active', +tab.dataset.offset === currentWeekOffset);
+  });
+}
+
+function getNextWeekTab() {
+  const nextOffset = currentWeekOffset + 1;
+  if (nextOffset > 2) return null;
+  return document.querySelector(`.week-tab[data-offset="${nextOffset}"]`);
 }
 
 function initSchedule() {
   if (scheduleInited) { renderGrid(); loadLessons(); return; }
   state.currentWeekStart = getMonday(new Date());
-  updateWeekLabel(); renderGrid(); loadLessons();
+  currentWeekOffset = 0;
+  updateWeekLabel(); updateWeekTabs(); renderGrid(); loadLessons();
 
-  document.getElementById('btn-prev-week').addEventListener('click', () => navigateWeek(-1));
-  document.getElementById('btn-next-week').addEventListener('click', () => {
-    if (dragState && dragStarted) {
-      startNextWeekTransfer(dragState.lesson);
-      document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
-      dragState = null; dragMouseStart = null; dragStarted = false; return;
-    }
-    navigateWeek(1);
+  document.querySelectorAll('.week-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const offset = +tab.dataset.offset;
+      if (dragState && dragStarted && offset === currentWeekOffset + 1) {
+        startNextWeekTransfer(dragState.lesson);
+        document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
+        document.getElementById('schedule-grid')?.classList.remove('grid-dragging');
+        dragState = null; dragMouseStart = null; dragStarted = false;
+        return;
+      }
+      switchToWeekOffset(offset);
+    });
   });
-  document.getElementById('btn-today').addEventListener('click', goToToday);
+
   document.getElementById('btn-save-lesson').addEventListener('click', saveLesson);
   document.getElementById('btn-cancel-lesson').addEventListener('click', closeLessonModal);
   document.getElementById('btn-close-lesson').addEventListener('click', closeLessonModal);
@@ -829,18 +858,19 @@ function initSchedule() {
   });
   document.getElementById('lesson-overlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeLessonModal(); });
 
+
   // Global handlers for drag that goes outside grid
   document.addEventListener('mousemove', (e) => {
     if (dragState && dragStarted) {
       clearDragHighlight();
-      const btn = document.getElementById('btn-next-week');
-      const r = btn?.getBoundingClientRect();
-      if (btn && r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
-        btn.classList.add('week-nav-hover');
-      } else {
-        btn?.classList.remove('week-nav-hover');
+      document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
+      const nwTab = getNextWeekTab();
+      if (nwTab) {
+        const r = nwTab.getBoundingClientRect();
+        if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+          nwTab.classList.add('week-tab-drop');
+        }
       }
-      // Try to highlight cells even from global handler
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const cell = el?.closest?.('.grid-cell');
       if (cell) {
@@ -859,20 +889,19 @@ function initSchedule() {
     if (studentDragState) {
       const banner = document.getElementById('student-drag-banner');
       if (banner) { banner.style.left = `${e.clientX + 12}px`; banner.style.top = `${e.clientY - 12}px`; }
-      // Highlight next-week arrow
-      const btn = document.getElementById('btn-next-week');
-      const r = btn?.getBoundingClientRect();
-      if (btn && r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
-        btn.classList.add('week-nav-hover');
-      } else {
-        btn?.classList.remove('week-nav-hover');
+      document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
+      const nwTab = getNextWeekTab();
+      if (nwTab) {
+        const r = nwTab.getBoundingClientRect();
+        if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+          nwTab.classList.add('week-tab-drop');
+        }
       }
-      // Highlight cells
       clearDragHighlight();
       document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
       const el = document.elementFromPoint(e.clientX, e.clientY);
-      const cell = el?.closest?.('.grid-cell');
       const cardEl = el?.closest?.('.lesson-card');
+      const cell = el?.closest?.('.grid-cell');
       if (cardEl) cardEl.classList.add('lesson-card-drop-target');
       else if (cell) {
         const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
@@ -891,11 +920,11 @@ function initSchedule() {
 
   document.addEventListener('mouseup', (e) => {
     document.getElementById('schedule-grid')?.classList.remove('grid-dragging');
+    document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
     if (dragState && dragStarted) {
-      const btn = document.getElementById('btn-next-week');
-      btn?.classList.remove('week-nav-hover');
-      if (btn) {
-        const r = btn.getBoundingClientRect();
+      const nwTab = getNextWeekTab();
+      if (nwTab) {
+        const r = nwTab.getBoundingClientRect();
         if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
           startNextWeekTransfer(dragState.lesson);
           document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
@@ -912,14 +941,11 @@ function initSchedule() {
     if (studentDragState) {
       clearDragHighlight();
       document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
-      const btn = document.getElementById('btn-next-week');
-      btn?.classList.remove('week-nav-hover');
-      // Check if dropped on next-week arrow
-      if (btn) {
-        const r = btn.getBoundingClientRect();
+      const nwTab = getNextWeekTab();
+      if (nwTab) {
+        const r = nwTab.getBoundingClientRect();
         if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
-          startStudentNextWeekTransfer();
-          return;
+          startStudentNextWeekTransfer(); return;
         }
       }
       const el = document.elementFromPoint(e.clientX, e.clientY);
@@ -933,7 +959,7 @@ function initSchedule() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (state.placingLesson) cancelPlacing();
+      if (state.placingLesson || state.placingStudent) cancelPlacing();
       if (studentDragState) cancelStudentDrag();
     }
   });
