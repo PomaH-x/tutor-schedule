@@ -40,6 +40,10 @@ html, body {
   -webkit-user-select: none;
 }
 
+#app {
+  height: 100%;
+}
+
 input, button {
   font-family: var(--font);
 }
@@ -52,6 +56,7 @@ input, textarea, select {
 .screen {
   display: none;
   height: 100%;
+  overflow: hidden;
 }
 
 .screen.active {
@@ -67,7 +72,15 @@ input, textarea, select {
   align-items: center;
   justify-content: center;
   flex: 1;
+  min-height: 0;
   padding: 24px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.auth-container::-webkit-scrollbar {
+  display: none;
 }
 
 .auth-logo {
@@ -457,6 +470,11 @@ input, textarea, select {
   border-right: 2px solid #3a3a5a;
 }
 
+.grid-cell-end {
+  cursor: default;
+  pointer-events: none;
+}
+
 .grid-cell-selected {
   background: var(--accent-soft);
 }
@@ -646,12 +664,13 @@ input, textarea, select {
 
 .schedule-grid {
   flex: 1;
+  min-height: 0;
   overflow-x: auto;
   overflow-y: auto;
   display: grid;
   position: relative;
   border-right: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+  padding-bottom: 2px;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -1140,11 +1159,17 @@ input, textarea, select {
 
 .profile-content {
   flex: 1;
-  overflow: auto;
-  padding: 24px 32px;
-  max-width: 800px;
-  margin: 0 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   width: 100%;
+  padding: 24px max(32px, calc(50% - 400px));
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.profile-content::-webkit-scrollbar {
+  display: none;
 }
 
 .profile-info {
@@ -1257,13 +1282,51 @@ input, textarea, select {
   font-size: 14px;
 }
 
-.students-group-title {
+.students-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0 8px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.students-group-header:hover {
+  color: var(--accent);
+}
+
+.students-group-name {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-secondary);
-  padding: 12px 0 6px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 6px;
+}
+
+.students-group-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.students-group-arrow {
+  margin-left: auto;
+  font-size: 16px;
+  color: var(--text-muted);
+  transition: transform 0.3s ease;
+}
+
+.students-group-arrow.open {
+  transform: rotate(90deg);
+}
+
+.students-group-body {
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+
+.students-group-body.collapsed {
+  max-height: 0;
 }
 
 .student-card {
@@ -1329,6 +1392,9 @@ input, textarea, select {
   border-radius: var(--radius);
   width: 100%;
   max-width: 440px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
   box-shadow: var(--shadow);
   animation: fadeUp 0.2s ease;
 }
@@ -1370,6 +1436,13 @@ input, textarea, select {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.modal-body::-webkit-scrollbar {
+  display: none;
 }
 
 .modal-body input,

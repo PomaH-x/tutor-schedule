@@ -41,17 +41,52 @@ function renderStudents(filter = '') {
   if (isAdmin) {
     const grouped = {};
     filtered.forEach(s => {
+      const tId = s.teacher_id;
       const tName = s.teacher?.full_name || 'Без преподавателя';
-      if (!grouped[tName]) grouped[tName] = [];
-      grouped[tName].push(s);
+      if (!grouped[tId]) grouped[tId] = { name: tName, students: [] };
+      grouped[tId].students.push(s);
     });
 
-    list.innerHTML = Object.entries(grouped).map(([teacher, students]) =>
-      `<div class="students-group">
-        <div class="students-group-title">${teacher}</div>
-        ${students.map(s => studentCardHTML(s)).join('')}
+    const entries = Object.entries(grouped);
+    entries.sort((a, b) => {
+      if (a[0] === state.user.id) return -1;
+      if (b[0] === state.user.id) return 1;
+      return a[1].name.localeCompare(b[1].name);
+    });
+
+    list.innerHTML = entries.map(([tId, group]) =>
+      `<div class="students-group" data-teacher-id="${tId}">
+        <div class="students-group-header" data-teacher-id="${tId}">
+          <span class="students-group-name">${group.name}</span>
+          <span class="students-group-count">${group.students.length}</span>
+          <span class="students-group-arrow">›</span>
+        </div>
+        <div class="students-group-body collapsed">
+          ${group.students.map(s => studentCardHTML(s)).join('')}
+        </div>
       </div>`
     ).join('');
+
+    list.querySelectorAll('.students-group-header').forEach(header => {
+      header.addEventListener('click', () => {
+        const body = header.nextElementSibling;
+        const arrow = header.querySelector('.students-group-arrow');
+        const isCollapsed = body.classList.contains('collapsed');
+        if (isCollapsed) {
+          body.style.maxHeight = body.scrollHeight + 'px';
+          body.classList.remove('collapsed');
+          arrow.classList.add('open');
+          setTimeout(() => { body.style.maxHeight = 'none'; }, 300);
+        } else {
+          body.style.maxHeight = body.scrollHeight + 'px';
+          requestAnimationFrame(() => {
+            body.style.maxHeight = '0px';
+            body.classList.add('collapsed');
+            arrow.classList.remove('open');
+          });
+        }
+      });
+    });
   } else {
     list.innerHTML = filtered.map(s => studentCardHTML(s)).join('');
   }

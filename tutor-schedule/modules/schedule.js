@@ -95,7 +95,7 @@ function renderGrid() {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const dates = getWeekDates(state.currentWeekStart);
   grid.style.gridTemplateColumns = '50px repeat(21, 1fr)';
-  grid.style.gridTemplateRows = `40px 24px repeat(${TOTAL_SLOTS}, 28px)`;
+  grid.style.gridTemplateRows = `40px 24px repeat(${TOTAL_SLOTS + 1}, 28px)`;
 
   const corner = document.createElement('div');
   corner.className = 'grid-corner'; corner.style.gridRow = '1 / 3'; corner.style.gridColumn = '1';
@@ -126,15 +126,15 @@ function renderGrid() {
     tc.textContent = `${hour}:${min.toString().padStart(2, '0')}`;
     tc.style.gridRow = row; tc.style.gridColumn = '1';
     grid.appendChild(tc);
-    if (slot === TOTAL_SLOTS) break;
     for (let day = 0; day < 7; day++) {
       for (let room = 1; room <= 3; room++) {
         const cell = document.createElement('div');
         cell.className = 'grid-cell';
         if (min === 0) cell.classList.add('grid-cell-hour');
         if (room === 3) cell.classList.add('grid-cell-day-end');
+        if (slot >= TOTAL_SLOTS) cell.classList.add('grid-cell-end');
         cell.style.gridRow = row; cell.style.gridColumn = colForDayRoom(day, room);
-        cell.dataset.day = day; cell.dataset.room = room; cell.dataset.slot = slot;
+        if (slot < TOTAL_SLOTS) { cell.dataset.day = day; cell.dataset.room = room; cell.dataset.slot = slot; }
         grid.appendChild(cell);
       }
     }
@@ -681,26 +681,27 @@ function openEditLessonModal(lesson) {
   const selectedIds = new Set((lesson.lesson_students || []).map(ls => ls.student_id));
   state.lessonModal = { mode: 'edit', lessonId: lesson.id, teacherId: lesson.teacher_id, day: di, room: lesson.room, slotFrom: ss, slotTo: es, selectedIds };
   loadTeacherStudentsForModal(lesson.teacher_id).then(() => {
-    renderCurrentStudents(lesson);
+    renderCurrentStudents();
     renderLessonStudentsList('');
     document.getElementById('lesson-overlay').classList.add('active');
     document.getElementById('lesson-student-search').value = '';
   });
 }
 
-function renderCurrentStudents(lesson) {
+function renderCurrentStudents() {
   const ct = document.getElementById('lesson-current-students');
-  const students = (lesson.lesson_students || []).filter(ls => ls.student);
-  const canEdit = state.profile.role === 'admin' || lesson.teacher_id === state.user.id;
-  if (students.length === 0) { ct.style.display = 'none'; ct.innerHTML = ''; return; }
+  const m = state.lessonModal;
+  if (!m) { ct.style.display = 'none'; ct.innerHTML = ''; return; }
+  const canEdit = state.profile.role === 'admin' || (m.mode === 'create') || (m.teacherId === state.user.id);
+  const selected = allTeacherStudents.filter(s => m.selectedIds.has(s.id));
+  if (selected.length === 0) { ct.style.display = 'none'; ct.innerHTML = ''; return; }
   ct.style.display = 'block';
   const sl = (s) => s === 'math' ? 'Математика' : 'Информатика';
-  ct.innerHTML = `<label class="lesson-label">Текущие ученики</label>` + students.map(ls => {
-    const s = ls.student;
-    return `<div class="current-student-row" data-student-id="${ls.student_id}">
-      ${canEdit ? '<span class="cs-drag-handle" title="Перенести">⠿</span>' : ''}
+  ct.innerHTML = `<label class="lesson-label">Текущие ученики</label>` + selected.map(s => {
+    return `<div class="current-student-row" data-student-id="${s.id}">
+      ${canEdit && m.mode === 'edit' ? '<span class="cs-drag-handle" title="Перенести">⠿</span>' : ''}
       <span class="cs-name">${s.first_name} ${s.last_name} <span class="lesson-student-subject">· ${sl(s.subject)}</span></span>
-      ${canEdit ? `<button class="cs-remove" data-student-id="${ls.student_id}">×</button>` : ''}
+      ${canEdit ? `<button class="cs-remove" data-student-id="${s.id}">×</button>` : ''}
     </div>`;
   }).join('');
 
@@ -708,21 +709,23 @@ function renderCurrentStudents(lesson) {
     ct.querySelectorAll('.cs-remove').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        state.lessonModal.selectedIds.delete(btn.dataset.studentId);
-        btn.closest('.current-student-row').remove();
+        m.selectedIds.delete(btn.dataset.studentId);
+        renderCurrentStudents();
         renderLessonStudentsList(document.getElementById('lesson-student-search').value.trim());
       });
     });
-    ct.querySelectorAll('.cs-drag-handle').forEach(handle => {
-      handle.addEventListener('mousedown', (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const row = handle.closest('.current-student-row');
-        const sid = row.dataset.studentId;
-        const sd = allTeacherStudents.find(s => s.id === sid);
-        if (!sd) return;
-        startStudentDrag(sd, state.lessonModal.lessonId, state.lessonModal.teacherId);
+    if (m.mode === 'edit') {
+      ct.querySelectorAll('.cs-drag-handle').forEach(handle => {
+        handle.addEventListener('mousedown', (e) => {
+          e.preventDefault(); e.stopPropagation();
+          const row = handle.closest('.current-student-row');
+          const sid = row.dataset.studentId;
+          const sd = allTeacherStudents.find(s => s.id === sid);
+          if (!sd) return;
+          startStudentDrag(sd, m.lessonId, m.teacherId);
+        });
       });
-    });
+    }
   }
 }
 
@@ -751,6 +754,7 @@ function renderLessonStudentsList(filter) {
         if (cb.checked) { if (m.selectedIds.size >= 4) { cb.checked = false; showToast('Максимум 4 ученика', 'error'); return; } m.selectedIds.add(id); }
         else { m.selectedIds.delete(id); }
         cb.closest('.lesson-student-row').classList.toggle('checked', cb.checked);
+        renderCurrentStudents();
       });
     });
   }
