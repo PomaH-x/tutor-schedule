@@ -174,8 +174,11 @@ function renderLessons() {
       const es = (end.getHours() * 60 + end.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
       const card = document.createElement('div');
       card.className = 'lesson-card'; card.dataset.lessonId = lesson.id;
-      const color = lesson.teacher?.color || '#6c5ce7';
-      card.style.background = color + '18'; card.style.borderColor = color + '40'; card.style.color = color + 'cc';
+      const color = lesson.teacher?.color || '#1e6fe8';
+      const isDark = document.documentElement.dataset.theme === 'dark';
+      card.style.background = color + (isDark ? '18' : '15');
+      card.style.borderColor = color + (isDark ? '40' : '35');
+      card.style.color = isDark ? color + 'cc' : color;
       card.style.gridRow = `${rowForSlot(ss)} / ${rowForSlot(es)}`; card.style.gridColumn = colForDayRoom(lesson._dayIndex, lesson.room);
       if (lesson._ov > 0) { card.style.marginLeft = `${lesson._ov * 8}px`; card.style.zIndex = 2 + lesson._ov; card.style.borderWidth = '2px'; }
       const sn = (lesson.teacher?.short_name || '??').replace(/\./g, '');

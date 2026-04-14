@@ -1,6 +1,6 @@
 const TEACHER_COLORS = [
-  '#7c6dd8', '#d4637a', '#3da88c', '#c97a5a',
-  '#4a90c4', '#c4a84d', '#8b82c8', '#5a94b8'
+  '#1e6fe8', '#e05555', '#2ea87a', '#d4813a',
+  '#7c5cc4', '#c4a03d', '#3a9ec4', '#c45a8a'
 ];
 
 const EMAIL_DOMAIN = '@tutor.local';

@@ -1,8 +1,8 @@
 const ALL_COLORS = [
-  '#7c6dd8', '#d4637a', '#3da88c', '#c97a5a',
-  '#4a90c4', '#c4a84d', '#8b82c8', '#5a94b8',
-  '#3ab0a8', '#c45f8a', '#7a8590', '#8a6db0',
-  '#b87878', '#6098c4', '#5ab88a', '#b89860'
+  '#1e6fe8', '#e05555', '#2ea87a', '#d4813a',
+  '#7c5cc4', '#c4a03d', '#3a9ec4', '#c45a8a',
+  '#2bbcc4', '#8a6db0', '#5a94b8', '#b87858',
+  '#5ab88a', '#b89860', '#6a8fc4', '#c47070'
 ];
 
 let pendingUsers = [];
@@ -107,7 +107,7 @@ function renderTeachers() {
 
   list.innerHTML = teachersList.map(t => `
     <div class="teacher-card" data-id="${t.id}">
-      <div class="teacher-color" style="background:${t.color || '#6c5ce7'}" data-id="${t.id}" title="Сменить цвет">
+      <div class="teacher-color" style="background:${t.color || '#1e6fe8'}" data-id="${t.id}" title="Сменить цвет">
         <span class="teacher-color-edit">✎</span>
       </div>
       <div class="teacher-info">

@@ -2,6 +2,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initAuth();
   initStudents();
   initAdmin();
+  initTheme();
 
   document.getElementById('btn-profile').addEventListener('click', () => {
     openProfileScreen();
@@ -56,4 +57,17 @@ function openProfileScreen() {
   showScreen('screen-profile');
   loadStudents();
   loadPendingCount();
+}
+
+function initTheme() {
+  const sw = document.getElementById('theme-switch');
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  sw.checked = current === 'dark';
+
+  sw.addEventListener('change', () => {
+    const theme = sw.checked ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+    if (state.lessons && state.lessons.length > 0) renderLessons();
+  });
 }

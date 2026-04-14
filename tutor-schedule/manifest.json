@@ -4,8 +4,8 @@
   "description": "Управление расписанием занятий",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f0f1a",
-  "theme_color": "#1a1a2e",
+  "background_color": "#0d1117",
+  "theme_color": "#1e6fe8",
   "icons": [
     {
       "src": "assets/icon.svg",
