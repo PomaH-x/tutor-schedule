@@ -305,6 +305,17 @@ input, textarea, select {
   flex-shrink: 0;
 }
 
+.top-bar-left {
+  display: flex;
+  align-items: center;
+}
+
+.top-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .top-bar-left h2 {
   font-size: 16px;
   font-weight: 600;
@@ -383,7 +394,6 @@ input, textarea, select {
 /* ===== THEME TOGGLE ===== */
 
 .theme-toggle {
-  position: relative;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -394,55 +404,29 @@ input, textarea, select {
 }
 
 .theme-slider {
-  width: 48px;
-  height: 28px;
+  width: 40px;
+  height: 22px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 11px;
   position: relative;
   transition: all 0.3s ease;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 6px;
 }
 
 .theme-slider::after {
   content: '';
   position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 20px;
-  height: 20px;
-  background: var(--accent);
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: var(--text);
   border-radius: 50%;
   transition: transform 0.3s ease;
 }
 
 .theme-toggle input:checked + .theme-slider::after {
-  transform: translateX(20px);
-}
-
-.theme-icon {
-  color: var(--text-muted);
-  z-index: 1;
-  transition: color 0.3s;
-}
-
-.theme-icon.sun {
-  color: var(--text-muted);
-}
-
-.theme-icon.moon {
-  color: var(--text-muted);
-}
-
-[data-theme="light"] .theme-icon.sun {
-  color: var(--accent);
-}
-
-[data-theme="dark"] .theme-icon.moon {
-  color: var(--accent);
+  transform: translateX(18px);
 }
 
 /* ===== SCHEDULE GRID ===== */
@@ -527,18 +511,6 @@ input, textarea, select {
   font-size: 10px;
   color: var(--text);
   font-weight: 500;
-}
-
-.grid-time-now {
-  color: var(--accent);
-  font-weight: 700;
-  font-size: 11px;
-  animation: nowBlink 2s ease-in-out infinite;
-}
-
-@keyframes nowBlink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
 }
 
 .grid-cell {
@@ -1201,6 +1173,124 @@ input, textarea, select {
 .color-swatch.active {
   border-color: white;
   box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* ===== SCHEDULE TYPE TOGGLE ===== */
+
+.btn-schedule-type {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-left: 12px;
+}
+
+.btn-schedule-type:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ===== TRUANTS ===== */
+
+.truants-section {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.truants-section h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 16px;
+}
+
+.truants-stats {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.truant-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.truant-stat-num {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.truant-stat-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.truants-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.truant-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.truant-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.truant-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.truant-count {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.btn-place-truant {
+  padding: 6px 14px;
+  background: var(--accent-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-place-truant:hover {
+  background: var(--accent);
+  color: white;
 }
 
 /* ===== RESPONSIVE ===== */

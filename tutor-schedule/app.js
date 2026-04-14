@@ -3,6 +3,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   initStudents();
   initAdmin();
   initTheme();
+  initRecurring();
+  initCancellations();
 
   document.getElementById('btn-profile').addEventListener('click', () => {
     openProfileScreen();
@@ -57,6 +59,7 @@ function openProfileScreen() {
   showScreen('screen-profile');
   loadStudents();
   loadPendingCount();
+  loadTruants();
 }
 
 function initTheme() {
@@ -64,10 +67,17 @@ function initTheme() {
   const current = document.documentElement.getAttribute('data-theme') || 'dark';
   sw.checked = current === 'dark';
 
-  sw.addEventListener('change', () => {
-    const theme = sw.checked ? 'dark' : 'light';
+  const syncAll = (theme) => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('theme', theme);
+    document.querySelectorAll('#theme-switch, .theme-switch-sync').forEach(s => s.checked = theme === 'dark');
     if (state.lessons && state.lessons.length > 0) renderLessons();
+    if (typeof renderRecurringLessons === 'function' && recurringLessons.length > 0) renderRecurringLessons();
+  };
+
+  sw.addEventListener('change', () => syncAll(sw.checked ? 'dark' : 'light'));
+  document.querySelectorAll('.theme-switch-sync').forEach(s => {
+    s.checked = current === 'dark';
+    s.addEventListener('change', () => syncAll(s.checked ? 'dark' : 'light'));
   });
 }

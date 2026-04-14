@@ -111,14 +111,15 @@
       <header class="top-bar">
         <div class="top-bar-left">
           <h2 id="current-week-label"></h2>
+          <button class="btn-schedule-type" id="btn-to-recurring" title="Постоянное расписание">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+            Постоянное
+          </button>
         </div>
         <div class="top-bar-right">
           <label class="theme-toggle" title="Сменить тему">
             <input type="checkbox" id="theme-switch">
-            <span class="theme-slider">
-              <svg class="theme-icon sun" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-              <svg class="theme-icon moon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.79A9 9 0 1111.21 3a7 7 0 009.79 9.79z"/></svg>
-            </span>
+            <span class="theme-slider"></span>
           </label>
           <button class="btn-icon" id="btn-profile" title="Профиль">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -137,6 +138,31 @@
         <button class="week-tab" data-offset="2">2 нед. вперёд</button>
       </div>
       <div id="schedule-grid" class="schedule-grid"></div>
+    </div>
+
+    <div id="screen-recurring" class="screen">
+      <header class="top-bar">
+        <div class="top-bar-left">
+          <h2>Постоянное расписание</h2>
+          <button class="btn-schedule-type" id="btn-to-current" title="Текущее расписание">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Текущее
+          </button>
+        </div>
+        <div class="top-bar-right">
+          <label class="theme-toggle" title="Сменить тему">
+            <input type="checkbox" id="theme-switch-2" class="theme-switch-sync">
+            <span class="theme-slider"></span>
+          </label>
+          <button class="btn-icon" id="btn-profile-2" title="Профиль">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+      <div id="recurring-grid" class="schedule-grid"></div>
     </div>
 
     <div id="screen-profile" class="screen">
@@ -185,6 +211,11 @@
               </div>
             </div>
             <div id="students-list" class="students-list"></div>
+          </div>
+          <div class="truants-section">
+            <h3>Отмены и прогульщики</h3>
+            <div class="truants-stats" id="truants-stats"></div>
+            <div id="truants-list" class="truants-list"></div>
           </div>
         </div>
 
@@ -313,6 +344,8 @@
   <script src="modules/toast.js"></script>
   <script src="modules/schedule.js"></script>
   <script src="modules/students.js"></script>
+  <script src="modules/recurring.js"></script>
+  <script src="modules/cancellations.js"></script>
   <script src="modules/admin.js"></script>
   <script src="app.js"></script>
 </body>

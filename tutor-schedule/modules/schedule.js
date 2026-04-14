@@ -141,8 +141,7 @@ function renderGrid() {
   }
   initGridInteractions(grid);
   renderLessons();
-  renderNowTime();
-  if (state.placingLesson || state.placingStudent) showPlacingBanner();
+  if (state.placingLesson || state.placingStudent || state.placingTruant) showPlacingBanner();
 }
 
 // ===== LESSONS RENDER (overlap) =====
@@ -201,16 +200,18 @@ function onGridMouseDown(e) {
   if (state.profile.role === 'student') return;
 
   // Placing mode (lesson or student)
-  if (state.placingLesson || state.placingStudent) {
+  if (state.placingLesson || state.placingStudent || state.placingTruant) {
     const cell = e.target.closest('.grid-cell');
     const cardEl = e.target.closest('.lesson-card');
-    if (cardEl && state.placingStudent) {
+    if (cardEl && (state.placingStudent || state.placingTruant)) {
       e.preventDefault();
-      placeTransferredStudentOnLesson(cardEl.dataset.lessonId);
+      if (state.placingStudent) placeTransferredStudentOnLesson(cardEl.dataset.lessonId);
+      else placeTruantOnLesson(cardEl.dataset.lessonId);
     } else if (cell) {
       e.preventDefault();
       if (state.placingLesson) placeTransferredLesson(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-      else placeTransferredStudent(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+      else if (state.placingStudent) placeTransferredStudent(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+      else placeTruantOnCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
     }
     return;
   }
@@ -308,16 +309,16 @@ function onGridMouseMove(e) {
   }
 
   // Placing mode (lesson or student)
-  if (state.placingLesson || state.placingStudent) {
+  if (state.placingLesson || state.placingStudent || state.placingTruant) {
     clearDragHighlight();
     document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
     const cardEl = e.target.closest('.lesson-card');
-    if (cardEl && state.placingStudent) {
+    if (cardEl && (state.placingStudent || state.placingTruant)) {
       cardEl.classList.add('lesson-card-drop-target');
     }
     const cell = e.target.closest('.grid-cell');
     if (cell) {
-      const p = state.placingLesson || state.placingStudent;
+      const p = state.placingLesson || state.placingStudent || state.placingTruant;
       const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
       const end = ts + p.slotLength;
       if (end <= TOTAL_SLOTS) {
@@ -424,9 +425,9 @@ function hidePlacingBanner() { const b = document.getElementById('placing-banner
 
 function cancelPlacing() {
   const origOffset = state.placingLesson?.originalWeekOffset ?? state.placingStudent?.originalWeekOffset;
-  state.placingLesson = null; state.placingStudent = null;
+  state.placingLesson = null; state.placingStudent = null; state.placingTruant = null;
   hidePlacingBanner(); clearDragHighlight();
-  document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
+  document.querySelectorAll('.lesson-card-drop-target, .grid-cell-available').forEach(c => c.classList.remove('lesson-card-drop-target', 'grid-cell-available'));
   if (origOffset !== undefined) {
     currentWeekOffset = origOffset;
     state.currentWeekStart = getWeekByOffset(origOffset);
@@ -578,7 +579,7 @@ function startStudentNextWeekTransfer() {
 
 // ===== TOOLTIP & SELECTION =====
 function handleCellTooltip(e, grid) {
-  if (dragState || state.placingLesson || state.placingStudent || studentDragState) return;
+  if (dragState || state.placingLesson || state.placingStudent || state.placingTruant || studentDragState) return;
   const cell = e.target.closest('.grid-cell');
   if (!cell) { removeCellTooltip(); return; }
   const slot = +cell.dataset.slot; const room = +cell.dataset.room;
@@ -622,20 +623,6 @@ function updateSelectionHighlight() {
 function clearSelectionHighlight() { document.querySelectorAll('.grid-cell-selected').forEach(c => c.classList.remove('grid-cell-selected')); }
 function removeDurationLabel() { if (durationLabel) { durationLabel.remove(); durationLabel = null; } }
 
-// ===== NOW TIME =====
-function renderNowTime() {
-  document.querySelectorAll('.grid-time-now').forEach(el => el.classList.remove('grid-time-now'));
-  const now = new Date();
-  const dates = getWeekDates(state.currentWeekStart);
-  const ti = dates.findIndex(d => d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate());
-  if (ti === -1) return;
-  const nm = now.getHours() * 60 + now.getMinutes();
-  if (nm < START_HOUR * 60 || nm > END_HOUR * 60) return;
-  const slot = Math.floor((nm - START_HOUR * 60) / SLOT_MINUTES);
-  const tc = document.getElementById('schedule-grid')?.querySelector(`.grid-time[data-slot="${slot}"]`);
-  if (tc) { tc.textContent = `${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`; tc.classList.add('grid-time-now'); }
-}
-
 // ===== LESSONS CRUD =====
 async function loadLessons() {
   const ws = formatDate(state.currentWeekStart);
@@ -644,6 +631,7 @@ async function loadLessons() {
     .eq('week_start', ws).eq('status', 'active');
   if (error) { showToast('Ошибка загрузки', 'error'); return; }
   state.lessons = data || []; renderLessons();
+  if (typeof computeAndSyncCancellations === 'function') computeAndSyncCancellations();
 }
 
 function buildModalTitle(di, room, sf, st) { return `${DAYS_FULL[di]} · ${ROOM_FULL[room - 1]} · ${slotToTime(sf)}–${slotToTime(st)}`; }
@@ -695,14 +683,14 @@ function renderCurrentStudents() {
   const ct = document.getElementById('lesson-current-students');
   const m = state.lessonModal;
   if (!m) { ct.style.display = 'none'; ct.innerHTML = ''; return; }
-  const canEdit = state.profile.role === 'admin' || (m.mode === 'create') || (m.teacherId === state.user.id);
+  const canEdit = state.profile.role === 'admin' || (m.mode === 'create' || m.mode === 'rec-create') || (m.teacherId === state.user.id);
   const selected = allTeacherStudents.filter(s => m.selectedIds.has(s.id));
   if (selected.length === 0) { ct.style.display = 'none'; ct.innerHTML = ''; return; }
   ct.style.display = 'block';
   const sl = (s) => s === 'math' ? 'Математика' : 'Информатика';
   ct.innerHTML = `<label class="lesson-label">Текущие ученики</label>` + selected.map(s => {
     return `<div class="current-student-row" data-student-id="${s.id}">
-      ${canEdit && m.mode === 'edit' ? '<span class="cs-drag-handle" title="Перенести">⠿</span>' : ''}
+      ${canEdit && (m.mode === 'edit' || m.mode === 'rec-edit') ? '<span class="cs-drag-handle" title="Перенести">⠿</span>' : ''}
       <span class="cs-name">${s.first_name} ${s.last_name} <span class="lesson-student-subject">· ${sl(s.subject)}</span></span>
       ${canEdit ? `<button class="cs-remove" data-student-id="${s.id}">×</button>` : ''}
     </div>`;
@@ -717,7 +705,7 @@ function renderCurrentStudents() {
         renderLessonStudentsList(document.getElementById('lesson-student-search').value.trim());
       });
     });
-    if (m.mode === 'edit') {
+    if (m.mode === 'edit' || m.mode === 'rec-edit') {
       ct.querySelectorAll('.cs-drag-handle').forEach(handle => {
         handle.addEventListener('mousedown', (e) => {
           e.preventDefault(); e.stopPropagation();
@@ -745,7 +733,7 @@ function renderLessonStudentsList(filter) {
   if (search) students = students.filter(s => s.first_name.toLowerCase().includes(search) || s.last_name.toLowerCase().includes(search));
   if (students.length === 0) { list.innerHTML = '<div class="lesson-no-students">Нет учеников</div>'; return; }
   const sl = (s) => s === 'math' ? 'Математика' : 'Информатика';
-  const canEdit = state.profile.role === 'admin' || (m.mode === 'create') || (m.teacherId === state.user.id);
+  const canEdit = state.profile.role === 'admin' || (m.mode === 'create' || m.mode === 'rec-create') || (m.teacherId === state.user.id);
   list.innerHTML = students.map(s => {
     const ch = m.selectedIds.has(s.id);
     return `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name} <span class="lesson-student-subject">· ${sl(s.subject)}</span></span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
@@ -765,10 +753,11 @@ function renderLessonStudentsList(filter) {
 
 async function saveLesson() {
   const m = state.lessonModal; if (!m) return;
+  if (m.mode === 'rec-create' || m.mode === 'rec-edit') { await saveRecurringLesson(); return; }
   const btn = document.getElementById('btn-save-lesson'); btn.disabled = true;
   if (m.selectedIds.size === 0) { showToast('Добавьте хотя бы одного ученика', 'error'); btn.disabled = false; return; }
-  const tid = m.mode === 'create' ? state.user.id : m.teacherId;
-  const ct = await checkConflictServer(m.day, m.room, m.slotFrom, m.slotTo, m.mode === 'edit' ? m.lessonId : null, tid);
+  const tid = m.mode === 'create' || m.mode === 'rec-create' ? state.user.id : m.teacherId;
+  const ct = await checkConflictServer(m.day, m.room, m.slotFrom, m.slotTo, m.mode === 'edit' || m.mode === 'rec-edit' ? m.lessonId : null, tid);
   if (ct === 'room') { showToast('Кабинет занят другим преподавателем', 'error'); btn.disabled = false; return; }
   if (ct === 'teacher') { showToast('Преподаватель занят в другом кабинете', 'error'); btn.disabled = false; return; }
 
@@ -777,7 +766,7 @@ async function saveLesson() {
   const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(m.slotTo * SLOT_MINUTES / 60), (m.slotTo * SLOT_MINUTES) % 60, 0, 0);
   const sids = Array.from(m.selectedIds);
 
-  if (m.mode === 'create') {
+  if (m.mode === 'create' || m.mode === 'rec-create') {
     const { data, error } = await db.from('lessons').insert({ teacher_id: state.user.id, room: m.room, week_start: ws, start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active' }).select().single();
     if (error) { showToast('Ошибка', 'error'); btn.disabled = false; return; }
     if (sids.length > 0) await db.from('lesson_students').insert(sids.map(sid => ({ lesson_id: data.id, student_id: sid })));
@@ -793,7 +782,8 @@ async function saveLesson() {
 }
 
 async function deleteLesson() {
-  const m = state.lessonModal; if (!m || m.mode !== 'edit') return;
+  const m = state.lessonModal; if (!m || (m.mode !== 'edit' && m.mode !== 'rec-edit')) return;
+  if (m.mode === 'rec-edit') { await deleteRecurringLesson(); return; }
   const lid = m.lessonId; closeLessonModal();
   showConfirm('Удалить занятие?', async () => {
     await db.from('lesson_students').delete().eq('lesson_id', lid);
@@ -813,7 +803,7 @@ function getWeekByOffset(offset) {
 }
 
 function switchToWeekOffset(offset) {
-  if (state.placingLesson || state.placingStudent) { showToast('Сначала разместите или отмените перенос', 'error'); return; }
+  if (state.placingLesson || state.placingStudent || state.placingTruant) { showToast('Сначала разместите или отмените перенос', 'error'); return; }
   currentWeekOffset = offset;
   state.currentWeekStart = getWeekByOffset(offset);
   updateWeekLabel();
@@ -966,11 +956,10 @@ function initSchedule() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (state.placingLesson || state.placingStudent) cancelPlacing();
+      if (state.placingLesson || state.placingStudent || state.placingTruant) cancelPlacing();
       if (studentDragState) cancelStudentDrag();
     }
   });
 
-  setInterval(renderNowTime, 30000);
   scheduleInited = true;
 }

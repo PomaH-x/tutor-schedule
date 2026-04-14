@@ -7,7 +7,8 @@ const state = {
   selectedRole: null,
   lessonModal: null,
   placingLesson: null,
-  placingStudent: null
+  placingStudent: null,
+  placingTruant: null
 };
 
 function getMonday(date) {
