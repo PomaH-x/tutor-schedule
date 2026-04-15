@@ -437,7 +437,7 @@ input, textarea, select {
   z-index: 10;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
-  border-right: 2px solid var(--border);
+  border-right: 2.5px solid var(--text-muted);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -489,6 +489,10 @@ input, textarea, select {
   background: var(--accent-soft);
 }
 
+.grid-room-label-day-end {
+  border-right: 2.5px solid var(--text-muted);
+}
+
 .grid-corner {
   position: sticky;
   top: 0;
@@ -525,7 +529,7 @@ input, textarea, select {
 }
 
 .grid-cell-day-end {
-  border-right: 2px solid var(--border);
+  border-right: 2.5px solid var(--text-muted);
 }
 
 .grid-cell-end {
@@ -1317,6 +1321,63 @@ input, textarea, select {
   border-color: var(--accent);
 }
 
+.btn-copy-recurring {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: white;
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-left: 8px;
+}
+
+.btn-copy-recurring:hover {
+  background: var(--accent-hover);
+}
+
+.copy-teacher-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.copy-teacher-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+
+.copy-teacher-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.copy-teacher-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
 /* ===== TRUANTS ===== */
 
 .truants-section {
@@ -1375,6 +1436,13 @@ input, textarea, select {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+}
+
+.truant-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 10px 0 4px;
 }
 
 .truant-info {

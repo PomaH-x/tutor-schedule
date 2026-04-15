@@ -1,6 +1,14 @@
 let recurringLessons = [];
 let recurringInited = false;
-let recAllStudents = [];
+let recSelecting = false;
+let recSelStart = null;
+let recSelEnd = null;
+let recDragState = null;
+let recDragMouseStart = null;
+let recDragStarted = false;
+let recPendingClick = null;
+let recDurationLabel = null;
+let recTooltip = null;
 
 async function loadRecurringLessons() {
   const tid = state.profile.role === 'admin' ? undefined : state.user.id;
@@ -33,6 +41,7 @@ function renderRecurringGrid() {
     for (let r = 0; r < 3; r++) {
       const rl = document.createElement('div');
       rl.className = 'grid-room-label';
+      if (r === 2) rl.classList.add('grid-room-label-day-end');
       rl.style.gridColumn = `${colForDayRoom(i, r + 1)}`; rl.style.gridRow = '2'; rl.textContent = ROOM_LABELS[r];
       grid.appendChild(rl);
     }
@@ -64,89 +73,184 @@ function renderRecurringGrid() {
   renderRecurringLessons();
 }
 
+function recLessonSlots(lesson) {
+  const sp = lesson.start_time.split(':'); const ep = lesson.end_time.split(':');
+  const ss = (+sp[0] * 60 + +sp[1] - START_HOUR * 60) / SLOT_MINUTES;
+  const es = (+ep[0] * 60 + +ep[1] - START_HOUR * 60) / SLOT_MINUTES;
+  return { ss, es };
+}
+
 function renderRecurringLessons() {
   const grid = document.getElementById('recurring-grid');
   grid.querySelectorAll('.lesson-card').forEach(el => el.remove());
   const isDark = document.documentElement.dataset.theme === 'dark';
 
+  const groups = {};
   recurringLessons.forEach(lesson => {
-    const startParts = lesson.start_time.split(':');
-    const endParts = lesson.end_time.split(':');
-    const startMin = +startParts[0] * 60 + +startParts[1];
-    const endMin = +endParts[0] * 60 + +endParts[1];
-    const startSlot = (startMin - START_HOUR * 60) / SLOT_MINUTES;
-    const endSlot = (endMin - START_HOUR * 60) / SLOT_MINUTES;
-    if (startSlot < 0) return;
+    const key = `${lesson.day_of_week}-${lesson.room}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(lesson);
+  });
 
-    const card = document.createElement('div');
-    card.className = 'lesson-card'; card.dataset.lessonId = lesson.id;
-    const color = lesson.teacher?.color || '#1e6fe8';
-    card.style.background = color + (isDark ? '18' : '15');
-    card.style.borderColor = color + (isDark ? '40' : '35');
-    card.style.color = isDark ? color + 'cc' : color;
-    card.style.gridRow = `${rowForSlot(startSlot)} / ${rowForSlot(endSlot)}`;
-    card.style.gridColumn = colForDayRoom(lesson.day_of_week, lesson.room);
+  // Pre-compute per-slot totals
+  const slotTotals = {};
+  Object.entries(groups).forEach(([key, lessons]) => {
+    slotTotals[key] = {};
+    lessons.forEach(lesson => {
+      const { ss, es } = recLessonSlots(lesson);
+      const sc = lesson.recurring_lesson_students?.length || 0;
+      for (let s = ss; s < es; s++) {
+        slotTotals[key][s] = (slotTotals[key][s] || 0) + sc;
+      }
+    });
+  });
 
-    const sn = (lesson.teacher?.short_name || '??').replace(/\./g, '');
-    const sc = lesson.recurring_lesson_students?.length || 0;
-    const canEdit = state.profile.role === 'admin' || lesson.teacher_id === state.user.id;
-    card.innerHTML = `${canEdit ? '<div class="lc-drag-handle" title="Перетащить">⠿</div>' : ''}<div class="lc-teacher">${sn}</div><div class="lc-count">${sc}<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>`;
-    grid.appendChild(card);
+  Object.entries(groups).forEach(([key, lessons]) => {
+    lessons.sort((a, b) => {
+      const as = recLessonSlots(a).ss; const bs = recLessonSlots(b).ss;
+      return as - bs;
+    });
+    lessons.forEach((lesson, i) => {
+      const { ss } = recLessonSlots(lesson);
+      let ov = 0;
+      for (let j = 0; j < i; j++) { if (ss < recLessonSlots(lessons[j]).es) ov++; }
+      lesson._ov = ov;
+    });
+
+    const slotClaimed = {};
+    lessons.forEach(lesson => {
+      const { ss, es } = recLessonSlots(lesson);
+      for (let s = ss; s < es; s++) { if (!slotClaimed[s]) slotClaimed[s] = lesson.id; }
+    });
+
+    lessons.forEach(lesson => {
+      const { ss, es } = recLessonSlots(lesson);
+      const card = document.createElement('div');
+      card.className = 'lesson-card'; card.dataset.lessonId = lesson.id;
+      const color = lesson.teacher?.color || '#1e6fe8';
+      card.style.gridRow = `${rowForSlot(ss)} / ${rowForSlot(es)}`;
+      card.style.gridColumn = colForDayRoom(lesson.day_of_week, lesson.room);
+      if (lesson._ov > 0) { card.style.zIndex = 2 + lesson._ov; }
+
+      const canEdit = state.profile.role === 'admin' || lesson.teacher_id === state.user.id;
+      const r = parseInt(color.slice(1, 3), 16);
+      const g = parseInt(color.slice(3, 5), 16);
+      const b = parseInt(color.slice(5, 7), 16);
+      card.style.borderColor = `rgba(${r},${g},${b},${isDark ? 0.5 : 0.4})`;
+
+      let slotsHTML = '';
+      for (let s = ss; s < es; s++) {
+        const total = slotTotals[key][s] || 0;
+        const clamped = Math.min(total, 4);
+        const alpha = isDark ? 0.06 + (clamped / 4) * 0.30 : 0.05 + (clamped / 4) * 0.25;
+        const slotBg = `rgba(${r},${g},${b},${alpha.toFixed(2)})`;
+        const textColor = isDark
+          ? (clamped >= 3 ? 'rgba(255,255,255,0.85)' : `rgba(${r},${g},${b},0.7)`)
+          : (clamped >= 3 ? 'rgba(255,255,255,0.9)' : `rgba(${r},${g},${b},0.75)`);
+        const showCount = slotClaimed[s] === lesson.id;
+        const countHTML = showCount ? `<span class="lc-slot-count" style="color:${textColor}">${total}</span>` : '';
+        slotsHTML += `<div class="lc-slot" style="background:${slotBg}">${countHTML}</div>`;
+      }
+
+      const isFirst = lesson._ov === 0;
+      const sn = (lesson.teacher?.short_name || '??').replace(/\./g, '');
+      const headerColor = `rgba(${r},${g},${b},${isDark ? 0.9 : 1})`;
+      const headerHTML = isFirst ? `<div class="lc-header" style="color:${headerColor}">${sn}</div>` : '';
+      const dragHTML = canEdit ? '<div class="lc-drag-handle" title="Перетащить">⠿</div>' : '';
+
+      card.innerHTML = `${dragHTML}${headerHTML}<div class="lc-slots">${slotsHTML}</div>`;
+      grid.appendChild(card);
+    });
   });
 }
 
 // ===== RECURRING GRID EVENTS =====
-let recSelecting = false;
-let recSelStart = null;
-let recSelEnd = null;
-let recDragState = null;
-let recDragMouseStart = null;
-let recDragStarted = false;
+function findRecCellAt(x, y) {
+  const grid = document.getElementById('recurring-grid');
+  const cards = grid.querySelectorAll('.lesson-card');
+  cards.forEach(c => c.style.pointerEvents = 'none');
+  const el = document.elementFromPoint(x, y);
+  cards.forEach(c => c.style.pointerEvents = '');
+  return el?.closest?.('.grid-cell');
+}
 
 function initRecurringGridEvents(grid) {
   grid.addEventListener('mousedown', onRecGridMouseDown);
   grid.addEventListener('mousemove', onRecGridMouseMove);
   grid.addEventListener('mouseup', onRecGridMouseUp);
+  grid.addEventListener('contextmenu', onRecGridContextMenu);
   grid.addEventListener('mouseleave', () => {
     if (recSelecting) { recSelecting = false; clearRecSelection(); }
+    recPendingClick = null;
     removeRecTooltip();
     clearRecDragHighlight();
   });
 }
 
+function onRecGridContextMenu(e) {
+  const card = e.target.closest('.lesson-card');
+  if (!card) return;
+  e.preventDefault();
+  const col = card.style.gridColumn;
+  const allCards = [...document.querySelectorAll('#recurring-grid .lesson-card')].filter(c => c.style.gridColumn === col);
+  if (allCards.length <= 1) return;
+  const clickedStart = parseInt(card.style.gridRow.split('/')[0].trim());
+  const clickedEnd = parseInt(card.style.gridRow.split('/')[1].trim());
+  const overlapping = allCards.filter(c => {
+    const s = parseInt(c.style.gridRow.split('/')[0].trim());
+    const e2 = parseInt(c.style.gridRow.split('/')[1].trim());
+    return s < clickedEnd && e2 > clickedStart;
+  });
+  if (overlapping.length <= 1) return;
+  const sorted = overlapping.sort((a, b) => (parseInt(b.style.zIndex) || 2) - (parseInt(a.style.zIndex) || 2));
+  const zValues = sorted.map(c => parseInt(c.style.zIndex) || 2);
+  const last = zValues.shift(); zValues.push(last);
+  sorted.forEach((c, i) => { c.style.zIndex = zValues[i]; });
+}
+
 function onRecGridMouseDown(e) {
+  if (e.button === 2) return;
   if (state.profile.role === 'student') return;
+
   const dragHandle = e.target.closest('.lc-drag-handle');
   if (dragHandle) {
     e.preventDefault();
     const card = dragHandle.closest('.lesson-card');
     const lesson = recurringLessons.find(l => l.id === card.dataset.lessonId);
     if (!lesson) return;
-    const sp = lesson.start_time.split(':'); const ep = lesson.end_time.split(':');
-    const ss = (+sp[0] * 60 + +sp[1] - START_HOUR * 60) / SLOT_MINUTES;
-    const es = (+ep[0] * 60 + +ep[1] - START_HOUR * 60) / SLOT_MINUTES;
+    const { ss, es } = recLessonSlots(lesson);
     recDragState = { lesson, slotLength: es - ss };
     recDragMouseStart = { x: e.clientX, y: e.clientY };
     recDragStarted = false;
     return;
   }
+
   const card = e.target.closest('.lesson-card');
-  if (card) {
-    const lesson = recurringLessons.find(l => l.id === card.dataset.lessonId);
-    if (lesson) openRecurringEditModal(lesson);
-    return;
-  }
-  const cell = e.target.closest('.grid-cell');
+  const grid = document.getElementById('recurring-grid');
+  const cell = card ? findRecCellAt(e.clientX, e.clientY) : e.target.closest('.grid-cell');
   if (!cell) return;
-  recSelecting = true;
-  recSelStart = { day: +cell.dataset.day, room: +cell.dataset.room, slot: +cell.dataset.slot };
-  recSelEnd = { ...recSelStart };
-  updateRecSelection();
   e.preventDefault();
+  recPendingClick = {
+    x: e.clientX, y: e.clientY, card, lessonId: card?.dataset.lessonId,
+    day: +cell.dataset.day, room: +cell.dataset.room, slot: +cell.dataset.slot
+  };
 }
 
 function onRecGridMouseMove(e) {
   const grid = document.getElementById('recurring-grid');
+
+  if (recPendingClick) {
+    const dx = e.clientX - recPendingClick.x; const dy = e.clientY - recPendingClick.y;
+    if (Math.sqrt(dx * dx + dy * dy) >= DRAG_THRESHOLD) {
+      recSelecting = true;
+      recSelStart = { day: recPendingClick.day, room: recPendingClick.room, slot: recPendingClick.slot };
+      recSelEnd = { ...recSelStart };
+      updateRecSelection();
+      removeRecTooltip();
+      recPendingClick = null;
+    } else { return; }
+  }
+
   if (recDragState) {
     if (!recDragStarted) {
       const dx = e.clientX - recDragMouseStart.x; const dy = e.clientY - recDragMouseStart.y;
@@ -172,13 +276,10 @@ function onRecGridMouseMove(e) {
     return;
   }
 
-  // Tooltip
-  if (!recSelecting) {
-    handleRecTooltip(e);
-  }
+  if (!recSelecting) handleRecTooltip(e);
 
   if (recSelecting) {
-    const cell = e.target.closest('.grid-cell');
+    const cell = findRecCellAt(e.clientX, e.clientY);
     if (!cell) return;
     if (+cell.dataset.day !== recSelStart.day || +cell.dataset.room !== recSelStart.room) return;
     recSelEnd = { day: +cell.dataset.day, room: +cell.dataset.room, slot: +cell.dataset.slot };
@@ -186,7 +287,37 @@ function onRecGridMouseMove(e) {
   }
 }
 
-let recTooltip = null;
+function onRecGridMouseUp(e) {
+  if (recPendingClick) {
+    const pc = recPendingClick; recPendingClick = null;
+    if (pc.lessonId) {
+      const lesson = recurringLessons.find(l => l.id === pc.lessonId);
+      if (lesson) openRecurringEditModal(lesson);
+    } else {
+      openRecurringCreateModal({ day: pc.day, room: pc.room, slotFrom: pc.slot, slotTo: pc.slot + 1 });
+    }
+    return;
+  }
+
+  if (recDragState) {
+    if (!recDragStarted) { recDragState = null; recDragMouseStart = null; return; }
+    clearRecDragHighlight();
+    document.getElementById('recurring-grid')?.classList.remove('grid-dragging');
+    document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
+    const cell = e.target.closest('.grid-cell');
+    if (cell) finishRecDrag(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+    recDragState = null; recDragMouseStart = null; recDragStarted = false;
+    return;
+  }
+
+  if (recSelecting) {
+    recSelecting = false; clearRecSelection();
+    if (!recSelStart) return;
+    const sf = Math.min(recSelStart.slot, recSelEnd.slot);
+    const st = Math.max(recSelStart.slot, recSelEnd.slot) + 1;
+    openRecurringCreateModal({ day: recSelStart.day, room: recSelStart.room, slotFrom: sf, slotTo: st });
+  }
+}
 
 function handleRecTooltip(e) {
   const cell = e.target.closest('.grid-cell');
@@ -206,28 +337,6 @@ function removeRecTooltip() {
   if (recTooltip) { recTooltip.remove(); recTooltip = null; }
   document.querySelectorAll('#recurring-grid .grid-cell-hover').forEach(c => c.classList.remove('grid-cell-hover'));
 }
-
-function onRecGridMouseUp(e) {
-  if (recDragState) {
-    if (!recDragStarted) { recDragState = null; recDragMouseStart = null; return; }
-    clearRecDragHighlight();
-    document.getElementById('recurring-grid')?.classList.remove('grid-dragging');
-    document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
-    const cell = e.target.closest('.grid-cell');
-    if (cell) finishRecDrag(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-    recDragState = null; recDragMouseStart = null; recDragStarted = false;
-    return;
-  }
-  if (recSelecting) {
-    recSelecting = false; clearRecSelection();
-    if (!recSelStart) return;
-    const sf = Math.min(recSelStart.slot, recSelEnd.slot);
-    const st = Math.max(recSelStart.slot, recSelEnd.slot) + 1;
-    openRecurringCreateModal({ day: recSelStart.day, room: recSelStart.room, slotFrom: sf, slotTo: st });
-  }
-}
-
-let recDurationLabel = null;
 
 function updateRecSelection() {
   clearRecSelection();
@@ -280,6 +389,57 @@ function recSlotToTimeStr(slot) {
   return `${h.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}:00`;
 }
 
+// ===== AUTO-COPY TO NEXT WEEKS =====
+async function syncRecurringToWeeks(teacherFilter) {
+  const now = getMonday(new Date());
+  const nextWeek = new Date(now); nextWeek.setDate(nextWeek.getDate() + 7);
+  const twoWeeks = new Date(now); twoWeeks.setDate(twoWeeks.getDate() + 14);
+  const isAdmin = state.profile.role === 'admin';
+  const filterTid = teacherFilter || (isAdmin ? null : state.user.id);
+
+  let q = db.from('recurring_lessons').select('*, recurring_lesson_students(student_id)');
+  if (filterTid) q = q.eq('teacher_id', filterTid);
+  const { data: recurring } = await q;
+  if (!recurring || recurring.length === 0) return;
+
+  for (const weekStart of [nextWeek, twoWeeks]) {
+    const ws = formatDate(weekStart);
+    const dates = getWeekDates(weekStart);
+
+    let eq = db.from('lessons').select('id, teacher_id, start_time, room').eq('week_start', ws).eq('status', 'active');
+    if (filterTid) eq = eq.eq('teacher_id', filterTid);
+    const { data: existing } = await eq;
+
+    const existingKeys = new Set((existing || []).map(l => {
+      const s = new Date(l.start_time);
+      return `${l.teacher_id}-${s.getDay()}-${l.room}-${s.getHours()}:${s.getMinutes()}`;
+    }));
+
+    for (const rl of recurring) {
+      const dayDate = dates[rl.day_of_week];
+      if (!dayDate) continue;
+      const sp = rl.start_time.split(':');
+      const ep = rl.end_time.split(':');
+      const key = `${rl.teacher_id}-${dayDate.getDay()}-${rl.room}-${+sp[0]}:${+sp[1]}`;
+      if (existingKeys.has(key)) continue;
+
+      const sTime = new Date(dayDate); sTime.setHours(+sp[0], +sp[1], 0, 0);
+      const eTime = new Date(dayDate); eTime.setHours(+ep[0], +ep[1], 0, 0);
+
+      const { data: newLesson, error } = await db.from('lessons').insert({
+        teacher_id: rl.teacher_id, room: rl.room, week_start: ws,
+        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+      }).select().single();
+
+      if (!error && newLesson && rl.recurring_lesson_students?.length > 0) {
+        await db.from('lesson_students').insert(
+          rl.recurring_lesson_students.map(rs => ({ lesson_id: newLesson.id, student_id: rs.student_id }))
+        );
+      }
+    }
+  }
+}
+
 // ===== RECURRING CRUD =====
 function openRecurringCreateModal(sel) {
   document.getElementById('lesson-modal-title').textContent = `${DAYS_FULL[sel.day]} · ${ROOM_FULL[sel.room - 1]} · ${slotToTime(sel.slotFrom)}–${slotToTime(sel.slotTo)}`;
@@ -292,6 +452,7 @@ function openRecurringCreateModal(sel) {
   state.lessonModal = { mode: 'rec-create', day: sel.day, room: sel.room, slotFrom: sel.slotFrom, slotTo: sel.slotTo, selectedIds: new Set() };
 
   loadTeacherStudentsForModal(state.user.id).then(() => {
+    renderCurrentStudents();
     renderLessonStudentsList('');
     document.getElementById('lesson-overlay').classList.add('active');
     document.getElementById('lesson-student-search').value = '';
@@ -299,10 +460,7 @@ function openRecurringCreateModal(sel) {
 }
 
 function openRecurringEditModal(lesson) {
-  const sp = lesson.start_time.split(':'); const ep = lesson.end_time.split(':');
-  const ss = (+sp[0] * 60 + +sp[1] - START_HOUR * 60) / SLOT_MINUTES;
-  const es = (+ep[0] * 60 + +ep[1] - START_HOUR * 60) / SLOT_MINUTES;
-
+  const { ss, es } = recLessonSlots(lesson);
   document.getElementById('lesson-modal-title').textContent = `${DAYS_FULL[lesson.day_of_week]} · ${ROOM_FULL[lesson.room - 1]} · ${slotToTime(ss)}–${slotToTime(es)}`;
   const canEdit = state.profile.role === 'admin' || lesson.teacher_id === state.user.id;
   document.getElementById('btn-delete-lesson').style.display = canEdit ? 'block' : 'none';
@@ -334,7 +492,7 @@ async function saveRecurringLesson() {
     }).select().single();
     if (error) { showToast('Ошибка', 'error'); return; }
     if (sids.length > 0) await db.from('recurring_lesson_students').insert(sids.map(sid => ({ recurring_lesson_id: data.id, student_id: sid })));
-    showToast('Занятие добавлено в постоянное расписание', 'success');
+    showToast('Занятие добавлено', 'success');
   } else {
     const { error } = await db.from('recurring_lessons').update({
       room: m.room, day_of_week: m.day, start_time: startTimeStr, end_time: endTimeStr
@@ -344,7 +502,9 @@ async function saveRecurringLesson() {
     if (sids.length > 0) await db.from('recurring_lesson_students').insert(sids.map(sid => ({ recurring_lesson_id: m.lessonId, student_id: sid })));
     showToast('Занятие обновлено', 'success');
   }
-  closeLessonModal(); await loadRecurringLessons();
+  closeLessonModal();
+  await loadRecurringLessons();
+  syncRecurringToWeeks();
 }
 
 async function deleteRecurringLesson() {
@@ -353,7 +513,9 @@ async function deleteRecurringLesson() {
   showConfirm('Удалить из постоянного расписания?', async () => {
     await db.from('recurring_lesson_students').delete().eq('recurring_lesson_id', lid);
     await db.from('recurring_lessons').delete().eq('id', lid);
-    showToast('Удалено', 'success'); await loadRecurringLessons();
+    showToast('Удалено', 'success');
+    await loadRecurringLessons();
+    syncRecurringToWeeks();
   });
 }
 
@@ -369,7 +531,9 @@ async function finishRecDrag(targetDay, targetRoom, targetSlot) {
     start_time: recSlotToTimeStr(targetSlot), end_time: recSlotToTimeStr(end)
   }).eq('id', lesson.id);
   if (error) { showToast('Ошибка', 'error'); return; }
-  showToast('Перенесено', 'success'); await loadRecurringLessons();
+  showToast('Перенесено', 'success');
+  await loadRecurringLessons();
+  syncRecurringToWeeks();
 }
 
 function initRecurring() {
@@ -384,4 +548,54 @@ function initRecurring() {
   document.getElementById('btn-profile-2').addEventListener('click', () => {
     openProfileScreen();
   });
+
+  document.getElementById('btn-copy-recurring').addEventListener('click', onCopyRecurringClick);
+  document.getElementById('btn-close-copy').addEventListener('click', closeCopyOverlay);
+  document.getElementById('copy-overlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeCopyOverlay();
+  });
+}
+
+function closeCopyOverlay() {
+  document.getElementById('copy-overlay').classList.remove('active');
+}
+
+async function onCopyRecurringClick() {
+  const isAdmin = state.profile.role === 'admin';
+
+  if (!isAdmin) {
+    showToast('Копирование...', 'success');
+    await syncRecurringToWeeks(state.user.id);
+    showToast('Расписание скопировано', 'success');
+    return;
+  }
+
+  const { data: teachers } = await db.from('profiles')
+    .select('id, full_name, color')
+    .in('role', ['teacher', 'admin'])
+    .eq('status', 'approved')
+    .order('full_name');
+
+  const list = document.getElementById('copy-teacher-list');
+  let html = `<button class="copy-teacher-btn" data-tid="all"><span class="copy-teacher-dot" style="background:var(--accent)"></span>Все преподаватели</button>`;
+  (teachers || []).forEach(t => {
+    html += `<button class="copy-teacher-btn" data-tid="${t.id}"><span class="copy-teacher-dot" style="background:${t.color || '#1e6fe8'}"></span>${t.full_name}</button>`;
+  });
+  list.innerHTML = html;
+
+  list.querySelectorAll('.copy-teacher-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      closeCopyOverlay();
+      const tid = btn.dataset.tid;
+      showToast('Копирование...', 'success');
+      if (tid === 'all') {
+        await syncRecurringToWeeks(null);
+      } else {
+        await syncRecurringToWeeks(tid);
+      }
+      showToast('Расписание скопировано', 'success');
+    });
+  });
+
+  document.getElementById('copy-overlay').classList.add('active');
 }

@@ -173,6 +173,7 @@ async function onAuthSuccess(user) {
   loadPendingCount();
   loadSubjects();
   computeAndSyncCancellations();
+  syncRecurringToWeeks();
 }
 
 async function handleLogout() {

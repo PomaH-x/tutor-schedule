@@ -130,11 +130,11 @@ async function computeAndSyncCancellations() {
 
 async function loadTruants() {
   if (!state.profile || state.profile.role === 'student') return;
-  const teacherId = state.profile.role === 'admin' ? undefined : state.user.id;
+  const isAdmin = state.profile.role === 'admin';
   let q = db.from('cancellations')
-    .select('*, student:students(first_name, last_name), recurring_lesson:recurring_lessons(start_time, end_time)')
+    .select('*, student:students(first_name, last_name), recurring_lesson:recurring_lessons(start_time, end_time), teacher:profiles!teacher_id(full_name)')
     .eq('status', 'pending');
-  if (teacherId) q = q.eq('teacher_id', teacherId);
+  if (!isAdmin) q = q.eq('teacher_id', state.user.id);
   q = q.order('week_start', { ascending: false });
 
   const { data } = await q;
@@ -159,7 +159,7 @@ function renderTruants(cancellations) {
   cancellations.forEach(c => {
     if (!c.student) return;
     const key = c.student_id;
-    if (!grouped[key]) grouped[key] = { student: c.student, count: 0, studentId: c.student_id, duration: 90 };
+    if (!grouped[key]) grouped[key] = { student: c.student, count: 0, studentId: c.student_id, duration: 90, teacherId: c.teacher_id, teacherName: c.teacher?.full_name || '' };
     grouped[key].count++;
     if (c.recurring_lesson) {
       const sp = c.recurring_lesson.start_time.split(':');
@@ -168,22 +168,41 @@ function renderTruants(cancellations) {
     }
   });
 
-  const truants = Object.values(grouped).sort((a, b) => b.count - a.count);
+  const truants = Object.values(grouped);
+  const isAdmin = state.profile.role === 'admin';
+
+  if (isAdmin) {
+    truants.sort((a, b) => {
+      const aOwn = a.teacherId === state.user.id ? 0 : 1;
+      const bOwn = b.teacherId === state.user.id ? 0 : 1;
+      if (aOwn !== bOwn) return aOwn - bOwn;
+      return b.count - a.count;
+    });
+  } else {
+    truants.sort((a, b) => b.count - a.count);
+  }
 
   if (truants.length === 0) {
     listEl.innerHTML = '<div class="admin-empty">Нет прогульщиков</div>';
     return;
   }
 
-  listEl.innerHTML = truants.map(t =>
-    `<div class="truant-card" data-student-id="${t.studentId}">
+  let html = '';
+  let currentTeacher = null;
+  truants.forEach(t => {
+    if (isAdmin && t.teacherName !== currentTeacher) {
+      currentTeacher = t.teacherName;
+      html += `<div class="truant-group-title">${currentTeacher}</div>`;
+    }
+    html += `<div class="truant-card" data-student-id="${t.studentId}">
       <div class="truant-info">
         <span class="truant-name">${t.student.first_name} ${t.student.last_name}</span>
         <span class="truant-count">${t.count} неотработ.</span>
       </div>
       <button class="btn-place-truant" data-student-id="${t.studentId}" data-duration="${t.duration}" data-name="${t.student.first_name} ${t.student.last_name}">Разместить</button>
-    </div>`
-  ).join('');
+    </div>`;
+  });
+  listEl.innerHTML = html;
 
   listEl.querySelectorAll('.btn-place-truant').forEach(btn => {
     btn.addEventListener('click', () => {

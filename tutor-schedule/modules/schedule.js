@@ -113,6 +113,7 @@ function renderGrid() {
       const rl = document.createElement('div');
       rl.className = 'grid-room-label';
       if (date.getTime() === today.getTime()) rl.classList.add('grid-room-label-today');
+      if (r === 2) rl.classList.add('grid-room-label-day-end');
       rl.style.gridColumn = `${colForDayRoom(i, r + 1)}`; rl.style.gridRow = '2'; rl.textContent = ROOM_LABELS[r];
       grid.appendChild(rl);
     }
