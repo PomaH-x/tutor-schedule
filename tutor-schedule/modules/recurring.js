@@ -5,7 +5,7 @@ let recAllStudents = [];
 async function loadRecurringLessons() {
   const tid = state.profile.role === 'admin' ? undefined : state.user.id;
   let q = db.from('recurring_lessons')
-    .select('*, teacher:profiles!teacher_id(short_name, color, full_name), recurring_lesson_students(student_id, student:students(first_name, last_name, subject, lesson_duration))');
+    .select('*, teacher:profiles!teacher_id(short_name, color, full_name), recurring_lesson_students(student_id, student:students(first_name, last_name, subject))');
   if (tid) q = q.eq('teacher_id', tid);
   const { data, error } = await q;
   if (error) { showToast('Ошибка загрузки', 'error'); return; }

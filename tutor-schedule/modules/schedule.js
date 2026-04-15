@@ -147,8 +147,17 @@ function renderGrid() {
 // ===== LESSONS RENDER (overlap) =====
 function renderLessons() {
   document.querySelectorAll('.lesson-card').forEach(el => el.remove());
+  document.querySelectorAll('.grid-cell').forEach(c => {
+    c.style.background = ''; c.innerHTML = '';
+    
+    delete c.dataset.lessonIds;
+  });
+
   const grid = document.getElementById('schedule-grid');
   const dates = getWeekDates(state.currentWeekStart);
+  const isDark = document.documentElement.dataset.theme === 'dark';
+
+  // Group by day+room
   const groups = {};
   state.lessons.forEach(lesson => {
     const start = new Date(lesson.start_time);
@@ -159,31 +168,84 @@ function renderLessons() {
     groups[key].push({ ...lesson, _dayIndex: di });
   });
 
-  Object.values(groups).forEach(group => {
-    group.sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
-    group.forEach((lesson, i) => {
-      const start = new Date(lesson.start_time);
-      let ov = 0;
-      for (let j = 0; j < i; j++) { if (start < new Date(group[j].end_time)) ov++; }
-      lesson._ov = ov;
-    });
-    group.forEach(lesson => {
+  // Pre-compute per-slot student totals for each day+room
+  const slotTotals = {};
+  Object.entries(groups).forEach(([key, lessons]) => {
+    slotTotals[key] = {};
+    lessons.forEach(lesson => {
       const start = new Date(lesson.start_time); const end = new Date(lesson.end_time);
       const ss = (start.getHours() * 60 + start.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
       const es = (end.getHours() * 60 + end.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+      const sc = lesson.lesson_students?.length || 0;
+      for (let s = ss; s < es; s++) {
+        slotTotals[key][s] = (slotTotals[key][s] || 0) + sc;
+      }
+    });
+  });
+
+  // Render cards
+  Object.entries(groups).forEach(([key, lessons]) => {
+    lessons.sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+    lessons.forEach((lesson, i) => {
+      const start = new Date(lesson.start_time);
+      let ov = 0;
+      for (let j = 0; j < i; j++) { if (start < new Date(lessons[j].end_time)) ov++; }
+      lesson._ov = ov;
+    });
+
+    // Track which lesson "claims" each slot for count display (first lesson to cover it wins)
+    const slotClaimed = {};
+    lessons.forEach(lesson => {
+      const start = new Date(lesson.start_time); const end = new Date(lesson.end_time);
+      const ss = (start.getHours() * 60 + start.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+      const es = (end.getHours() * 60 + end.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+      for (let s = ss; s < es; s++) {
+        if (!slotClaimed[s]) slotClaimed[s] = lesson.id;
+      }
+    });
+
+    lessons.forEach(lesson => {
+      const start = new Date(lesson.start_time); const end = new Date(lesson.end_time);
+      const ss = (start.getHours() * 60 + start.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+      const es = (end.getHours() * 60 + end.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+
       const card = document.createElement('div');
       card.className = 'lesson-card'; card.dataset.lessonId = lesson.id;
       const color = lesson.teacher?.color || '#1e6fe8';
-      const isDark = document.documentElement.dataset.theme === 'dark';
-      card.style.background = color + (isDark ? '18' : '15');
-      card.style.borderColor = color + (isDark ? '40' : '35');
-      card.style.color = isDark ? color + 'cc' : color;
-      card.style.gridRow = `${rowForSlot(ss)} / ${rowForSlot(es)}`; card.style.gridColumn = colForDayRoom(lesson._dayIndex, lesson.room);
-      if (lesson._ov > 0) { card.style.marginLeft = `${lesson._ov * 8}px`; card.style.zIndex = 2 + lesson._ov; card.style.borderWidth = '2px'; }
-      const sn = (lesson.teacher?.short_name || '??').replace(/\./g, '');
-      const sc = lesson.lesson_students?.length || 0;
+      card.style.gridRow = `${rowForSlot(ss)} / ${rowForSlot(es)}`;
+      card.style.gridColumn = colForDayRoom(lesson._dayIndex, lesson.room);
+      if (lesson._ov > 0) { card.style.zIndex = 2 + lesson._ov; }
+
       const canDrag = state.profile.role === 'admin' || lesson.teacher_id === state.user.id;
-      card.innerHTML = `${canDrag ? '<div class="lc-drag-handle" title="Перетащить">⠿</div>' : ''}<div class="lc-teacher">${sn}</div><div class="lc-count">${sc}<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>`;
+
+      const r = parseInt(color.slice(1, 3), 16);
+      const g = parseInt(color.slice(3, 5), 16);
+      const b = parseInt(color.slice(5, 7), 16);
+      card.style.borderColor = `rgba(${r},${g},${b},${isDark ? 0.5 : 0.4})`;
+
+      let slotsHTML = '';
+      for (let s = ss; s < es; s++) {
+        const total = slotTotals[key][s] || 0;
+        const clamped = Math.min(total, 4);
+        const alpha = isDark
+          ? 0.06 + (clamped / 4) * 0.30
+          : 0.05 + (clamped / 4) * 0.25;
+        const slotBg = `rgba(${r},${g},${b},${alpha.toFixed(2)})`;
+        const textColor = isDark
+          ? (clamped >= 3 ? 'rgba(255,255,255,0.85)' : `rgba(${r},${g},${b},0.7)`)
+          : (clamped >= 3 ? 'rgba(255,255,255,0.9)' : `rgba(${r},${g},${b},0.75)`);
+        const showCount = slotClaimed[s] === lesson.id;
+        const countHTML = showCount ? `<span class="lc-slot-count" style="color:${textColor}">${total}</span>` : '';
+        slotsHTML += `<div class="lc-slot" style="background:${slotBg}">${countHTML}</div>`;
+      }
+
+      const isFirst = lesson._ov === 0;
+      const sn = (lesson.teacher?.short_name || '??').replace(/\./g, '');
+      const headerColor = `rgba(${r},${g},${b},${isDark ? 0.9 : 1})`;
+      const headerHTML = isFirst ? `<div class="lc-header" style="color:${headerColor}">${sn}</div>` : '';
+      const dragHTML = canDrag ? '<div class="lc-drag-handle" title="Перетащить">⠿</div>' : '';
+
+      card.innerHTML = `${dragHTML}${headerHTML}<div class="lc-slots">${slotsHTML}</div>`;
       grid.appendChild(card);
     });
   });
@@ -194,19 +256,47 @@ function initGridInteractions(grid) {
   grid.addEventListener('mousedown', onGridMouseDown);
   grid.addEventListener('mousemove', onGridMouseMove);
   grid.addEventListener('mouseup', onGridMouseUp);
+  grid.addEventListener('contextmenu', onGridContextMenu);
+}
+
+function onGridContextMenu(e) {
+  const card = e.target.closest('.lesson-card');
+  if (!card) return;
+  e.preventDefault();
+
+  const col = card.style.gridColumn;
+  const allCards = [...document.querySelectorAll('.lesson-card')].filter(c => c.style.gridColumn === col);
+  if (allCards.length <= 1) return;
+
+  const clickedStart = parseInt(card.style.gridRow.split('/')[0].trim());
+  const clickedEnd = parseInt(card.style.gridRow.split('/')[1].trim());
+  const overlapping = allCards.filter(c => {
+    const cStart = parseInt(c.style.gridRow.split('/')[0].trim());
+    const cEnd = parseInt(c.style.gridRow.split('/')[1].trim());
+    return cStart < clickedEnd && cEnd > clickedStart;
+  });
+
+  if (overlapping.length <= 1) return;
+
+  const sorted = overlapping.sort((a, b) => (parseInt(b.style.zIndex) || 2) - (parseInt(a.style.zIndex) || 2));
+  const zValues = sorted.map(c => parseInt(c.style.zIndex) || 2);
+  const last = zValues.shift();
+  zValues.push(last);
+  sorted.forEach((c, i) => { c.style.zIndex = zValues[i]; });
 }
 
 function onGridMouseDown(e) {
+  if (e.button === 2) return;
   if (state.profile.role === 'student') return;
 
-  // Placing mode (lesson or student)
+  // Placing mode
   if (state.placingLesson || state.placingStudent || state.placingTruant) {
     const cell = e.target.closest('.grid-cell');
-    const cardEl = e.target.closest('.lesson-card');
-    if (cardEl && (state.placingStudent || state.placingTruant)) {
+    const card = e.target.closest('.lesson-card');
+    if (card && (state.placingStudent || state.placingTruant)) {
       e.preventDefault();
-      if (state.placingStudent) placeTransferredStudentOnLesson(cardEl.dataset.lessonId);
-      else placeTruantOnLesson(cardEl.dataset.lessonId);
+      if (state.placingStudent) placeTransferredStudentOnLesson(card.dataset.lessonId);
+      else placeTruantOnLesson(card.dataset.lessonId);
     } else if (cell) {
       e.preventDefault();
       if (state.placingLesson) placeTransferredLesson(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
@@ -221,7 +311,7 @@ function onGridMouseDown(e) {
   if (dragHandle) {
     e.preventDefault();
     const card = dragHandle.closest('.lesson-card');
-    const lesson = state.lessons.find(l => l.id === card.dataset.lessonId);
+    const lesson = state.lessons.find(l => l.id === card?.dataset.lessonId);
     if (!lesson) return;
     const st = new Date(lesson.start_time); const et = new Date(lesson.end_time);
     const ss = (st.getHours() * 60 + st.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
@@ -234,9 +324,13 @@ function onGridMouseDown(e) {
 
   // Click on card = edit
   const card = e.target.closest('.lesson-card');
-  if (card) { const l = state.lessons.find(l => l.id === card.dataset.lessonId); if (l) openEditLessonModal(l); return; }
+  if (card) {
+    const lesson = state.lessons.find(l => l.id === card.dataset.lessonId);
+    if (lesson) openEditLessonModal(lesson);
+    return;
+  }
 
-  // Selection
+  // Selection on empty cell
   const cell = e.target.closest('.grid-cell');
   if (!cell) return;
   selecting = true;
@@ -495,12 +589,11 @@ async function placeTransferredStudentOnLesson(targetLessonId) {
 }
 
 // ===== STUDENT DND =====
-function startStudentDrag(studentData, lessonId, teacherId) {
+function startStudentDrag(studentData, lessonId, teacherId, lessonSlotLength) {
   closeLessonModal();
-  const slotLength = Math.ceil(studentData.lesson_duration / SLOT_MINUTES);
   studentDragState = {
     studentId: studentData.id, studentName: `${studentData.first_name} ${studentData.last_name}`,
-    lessonId, teacherId, slotLength, duration: studentData.lesson_duration
+    lessonId, teacherId, slotLength: lessonSlotLength
   };
   const banner = document.getElementById('student-drag-banner');
   banner.textContent = `${studentData.first_name} ${studentData.last_name}`;
@@ -627,17 +720,20 @@ function removeDurationLabel() { if (durationLabel) { durationLabel.remove(); du
 async function loadLessons() {
   const ws = formatDate(state.currentWeekStart);
   const { data, error } = await db.from('lessons')
-    .select('*, teacher:profiles!teacher_id(short_name, color, full_name), lesson_students(student_id, student:students(first_name, last_name, subject, lesson_duration))')
+    .select('*, teacher:profiles!teacher_id(short_name, color, full_name), lesson_students(student_id, student:students(first_name, last_name, subject))')
     .eq('week_start', ws).eq('status', 'active');
   if (error) { showToast('Ошибка загрузки', 'error'); return; }
   state.lessons = data || []; renderLessons();
-  if (typeof computeAndSyncCancellations === 'function') computeAndSyncCancellations();
+  const currentMonday = getMonday(new Date());
+  if (formatDate(state.currentWeekStart) === formatDate(currentMonday)) {
+    if (typeof computeAndSyncCancellations === 'function') computeAndSyncCancellations();
+  }
 }
 
 function buildModalTitle(di, room, sf, st) { return `${DAYS_FULL[di]} · ${ROOM_FULL[room - 1]} · ${slotToTime(sf)}–${slotToTime(st)}`; }
 
 async function loadTeacherStudentsForModal(tid) {
-  const { data } = await db.from('students').select('id, first_name, last_name, subject, lesson_duration').eq('teacher_id', tid).order('first_name');
+  const { data } = await db.from('students').select('id, first_name, last_name, subject').eq('teacher_id', tid).order('first_name');
   const seen = new Set();
   allTeacherStudents = (data || []).filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
 }
@@ -687,7 +783,7 @@ function renderCurrentStudents() {
   const selected = allTeacherStudents.filter(s => m.selectedIds.has(s.id));
   if (selected.length === 0) { ct.style.display = 'none'; ct.innerHTML = ''; return; }
   ct.style.display = 'block';
-  const sl = (s) => s === 'math' ? 'Математика' : 'Информатика';
+  const sl = (s) => s || '';
   ct.innerHTML = `<label class="lesson-label">Текущие ученики</label>` + selected.map(s => {
     return `<div class="current-student-row" data-student-id="${s.id}">
       ${canEdit && (m.mode === 'edit' || m.mode === 'rec-edit') ? '<span class="cs-drag-handle" title="Перенести">⠿</span>' : ''}
@@ -713,7 +809,8 @@ function renderCurrentStudents() {
           const sid = row.dataset.studentId;
           const sd = allTeacherStudents.find(s => s.id === sid);
           if (!sd) return;
-          startStudentDrag(sd, m.lessonId, m.teacherId);
+          const lessonSlots = m.slotTo - m.slotFrom;
+          startStudentDrag(sd, m.lessonId, m.teacherId, lessonSlots);
         });
       });
     }
@@ -732,7 +829,7 @@ function renderLessonStudentsList(filter) {
   let students = allTeacherStudents;
   if (search) students = students.filter(s => s.first_name.toLowerCase().includes(search) || s.last_name.toLowerCase().includes(search));
   if (students.length === 0) { list.innerHTML = '<div class="lesson-no-students">Нет учеников</div>'; return; }
-  const sl = (s) => s === 'math' ? 'Математика' : 'Информатика';
+  const sl = (s) => s || '';
   const canEdit = state.profile.role === 'admin' || (m.mode === 'create' || m.mode === 'rec-create') || (m.teacherId === state.user.id);
   list.innerHTML = students.map(s => {
     const ch = m.selectedIds.has(s.id);

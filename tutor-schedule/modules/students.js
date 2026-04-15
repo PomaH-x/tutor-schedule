@@ -1,21 +1,25 @@
 let editingStudentId = null;
+let subjectsList = [];
+
+async function loadSubjects() {
+  const { data } = await db.from('subjects').select('*').order('name');
+  subjectsList = data || [];
+  populateSubjectSelects();
+}
+
+function populateSubjectSelects() {
+  const sel = document.getElementById('student-subject');
+  if (!sel) return;
+  sel.innerHTML = subjectsList.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+}
 
 async function loadStudents() {
   const isAdmin = state.profile.role === 'admin';
   let query = db.from('students').select('*, teacher:profiles!teacher_id(full_name, short_name)');
-
-  if (!isAdmin) {
-    query = query.eq('teacher_id', state.user.id);
-  }
-
+  if (!isAdmin) query = query.eq('teacher_id', state.user.id);
   query = query.order('first_name');
   const { data, error } = await query;
-
-  if (error) {
-    showToast('Ошибка загрузки учеников', 'error');
-    return;
-  }
-
+  if (error) { showToast('Ошибка загрузки учеников', 'error'); return; }
   state.students = data || [];
   renderStudents();
 }
@@ -28,8 +32,7 @@ function renderStudents(filter = '') {
   let filtered = state.students;
   if (search) {
     filtered = filtered.filter(s =>
-      s.first_name.toLowerCase().includes(search) ||
-      s.last_name.toLowerCase().includes(search)
+      s.first_name.toLowerCase().includes(search) || s.last_name.toLowerCase().includes(search)
     );
   }
 
@@ -97,15 +100,13 @@ function renderStudents(filter = '') {
 }
 
 function studentCardHTML(s) {
-  const subjectLabel = s.subject === 'math' ? 'Математика' : 'Информатика';
   return `<div class="student-card" data-id="${s.id}">
     <div class="student-card-main">
       <span class="student-name">${s.first_name} ${s.last_name}</span>
-      <span class="student-subject">${subjectLabel}</span>
+      <span class="student-subject">${s.subject || ''}</span>
     </div>
     <div class="student-card-meta">
-      <span>${s.lessons_per_week}×/нед</span>
-      <span>${s.lesson_duration >= 60 ? (s.lesson_duration / 60 === Math.floor(s.lesson_duration / 60) ? (s.lesson_duration / 60) + ' ч' : (s.lesson_duration / 60).toFixed(1).replace('.', ',') + ' ч') : s.lesson_duration + ' мин'}</span>
+      ${s.grade ? `<span>${s.grade} класс</span>` : ''}
     </div>
   </div>`;
 }
@@ -115,9 +116,9 @@ function openStudentModal(title, student = null) {
   document.getElementById('modal-student-title').textContent = title;
   document.getElementById('student-first-name').value = student?.first_name || '';
   document.getElementById('student-last-name').value = student?.last_name || '';
-  document.getElementById('student-subject').value = student?.subject || 'math';
-  document.getElementById('student-lessons-per-week').value = student?.lessons_per_week || 2;
-  document.getElementById('student-duration').value = student?.lesson_duration || 90;
+  populateSubjectSelects();
+  document.getElementById('student-subject').value = student?.subject || (subjectsList[0]?.name || '');
+  document.getElementById('student-grade').value = student?.grade || 11;
   document.getElementById('student-notes').value = student?.notes || '';
   document.getElementById('btn-delete-student').style.display = student ? 'block' : 'none';
   document.getElementById('modal-overlay').classList.add('active');
@@ -137,8 +138,7 @@ async function saveStudent() {
   const firstName = document.getElementById('student-first-name').value.trim();
   const lastName = document.getElementById('student-last-name').value.trim();
   const subject = document.getElementById('student-subject').value;
-  const lessonsPerWeek = parseInt(document.getElementById('student-lessons-per-week').value);
-  const duration = parseInt(document.getElementById('student-duration').value);
+  const grade = parseInt(document.getElementById('student-grade').value);
   const notes = document.getElementById('student-notes').value.trim();
 
   if (!firstName || !lastName) {
@@ -150,14 +150,12 @@ async function saveStudent() {
     first_name: firstName,
     last_name: lastName,
     subject: subject,
-    lessons_per_week: lessonsPerWeek,
-    lesson_duration: duration,
+    grade: grade,
     notes: notes || null,
     teacher_id: state.user.id
   };
 
   let error;
-
   if (editingStudentId) {
     ({ error } = await db.from('students').update(record).eq('id', editingStudentId));
   } else {
@@ -198,10 +196,7 @@ async function deleteStudent() {
   closeStudentModal();
   showConfirm(`Удалить ${name}?`, async () => {
     const { error } = await db.from('students').delete().eq('id', id);
-    if (error) {
-      showToast('Ошибка удаления', 'error');
-      return;
-    }
+    if (error) { showToast('Ошибка удаления', 'error'); return; }
     showToast('Ученик удалён', 'success');
     await loadStudents();
   });

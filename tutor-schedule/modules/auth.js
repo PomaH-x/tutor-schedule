@@ -171,6 +171,8 @@ async function onAuthSuccess(user) {
   showScreen('screen-schedule');
   initSchedule();
   loadPendingCount();
+  loadSubjects();
+  computeAndSyncCancellations();
 }
 
 async function handleLogout() {

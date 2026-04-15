@@ -184,6 +184,7 @@ function initProfileTabs() {
       if (tab.dataset.tab === 'tab-admin') {
         loadPendingUsers();
         loadTeachers();
+        loadSubjectsAdmin();
       }
     });
   });
@@ -192,6 +193,57 @@ function initProfileTabs() {
   document.getElementById('color-overlay').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeColorPicker();
   });
+
+  document.getElementById('btn-add-subject').addEventListener('click', addSubject);
+  document.getElementById('new-subject-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addSubject();
+  });
+}
+
+async function loadSubjectsAdmin() {
+  const { data } = await db.from('subjects').select('*').order('name');
+  renderSubjectsAdmin(data || []);
+}
+
+function renderSubjectsAdmin(subjects) {
+  const list = document.getElementById('subjects-list');
+  if (subjects.length === 0) {
+    list.innerHTML = '<div class="admin-empty">Нет предметов</div>';
+    return;
+  }
+  list.innerHTML = subjects.map(s =>
+    `<div class="subject-card">
+      <span class="subject-name">${s.name}</span>
+      <button class="btn-delete-subject" data-id="${s.id}" data-name="${s.name}">×</button>
+    </div>`
+  ).join('');
+
+  list.querySelectorAll('.btn-delete-subject').forEach(btn => {
+    btn.addEventListener('click', () => {
+      showConfirm(`Удалить предмет "${btn.dataset.name}"?`, async () => {
+        await db.from('subjects').delete().eq('id', btn.dataset.id);
+        showToast('Предмет удалён', 'success');
+        await loadSubjectsAdmin();
+        await loadSubjects();
+      });
+    });
+  });
+}
+
+async function addSubject() {
+  const input = document.getElementById('new-subject-name');
+  const name = input.value.trim();
+  if (!name) { showToast('Введите название предмета', 'error'); return; }
+  const { error } = await db.from('subjects').insert({ name });
+  if (error) {
+    if (error.message.includes('unique')) showToast('Предмет уже существует', 'error');
+    else showToast('Ошибка', 'error');
+    return;
+  }
+  input.value = '';
+  showToast('Предмет добавлен', 'success');
+  await loadSubjectsAdmin();
+  await loadSubjects();
 }
 
 function initAdmin() {
