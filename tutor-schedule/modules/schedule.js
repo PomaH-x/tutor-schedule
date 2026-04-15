@@ -285,6 +285,16 @@ function onGridContextMenu(e) {
   sorted.forEach((c, i) => { c.style.zIndex = zValues[i]; });
 }
 
+let pendingClick = null;
+
+function findCellAt(x, y, grid) {
+  const cards = grid.querySelectorAll('.lesson-card');
+  cards.forEach(c => c.style.pointerEvents = 'none');
+  const el = document.elementFromPoint(x, y);
+  cards.forEach(c => c.style.pointerEvents = '');
+  return el?.closest?.('.grid-cell');
+}
+
 function onGridMouseDown(e) {
   if (e.button === 2) return;
   if (state.profile.role === 'student') return;
@@ -322,26 +332,38 @@ function onGridMouseDown(e) {
     return;
   }
 
-  // Click on card = edit
+  // Click on card or empty cell — defer decision (click vs selection)
   const card = e.target.closest('.lesson-card');
-  if (card) {
-    const lesson = state.lessons.find(l => l.id === card.dataset.lessonId);
-    if (lesson) openEditLessonModal(lesson);
-    return;
-  }
-
-  // Selection on empty cell
-  const cell = e.target.closest('.grid-cell');
+  const grid = document.getElementById('schedule-grid');
+  const cell = card ? findCellAt(e.clientX, e.clientY, grid) : e.target.closest('.grid-cell');
   if (!cell) return;
-  selecting = true;
-  selStart = { day: +cell.dataset.day, room: +cell.dataset.room, slot: +cell.dataset.slot };
-  selEnd = { ...selStart };
-  updateSelectionHighlight();
+
   e.preventDefault();
+  pendingClick = {
+    x: e.clientX, y: e.clientY,
+    card: card,
+    lessonId: card?.dataset.lessonId,
+    day: +cell.dataset.day, room: +cell.dataset.room, slot: +cell.dataset.slot
+  };
 }
 
 function onGridMouseMove(e) {
   const grid = document.getElementById('schedule-grid');
+
+  // Pending click → check if it becomes a selection
+  if (pendingClick) {
+    const dx = e.clientX - pendingClick.x; const dy = e.clientY - pendingClick.y;
+    if (Math.sqrt(dx * dx + dy * dy) >= DRAG_THRESHOLD) {
+      selecting = true;
+      selStart = { day: pendingClick.day, room: pendingClick.room, slot: pendingClick.slot };
+      selEnd = { ...selStart };
+      updateSelectionHighlight();
+      removeCellTooltip();
+      pendingClick = null;
+    } else {
+      return;
+    }
+  }
 
   // Drag lesson
   if (dragState) {
@@ -355,7 +377,6 @@ function onGridMouseMove(e) {
     }
     clearDragHighlight();
     const cell = e.target.closest('.grid-cell');
-    // Highlight next-week tab
     const nwTab = getNextWeekTab();
     document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
     if (nwTab) {
@@ -429,7 +450,7 @@ function onGridMouseMove(e) {
   handleCellTooltip(e, grid);
 
   if (selecting) {
-    const cell = e.target.closest('.grid-cell');
+    const cell = findCellAt(e.clientX, e.clientY, grid);
     if (!cell) return;
     if (+cell.dataset.day !== selStart.day || +cell.dataset.room !== selStart.room) return;
     selEnd = { day: +cell.dataset.day, room: +cell.dataset.room, slot: +cell.dataset.slot };
@@ -438,6 +459,19 @@ function onGridMouseMove(e) {
 }
 
 function onGridMouseUp(e) {
+  // Pending click → it was a click (not drag) → open edit if on card
+  if (pendingClick) {
+    const pc = pendingClick;
+    pendingClick = null;
+    if (pc.lessonId) {
+      const lesson = state.lessons.find(l => l.id === pc.lessonId);
+      if (lesson) openEditLessonModal(lesson);
+    } else {
+      openLessonModal({ day: pc.day, room: pc.room, slotFrom: pc.slot, slotTo: pc.slot + 1 });
+    }
+    return;
+  }
+
   // Drag lesson
   if (dragState) {
     if (!dragStarted) { dragState = null; dragMouseStart = null; return; }
@@ -1015,6 +1049,7 @@ function initSchedule() {
   document.addEventListener('mouseup', (e) => {
     document.getElementById('schedule-grid')?.classList.remove('grid-dragging');
     document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
+    pendingClick = null;
     if (dragState && dragStarted) {
       const nwTab = getNextWeekTab();
       if (nwTab) {
@@ -1053,6 +1088,7 @@ function initSchedule() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      pendingClick = null;
       if (state.placingLesson || state.placingStudent || state.placingTruant) cancelPlacing();
       if (studentDragState) cancelStudentDrag();
     }
