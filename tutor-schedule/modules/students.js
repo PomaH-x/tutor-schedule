@@ -9,8 +9,13 @@ async function loadSubjects() {
 
 function populateSubjectSelects() {
   const sel = document.getElementById('student-subject');
-  if (!sel) return;
-  sel.innerHTML = subjectsList.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+  if (sel) sel.innerHTML = subjectsList.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+  const filterSel = document.getElementById('filter-subject');
+  if (filterSel) {
+    const current = filterSel.value;
+    filterSel.innerHTML = '<option value="">Все предметы</option>' + subjectsList.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+    filterSel.value = current;
+  }
 }
 
 async function loadStudents() {
@@ -28,12 +33,20 @@ function renderStudents(filter = '') {
   const list = document.getElementById('students-list');
   const isAdmin = state.profile.role === 'admin';
   const search = filter.toLowerCase();
+  const subjectFilter = document.getElementById('filter-subject')?.value || '';
+  const gradeFilter = document.getElementById('filter-grade')?.value || '';
 
   let filtered = state.students;
   if (search) {
     filtered = filtered.filter(s =>
       s.first_name.toLowerCase().includes(search) || s.last_name.toLowerCase().includes(search)
     );
+  }
+  if (subjectFilter) {
+    filtered = filtered.filter(s => s.subject === subjectFilter);
+  }
+  if (gradeFilter) {
+    filtered = filtered.filter(s => s.grade === +gradeFilter);
   }
 
   if (filtered.length === 0) {
@@ -220,6 +233,14 @@ function initStudents() {
 
   document.getElementById('student-search').addEventListener('input', (e) => {
     renderStudents(e.target.value);
+  });
+
+  document.getElementById('filter-subject').addEventListener('change', () => {
+    renderStudents(document.getElementById('student-search').value);
+  });
+
+  document.getElementById('filter-grade').addEventListener('change', () => {
+    renderStudents(document.getElementById('student-search').value);
   });
 
   document.getElementById('modal-overlay').addEventListener('click', (e) => {

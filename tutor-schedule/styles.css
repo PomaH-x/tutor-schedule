@@ -1592,6 +1592,29 @@ input, textarea, select {
   align-items: center;
 }
 
+.students-filters {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.filter-select {
+  flex: 1;
+  padding: 7px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+}
+
+.filter-select:focus {
+  border-color: var(--accent);
+}
+
 .search-field {
   flex: 1;
   position: relative;
