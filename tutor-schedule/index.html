@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Расписание</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1e6fe8">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="apple-touch-icon" href="assets/icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    (function() {
+      var t = localStorage.getItem('theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+</head>
+<body>
+  <div id="app">
+    <div id="screen-auth" class="screen active">
+      <div class="auth-container">
+        <div class="auth-logo">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <rect width="48" height="48" rx="12" fill="var(--accent)"/>
+            <path d="M14 16h6v6h-6zM20 22h6v6h-6zM26 16h6v6h-6zM14 28h6v6h-6zM26 28h6v6h-6z" fill="white" opacity="0.9"/>
+          </svg>
+          <h1>Расписание</h1>
+        </div>
+
+        <div id="auth-step-role" class="auth-step active">
+          <p class="auth-subtitle">Выберите роль</p>
+          <div class="role-cards">
+            <button class="role-card" data-role="teacher">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M12 14l9-5-9-5-9 5 9 5z"/>
+                <path d="M12 14l6.16-3.422A12 12 0 0 1 12 21a12 12 0 0 1-6.16-10.422L12 14z"/>
+              </svg>
+              <span>Преподаватель</span>
+            </button>
+            <button class="role-card" data-role="student">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
+              <span>Ученик</span>
+            </button>
+            <button class="role-card" data-role="admin">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+              </svg>
+              <span>Админ</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="auth-step-login" class="auth-step">
+          <button class="auth-back" id="btn-back-to-role">← Назад</button>
+          <p class="auth-subtitle">Вход</p>
+          <div class="auth-form">
+            <input type="text" id="input-login" placeholder="Логин" autocomplete="username">
+            <div class="password-field">
+              <input type="password" id="input-password" placeholder="Пароль" autocomplete="current-password">
+              <button type="button" class="btn-eye" data-target="input-password">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+            <button class="btn-primary" id="btn-login">Войти</button>
+            <button class="btn-link" id="btn-show-register">Нет аккаунта? Зарегистрироваться</button>
+          </div>
+        </div>
+
+        <div id="auth-step-register" class="auth-step">
+          <button class="auth-back" id="btn-back-to-login">← Назад</button>
+          <p class="auth-subtitle" id="register-subtitle">Регистрация</p>
+          <div class="auth-form">
+            <input type="text" id="input-name1" placeholder="" autocomplete="given-name">
+            <input type="text" id="input-name2" placeholder="" autocomplete="family-name">
+            <input type="text" id="input-reg-login" placeholder="Логин" autocomplete="username">
+            <div class="password-field">
+              <input type="password" id="input-reg-password" placeholder="Пароль" autocomplete="new-password">
+              <button type="button" class="btn-eye" data-target="input-reg-password">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+            <button class="btn-primary" id="btn-register">Зарегистрироваться</button>
+          </div>
+        </div>
+
+        <div id="auth-step-pending" class="auth-step">
+          <div class="pending-box">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.5">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+            <p>Заявка отправлена</p>
+            <span class="pending-hint">Ожидайте подтверждения от администратора</span>
+            <button class="btn-link" id="btn-logout-pending">Выйти</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="screen-schedule" class="screen">
+      <header class="top-bar">
+        <div class="top-bar-left">
+          <h2 id="current-week-label"></h2>
+          <button class="btn-schedule-type" id="btn-to-recurring" title="Постоянное расписание">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+            Постоянное
+          </button>
+        </div>
+        <div class="top-bar-right">
+          <label class="theme-toggle" title="Сменить тему">
+            <input type="checkbox" id="theme-switch">
+            <span class="theme-slider"></span>
+          </label>
+          <button class="btn-icon" id="btn-profile" title="Профиль">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+            <span class="badge" id="badge-pending" style="display:none"></span>
+          </button>
+        </div>
+      </header>
+      <div class="week-tabs" id="week-tabs">
+        <button class="week-tab" data-offset="-2">2 нед. назад</button>
+        <button class="week-tab" data-offset="-1">Предыдущая</button>
+        <button class="week-tab active" data-offset="0">Текущая</button>
+        <button class="week-tab" data-offset="1">Следующая</button>
+        <button class="week-tab" data-offset="2">2 нед. вперёд</button>
+      </div>
+      <div id="schedule-grid" class="schedule-grid"></div>
+    </div>
+
+    <div id="screen-recurring" class="screen">
+      <header class="top-bar">
+        <div class="top-bar-left">
+          <h2>Постоянное расписание</h2>
+          <button class="btn-schedule-type" id="btn-to-current" title="Текущее расписание">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Текущее
+          </button>
+        </div>
+        <div class="top-bar-right">
+          <label class="theme-toggle" title="Сменить тему">
+            <input type="checkbox" id="theme-switch-2" class="theme-switch-sync">
+            <span class="theme-slider"></span>
+          </label>
+          <button class="btn-icon" id="btn-profile-2" title="Профиль">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+      <div id="recurring-grid" class="schedule-grid"></div>
+    </div>
+
+    <div id="screen-profile" class="screen">
+      <header class="top-bar">
+        <div class="top-bar-left">
+          <button class="auth-back" id="btn-back-to-schedule">← Расписание</button>
+        </div>
+        <div class="top-bar-center">
+          <h2>Личный кабинет</h2>
+        </div>
+        <div class="top-bar-right">
+          <button class="btn-icon btn-logout-icon" id="btn-logout" title="Выйти">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="profile-content">
+        <div class="profile-info">
+          <div class="profile-avatar" id="profile-avatar"></div>
+          <div class="profile-details">
+            <h3 id="profile-name"></h3>
+            <span class="profile-role" id="profile-role"></span>
+          </div>
+        </div>
+
+        <div class="profile-tabs" id="profile-tabs" style="display:none">
+          <button class="profile-tab active" data-tab="tab-students">Ученики</button>
+          <button class="profile-tab" data-tab="tab-admin">Админ-панель</button>
+        </div>
+
+        <div id="tab-students" class="profile-tab-content active">
+          <div class="students-section">
+            <div class="students-header">
+              <h3>База учеников</h3>
+              <div class="students-controls">
+                <div class="search-field">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  <input type="text" id="student-search" placeholder="Поиск по имени или фамилии">
+                </div>
+                <button class="btn-primary btn-add-student" id="btn-add-student">+ Добавить</button>
+              </div>
+            </div>
+            <div id="students-list" class="students-list"></div>
+          </div>
+          <div class="truants-section">
+            <h3>Отмены и прогульщики</h3>
+            <div class="truants-stats" id="truants-stats"></div>
+            <div id="truants-list" class="truants-list"></div>
+          </div>
+        </div>
+
+        <div id="tab-admin" class="profile-tab-content">
+          <div class="admin-section">
+            <h3>Заявки на регистрацию</h3>
+            <div id="pending-list" class="pending-list"></div>
+          </div>
+          <div class="admin-section">
+            <h3>Преподаватели</h3>
+            <div id="teachers-list" class="teachers-list"></div>
+          </div>
+          <div class="admin-section">
+            <h3>Предметы</h3>
+            <div class="subjects-controls">
+              <input type="text" id="new-subject-name" placeholder="Название предмета">
+              <button class="btn-primary btn-add-subject" id="btn-add-subject">+ Добавить</button>
+            </div>
+            <div id="subjects-list" class="subjects-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="modal-overlay" class="modal-overlay">
+      <div class="modal" id="modal-student">
+        <div class="modal-header">
+          <h3 id="modal-student-title">Добавить ученика</h3>
+          <button class="btn-modal-close" id="btn-modal-close">×</button>
+        </div>
+        <div class="modal-body">
+          <input type="text" id="student-first-name" placeholder="Имя">
+          <input type="text" id="student-last-name" placeholder="Фамилия">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Предмет</label>
+              <select id="student-subject"></select>
+            </div>
+            <div class="form-group">
+              <label>Класс</label>
+              <select id="student-grade">
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+                <option value="9">9</option>
+                <option value="10">10</option>
+                <option value="11" selected>11</option>
+              </select>
+            </div>
+          </div>
+          <textarea id="student-notes" placeholder="Примечание (опционально)" rows="2"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-danger" id="btn-delete-student" style="display:none">Удалить</button>
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-cancel-student">Отмена</button>
+            <button class="btn-primary" id="btn-save-student">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirm-overlay" class="modal-overlay">
+      <div class="modal modal-sm">
+        <div class="modal-body" style="text-align:center;padding:24px">
+          <p id="confirm-text">Удалить ученика?</p>
+        </div>
+        <div class="modal-footer" style="justify-content:center">
+          <button class="btn-secondary" id="btn-confirm-cancel">Отмена</button>
+          <button class="btn-danger" id="btn-confirm-ok">Удалить</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="lesson-overlay" class="modal-overlay">
+      <div class="modal" id="modal-lesson">
+        <div class="modal-header">
+          <h3 id="lesson-modal-title"></h3>
+          <button class="btn-modal-close" id="btn-close-lesson">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="lesson-current-students" class="lesson-current-students"></div>
+          <label class="lesson-label">Выберите учеников</label>
+          <div class="search-field">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="lesson-student-search" placeholder="Поиск учеников">
+          </div>
+          <div id="lesson-students-list" class="lesson-students-list"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-danger" id="btn-delete-lesson" style="display:none">Удалить</button>
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-cancel-lesson">Отмена</button>
+            <button class="btn-primary" id="btn-save-lesson">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="student-drag-banner" class="student-drag-banner"></div>
+
+    <div id="color-overlay" class="modal-overlay">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <h3>Цвет преподавателя</h3>
+          <button class="btn-modal-close" id="btn-close-color">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="color-grid" class="color-grid"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="modules/config.js"></script>
+  <script src="modules/state.js"></script>
+  <script src="modules/auth.js"></script>
+  <script src="modules/toast.js"></script>
+  <script src="modules/schedule.js"></script>
+  <script src="modules/students.js"></script>
+  <script src="modules/recurring.js"></script>
+  <script src="modules/cancellations.js"></script>
+  <script src="modules/admin.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

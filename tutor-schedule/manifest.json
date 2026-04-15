@@ -1,0 +1,16 @@
+{
+  "name": "Расписание репетиторского центра",
+  "short_name": "Расписание",
+  "description": "Управление расписанием занятий",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#1e6fe8",
+  "icons": [
+    {
+      "src": "assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
