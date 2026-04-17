@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initTheme();
   initRecurring();
   initCancellations();
+  initPricingAndPayroll();
 
   document.getElementById('btn-profile').addEventListener('click', () => {
     openProfileScreen();
@@ -46,15 +47,20 @@ function openProfileScreen() {
   document.getElementById('profile-role').textContent = roles[p.role];
 
   const tabs = document.getElementById('profile-tabs');
+  const adminTab = document.querySelector('[data-tab="tab-admin"]');
   if (p.role === 'admin') {
     tabs.style.display = 'flex';
+    if (adminTab) adminTab.style.display = 'block';
+  } else if (p.role === 'teacher') {
+    tabs.style.display = 'flex';
+    if (adminTab) adminTab.style.display = 'none';
   } else {
     tabs.style.display = 'none';
-    document.querySelectorAll('.profile-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.profile-tab-content').forEach(c => c.classList.remove('active'));
-    document.querySelector('[data-tab="tab-students"]').classList.add('active');
-    document.getElementById('tab-students').classList.add('active');
   }
+  document.querySelectorAll('.profile-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.profile-tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelector('[data-tab="tab-students"]').classList.add('active');
+  document.getElementById('tab-students').classList.add('active');
 
   showScreen('screen-profile');
   loadStudents();

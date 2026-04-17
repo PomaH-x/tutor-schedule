@@ -169,6 +169,56 @@
       <div id="recurring-grid" class="schedule-grid"></div>
     </div>
 
+    <div id="pricing-overlay" class="modal-overlay">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <h3 id="pricing-modal-title">Добавить тариф</h3>
+          <button class="btn-modal-close" id="btn-close-pricing">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Длительность (мин)</label>
+              <input type="number" id="pricing-duration" min="30" step="30" placeholder="90">
+            </div>
+            <div class="form-group">
+              <label>Тип</label>
+              <select id="pricing-is-individual">
+                <option value="false">Групповое</option>
+                <option value="true">Индивидуальное</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Тип цены</label>
+            <select id="pricing-price-type">
+              <option value="new">Новая</option>
+              <option value="old">Старая</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Цена ученика</label>
+              <input type="number" id="pricing-student-price" placeholder="1500">
+            </div>
+            <div class="form-group">
+              <label>Прибыль</label>
+              <input type="number" id="pricing-teacher-profit" placeholder="1000">
+            </div>
+            <div class="form-group">
+              <label>Комиссия</label>
+              <input type="number" id="pricing-commission" placeholder="500">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-danger" id="btn-delete-pricing" style="display:none">Удалить</button>
+          <button class="btn-secondary" id="btn-cancel-pricing">Отмена</button>
+          <button class="btn-primary" id="btn-save-pricing">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
     <div id="copy-overlay" class="modal-overlay">
       <div class="modal modal-sm">
         <div class="modal-header">
@@ -212,6 +262,7 @@
 
         <div class="profile-tabs" id="profile-tabs" style="display:none">
           <button class="profile-tab active" data-tab="tab-students">Ученики</button>
+          <button class="profile-tab" data-tab="tab-payroll">Расчёт оплаты</button>
           <button class="profile-tab" data-tab="tab-admin">Админ-панель</button>
         </div>
 
@@ -251,6 +302,20 @@
           </div>
         </div>
 
+        <div id="tab-payroll" class="profile-tab-content">
+          <div class="payroll-section">
+            <div class="payroll-header">
+              <h3>Расчёт оплаты</h3>
+              <div class="payroll-week-slider">
+                <button class="payroll-week-btn" data-offset="-2">2 нед. назад</button>
+                <button class="payroll-week-btn" data-offset="-1">Прошлая</button>
+                <button class="payroll-week-btn active" data-offset="0">Текущая</button>
+              </div>
+            </div>
+            <div id="payroll-content"></div>
+          </div>
+        </div>
+
         <div id="tab-admin" class="profile-tab-content">
           <div class="admin-section">
             <h3>Заявки на регистрацию</h3>
@@ -267,6 +332,11 @@
               <button class="btn-primary btn-add-subject" id="btn-add-subject">+ Добавить</button>
             </div>
             <div id="subjects-list" class="subjects-list"></div>
+          </div>
+          <div class="admin-section">
+            <h3>Тарифы</h3>
+            <button class="btn-primary btn-add-subject" id="btn-add-pricing">+ Добавить тариф</button>
+            <div id="pricing-list" class="pricing-list"></div>
           </div>
         </div>
       </div>
@@ -296,6 +366,19 @@
                 <option value="9">9</option>
                 <option value="10">10</option>
                 <option value="11" selected>11</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Длительность занятия</label>
+              <select id="student-duration-tier"></select>
+            </div>
+            <div class="form-group">
+              <label>Тип цены</label>
+              <select id="student-price-type">
+                <option value="new">Новая</option>
+                <option value="old">Старая</option>
               </select>
             </div>
           </div>
@@ -374,6 +457,7 @@
   <script src="modules/students.js"></script>
   <script src="modules/recurring.js"></script>
   <script src="modules/cancellations.js"></script>
+  <script src="modules/pricing.js"></script>
   <script src="modules/admin.js"></script>
   <script src="app.js"></script>
 </body>

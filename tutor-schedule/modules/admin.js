@@ -185,6 +185,10 @@ function initProfileTabs() {
         loadPendingUsers();
         loadTeachers();
         loadSubjectsAdmin();
+        loadPricingAdmin();
+      }
+      if (tab.dataset.tab === 'tab-payroll') {
+        loadPayroll();
       }
     });
   });

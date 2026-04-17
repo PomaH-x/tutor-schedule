@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tutor-schedule-v4';
+const CACHE_NAME = 'tutor-schedule-v5';
 const ASSETS = [
   '/',
   '/index.html',
@@ -12,6 +12,7 @@ const ASSETS = [
   '/modules/students.js',
   '/modules/recurring.js',
   '/modules/cancellations.js',
+  '/modules/pricing.js',
   '/modules/admin.js',
   '/manifest.json'
 ];

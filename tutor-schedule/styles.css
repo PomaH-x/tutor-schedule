@@ -1479,6 +1479,239 @@ input, textarea, select {
   color: white;
 }
 
+/* ===== PAYROLL ===== */
+
+.payroll-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.payroll-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.payroll-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.payroll-week-slider {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+
+.payroll-week-btn {
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.payroll-week-btn:hover {
+  color: var(--text);
+}
+
+.payroll-week-btn.active {
+  background: var(--accent);
+  color: white;
+}
+
+.payroll-total {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+}
+
+.payroll-total .payroll-stat {
+  flex: 1;
+}
+
+.payroll-teacher {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.payroll-teacher-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.teacher-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.payroll-teacher-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.payroll-summary {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.payroll-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+}
+
+.payroll-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.payroll-num {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.payroll-num-profit {
+  color: var(--success);
+}
+
+.payroll-students {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.payroll-student {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.ps-name {
+  font-weight: 500;
+}
+
+.ps-count {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.ps-amount {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* ===== PRICING ADMIN ===== */
+
+.pricing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.pricing-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 10px 0 4px;
+}
+
+.pricing-card {
+  display: grid;
+  grid-template-columns: 100px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.pricing-duration {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.pricing-values {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.pv-item {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.pv-item b {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.btn-edit-pricing {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 10px;
+  transition: all 0.15s;
+}
+
+.btn-edit-pricing:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.lesson-ind-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
 /* ===== RESPONSIVE ===== */
 
 @media (max-width: 768px) {

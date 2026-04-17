@@ -172,6 +172,7 @@ async function onAuthSuccess(user) {
   initSchedule();
   loadPendingCount();
   loadSubjects();
+  loadPricing();
   computeAndSyncCancellations();
   syncRecurringToWeeks();
 }

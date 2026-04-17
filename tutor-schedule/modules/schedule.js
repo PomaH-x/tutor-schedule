@@ -768,7 +768,7 @@ async function loadLessons() {
 function buildModalTitle(di, room, sf, st) { return `${DAYS_FULL[di]} · ${ROOM_FULL[room - 1]} · ${slotToTime(sf)}–${slotToTime(st)}`; }
 
 async function loadTeacherStudentsForModal(tid) {
-  const { data } = await db.from('students').select('id, first_name, last_name, subject').eq('teacher_id', tid).order('first_name');
+  const { data } = await db.from('students').select('id, first_name, last_name, subject, lesson_duration, is_individual, price_type').eq('teacher_id', tid).order('first_name');
   const seen = new Set();
   allTeacherStudents = (data || []).filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
 }
@@ -861,21 +861,46 @@ function renderLessonStudentsList(filter) {
   const list = document.getElementById('lesson-students-list');
   const m = state.lessonModal; if (!m) return;
   const search = filter.toLowerCase();
+  const lessonDuration = (m.slotTo - m.slotFrom) * SLOT_MINUTES;
+
   let students = allTeacherStudents;
   if (search) students = students.filter(s => s.first_name.toLowerCase().includes(search) || s.last_name.toLowerCase().includes(search));
-  if (students.length === 0) { list.innerHTML = '<div class="lesson-no-students">Нет учеников</div>'; return; }
+
+  // Filter: only matching duration and individual flag
+  students = students.filter(s => {
+    if (!s.lesson_duration) return true;
+    if (s.lesson_duration !== lessonDuration) return false;
+    return true;
+  });
+
+  if (students.length === 0) { list.innerHTML = '<div class="lesson-no-students">Нет учеников с подходящей длительностью</div>'; return; }
   const sl = (s) => s || '';
   const canEdit = state.profile.role === 'admin' || (m.mode === 'create' || m.mode === 'rec-create') || (m.teacherId === state.user.id);
+
   list.innerHTML = students.map(s => {
     const ch = m.selectedIds.has(s.id);
-    return `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name} <span class="lesson-student-subject">· ${sl(s.subject)}</span></span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
+    const indBadge = s.is_individual ? '<span class="lesson-ind-badge">Инд.</span>' : '';
+    return `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name} <span class="lesson-student-subject">· ${sl(s.subject)}</span>${indBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
   }).join('');
+
   if (canEdit) {
     list.querySelectorAll('.lesson-checkbox').forEach(cb => {
       cb.addEventListener('change', () => {
         const id = cb.dataset.id;
-        if (cb.checked) { if (m.selectedIds.size >= 4) { cb.checked = false; showToast('Максимум 4 ученика', 'error'); return; } m.selectedIds.add(id); }
-        else { m.selectedIds.delete(id); }
+        const isInd = cb.dataset.individual === 'true';
+        if (cb.checked) {
+          // Check if any individual student already selected OR this is individual and others selected
+          const selectedStudents = students.filter(s => m.selectedIds.has(s.id));
+          const hasIndividual = selectedStudents.some(s => s.is_individual);
+          if (isInd && selectedStudents.length > 0) {
+            cb.checked = false; showToast('Индивидуальное занятие — только один ученик', 'error'); return;
+          }
+          if (!isInd && hasIndividual) {
+            cb.checked = false; showToast('В занятии уже индивидуальный ученик', 'error'); return;
+          }
+          if (m.selectedIds.size >= 4) { cb.checked = false; showToast('Максимум 4 ученика', 'error'); return; }
+          m.selectedIds.add(id);
+        } else { m.selectedIds.delete(id); }
         cb.closest('.lesson-student-row').classList.toggle('checked', cb.checked);
         renderCurrentStudents();
       });

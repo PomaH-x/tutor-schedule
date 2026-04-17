@@ -130,8 +130,13 @@ function openStudentModal(title, student = null) {
   document.getElementById('student-first-name').value = student?.first_name || '';
   document.getElementById('student-last-name').value = student?.last_name || '';
   populateSubjectSelects();
+  populateDurationTierSelect();
   document.getElementById('student-subject').value = student?.subject || (subjectsList[0]?.name || '');
   document.getElementById('student-grade').value = student?.grade || 11;
+  if (student?.lesson_duration) {
+    document.getElementById('student-duration-tier').value = `${student.lesson_duration}-${student.is_individual || false}`;
+  }
+  document.getElementById('student-price-type').value = student?.price_type || 'new';
   document.getElementById('student-notes').value = student?.notes || '';
   document.getElementById('btn-delete-student').style.display = student ? 'block' : 'none';
   document.getElementById('modal-overlay').classList.add('active');
@@ -152,20 +157,21 @@ async function saveStudent() {
   const lastName = document.getElementById('student-last-name').value.trim();
   const subject = document.getElementById('student-subject').value;
   const grade = parseInt(document.getElementById('student-grade').value);
+  const tierVal = document.getElementById('student-duration-tier').value;
+  const priceType = document.getElementById('student-price-type').value;
   const notes = document.getElementById('student-notes').value.trim();
 
-  if (!firstName || !lastName) {
-    showToast('Введите имя и фамилию', 'error');
-    return;
-  }
+  if (!firstName || !lastName) { showToast('Введите имя и фамилию', 'error'); return; }
+  if (!tierVal) { showToast('Выберите длительность', 'error'); return; }
+
+  const [durStr, indStr] = tierVal.split('-');
+  const duration = parseInt(durStr);
+  const isIndividual = indStr === 'true';
 
   const record = {
-    first_name: firstName,
-    last_name: lastName,
-    subject: subject,
-    grade: grade,
-    notes: notes || null,
-    teacher_id: state.user.id
+    first_name: firstName, last_name: lastName, subject, grade,
+    lesson_duration: duration, is_individual: isIndividual, price_type: priceType,
+    notes: notes || null, teacher_id: state.user.id
   };
 
   let error;
@@ -175,10 +181,7 @@ async function saveStudent() {
     ({ error } = await db.from('students').insert(record));
   }
 
-  if (error) {
-    showToast('Ошибка сохранения', 'error');
-    return;
-  }
+  if (error) { showToast('Ошибка сохранения', 'error'); return; }
 
   const isEdit = !!editingStudentId;
   closeStudentModal();
