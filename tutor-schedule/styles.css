@@ -724,6 +724,28 @@ input, textarea, select {
   content: none;
 }
 
+.lesson-tooltip {
+  position: fixed;
+  z-index: 100;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: var(--font);
+  color: var(--text);
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  line-height: 1.7;
+  animation: tooltipFade 0.15s ease;
+}
+
+@keyframes tooltipFade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .schedule-grid {
   flex: 1;
   min-height: 0;
@@ -761,8 +783,16 @@ input, textarea, select {
 
 .lesson-card:hover {
   border-width: 2px;
+  border-color: #f5c518 !important;
   margin: 0.5px;
   z-index: 3;
+}
+
+.lesson-card.lesson-card-hover {
+  border-width: 2px !important;
+  border-color: #f5c518 !important;
+  margin: 0.5px;
+  z-index: 10 !important;
 }
 
 .lesson-card-dragging {
@@ -1201,6 +1231,37 @@ input, textarea, select {
   color: var(--danger);
 }
 
+.teacher-group-size {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.teacher-group-size label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.input-group-size {
+  width: 44px;
+  padding: 4px 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--font);
+  text-align: center;
+}
+
+.input-group-size:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
 /* ===== SUBJECTS MANAGEMENT ===== */
 
 .subjects-controls {
@@ -1432,10 +1493,35 @@ input, textarea, select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 10px 14px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  gap: 8px;
+}
+
+.truant-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-excuse-truant {
+  padding: 6px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--text-muted);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font);
+}
+
+.btn-excuse-truant:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .truant-group-title {
@@ -1710,6 +1796,30 @@ input, textarea, select {
   border-radius: 4px;
   font-size: 10px;
   font-weight: 700;
+}
+
+.student-week-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.badge-active {
+  background: rgba(46, 168, 122, 0.15);
+  color: var(--success);
+}
+
+.badge-transferred {
+  background: rgba(245, 197, 24, 0.15);
+  color: #f5c518;
+}
+
+.badge-cancelled {
+  background: rgba(220, 53, 69, 0.15);
+  color: var(--danger);
 }
 
 /* ===== RESPONSIVE ===== */
@@ -2021,6 +2131,10 @@ input, textarea, select {
   max-width: 320px;
 }
 
+.modal-md {
+  max-width: 480px;
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -2166,4 +2280,51 @@ input, textarea, select {
 .btn-danger:hover {
   background: var(--danger);
   color: white;
+}
+
+.btn-warning {
+  padding: 10px 18px;
+  background: rgba(245, 197, 24, 0.15);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: #f5c518;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-warning:hover {
+  background: #f5c518;
+  color: #000;
+}
+
+.btn-cancel-action {
+  padding: 8px 14px;
+  background: var(--bg-elevated);
+  border: 1.5px solid var(--danger);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-cancel-action:hover {
+  background: var(--danger);
+  color: white;
+}
+
+.lesson-modal-footer {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.lesson-modal-footer .btn-danger,
+.lesson-modal-footer .btn-cancel-action,
+.lesson-modal-footer .btn-secondary,
+.lesson-modal-footer .btn-primary {
+  padding: 8px 14px;
+  font-size: 13px;
 }

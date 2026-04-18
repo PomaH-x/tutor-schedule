@@ -4,76 +4,70 @@ async function computeAndSyncCancellations() {
   const currentMonday = getMonday(new Date());
   const ws = formatDate(currentMonday);
 
-  // Get recurring (permanent) schedule
+  // Get recurring template
   const { data: recurring } = await db.from('recurring_lessons')
-    .select('id, recurring_lesson_students(student_id)')
+    .select('id, day_of_week, start_time, end_time, recurring_lesson_students(student_id)')
     .eq('teacher_id', teacherId);
-
-  // Get actual lessons for CURRENT week only
-  const { data: actualCurrent } = await db.from('lessons')
-    .select('id, status, lesson_students(student_id)')
-    .eq('week_start', ws)
-    .eq('teacher_id', teacherId)
-    .in('status', ['active', 'transferred']);
-
   if (!recurring) return;
 
-  // Count how many recurring lessons each student has
-  const recurringStudentLessons = {};
-  (recurring || []).forEach(rl => {
-    (rl.recurring_lesson_students || []).forEach(rs => {
-      if (!recurringStudentLessons[rs.student_id]) recurringStudentLessons[rs.student_id] = [];
-      recurringStudentLessons[rs.student_id].push(rl.id);
-    });
-  });
+  // Get current week lessons (all statuses)
+  const { data: actualCurrent } = await db.from('lessons')
+    .select('id, status, start_time, lesson_students(student_id)')
+    .eq('week_start', ws).eq('teacher_id', teacherId);
 
-  // Count how many actual lessons each student has this week
-  const actualStudentCount = {};
+  // Map: student_id → list of actual active lesson ids this week
+  const activeByStudent = {};
+  const cancelledByStudent = {};
   (actualCurrent || []).forEach(l => {
     (l.lesson_students || []).forEach(ls => {
-      actualStudentCount[ls.student_id] = (actualStudentCount[ls.student_id] || 0) + 1;
+      if (l.status === 'active') {
+        if (!activeByStudent[ls.student_id]) activeByStudent[ls.student_id] = [];
+        activeByStudent[ls.student_id].push(l.id);
+      }
+      if (l.status === 'cancelled') {
+        if (!cancelledByStudent[ls.student_id]) cancelledByStudent[ls.student_id] = [];
+        cancelledByStudent[ls.student_id].push(l.id);
+      }
     });
   });
 
-  // Get existing cancellations for this week
-  const { data: existing } = await db.from('cancellations')
-    .select('id, student_id, recurring_lesson_id, status')
-    .eq('teacher_id', teacherId)
-    .eq('week_start', ws);
-
-  const existingMap = {};
-  (existing || []).forEach(c => {
-    const key = `${c.student_id}-${c.recurring_lesson_id}`;
-    existingMap[key] = c;
+  // Build recurring map: student_id → [rlId, ...]
+  const recurringByStudent = {};
+  (recurring || []).forEach(rl => {
+    (rl.recurring_lesson_students || []).forEach(rs => {
+      if (!recurringByStudent[rs.student_id]) recurringByStudent[rs.student_id] = [];
+      recurringByStudent[rs.student_id].push(rl.id);
+    });
   });
 
-  const toInsert = [];
-  const toMakeUp = [];
-  const toReopen = [];
+  // Existing cancellations for this week
+  const { data: existing } = await db.from('cancellations')
+    .select('id, student_id, recurring_lesson_id, status')
+    .eq('teacher_id', teacherId).eq('week_start', ws);
+  const existingMap = {};
+  (existing || []).forEach(c => { existingMap[`${c.student_id}-${c.recurring_lesson_id}`] = c; });
 
-  for (const sid in recurringStudentLessons) {
-    const recurringCount = recurringStudentLessons[sid].length;
-    const actualCount = actualStudentCount[sid] || 0;
-    const missedCount = Math.max(0, recurringCount - actualCount);
-    const rlIds = recurringStudentLessons[sid];
+  const toInsert = [], toMakeUp = [], toReopen = [];
+
+  for (const sid in recurringByStudent) {
+    const rlIds = recurringByStudent[sid];
+    const activeCount = (activeByStudent[sid] || []).length;
+    // Each cancelled lesson for this student counts as one miss
+    const cancelledCount = (cancelledByStudent[sid] || []).length;
+    // Missed = cancelled + (recurring not covered by active)
+    const missedFromAbsence = Math.max(0, rlIds.length - activeCount);
+    const totalMissed = cancelledCount + Math.max(0, missedFromAbsence - cancelledCount);
+    const missed = Math.max(cancelledCount, missedFromAbsence);
 
     for (let i = 0; i < rlIds.length; i++) {
       const rlId = rlIds[i];
       const key = `${sid}-${rlId}`;
       const ex = existingMap[key];
-
-      if (i < missedCount) {
-        // This lesson is missed
-        if (!ex) {
-          toInsert.push({ student_id: sid, teacher_id: teacherId, week_start: ws, recurring_lesson_id: rlId, status: 'pending' });
-        } else if (ex.status === 'made_up') {
-          toReopen.push(ex.id);
-        }
+      if (i < missed) {
+        if (!ex) toInsert.push({ student_id: sid, teacher_id: teacherId, week_start: ws, recurring_lesson_id: rlId, status: 'pending' });
+        else if (ex.status === 'made_up') toReopen.push(ex.id);
       } else {
-        // This lesson is covered
-        if (ex && ex.status === 'pending') {
-          toMakeUp.push(ex.id);
-        }
+        if (ex && ex.status === 'pending') toMakeUp.push(ex.id);
       }
     }
   }
@@ -82,58 +76,48 @@ async function computeAndSyncCancellations() {
   if (toMakeUp.length > 0) await db.from('cancellations').update({ status: 'made_up' }).in('id', toMakeUp);
   if (toReopen.length > 0) await db.from('cancellations').update({ status: 'pending' }).in('id', toReopen);
 
-  // Check if extra lessons on current or next week cover old pending cancellations
-  const nextMonday = new Date(currentMonday);
-  nextMonday.setDate(nextMonday.getDate() + 7);
+  // Extra active lessons on current week close oldest pending cancellations
+  const nextMonday = new Date(currentMonday); nextMonday.setDate(nextMonday.getDate() + 7);
   const nws = formatDate(nextMonday);
-
   const { data: actualNext } = await db.from('lessons')
-    .select('id, lesson_students(student_id)')
-    .eq('week_start', nws)
-    .eq('teacher_id', teacherId)
-    .eq('status', 'active');
-
+    .select('id, lesson_students(student_id)').eq('week_start', nws).eq('teacher_id', teacherId).eq('status', 'active');
   const nextStudentCount = {};
   (actualNext || []).forEach(l => {
-    (l.lesson_students || []).forEach(ls => {
-      nextStudentCount[ls.student_id] = (nextStudentCount[ls.student_id] || 0) + 1;
-    });
+    (l.lesson_students || []).forEach(ls => { nextStudentCount[ls.student_id] = (nextStudentCount[ls.student_id] || 0) + 1; });
   });
 
-  // For students not in recurring but with lessons = extra = make up
-  for (const sid in actualStudentCount) {
-    const recurringCount = (recurringStudentLessons[sid] || []).length;
-    const extra = actualStudentCount[sid] - recurringCount;
+  for (const sid in activeByStudent) {
+    const recurringCount = (recurringByStudent[sid] || []).length;
+    const extra = (activeByStudent[sid] || []).length - recurringCount;
     if (extra > 0) {
-      const { data: pending } = await db.from('cancellations')
-        .select('id').eq('student_id', sid).eq('teacher_id', teacherId)
-        .eq('status', 'pending').order('week_start').limit(extra);
-      if (pending && pending.length > 0) {
-        await db.from('cancellations').update({ status: 'made_up' }).in('id', pending.map(p => p.id));
-      }
+      const { data: pending } = await db.from('cancellations').select('id').eq('student_id', sid).eq('teacher_id', teacherId).eq('status', 'pending').order('week_start').limit(extra);
+      if (pending?.length > 0) await db.from('cancellations').update({ status: 'made_up' }).in('id', pending.map(p => p.id));
+    }
+  }
+  for (const sid in nextStudentCount) {
+    const recurringCount = (recurringByStudent[sid] || []).length;
+    const extra = nextStudentCount[sid] - recurringCount;
+    if (extra > 0) {
+      const { data: pending } = await db.from('cancellations').select('id').eq('student_id', sid).eq('teacher_id', teacherId).eq('status', 'pending').order('week_start').limit(extra);
+      if (pending?.length > 0) await db.from('cancellations').update({ status: 'made_up' }).in('id', pending.map(p => p.id));
     }
   }
 
-  for (const sid in nextStudentCount) {
-    const recurringCount = (recurringStudentLessons[sid] || []).length;
-    const extra = nextStudentCount[sid] - recurringCount;
-    if (extra > 0) {
-      const { data: pending } = await db.from('cancellations')
-        .select('id').eq('student_id', sid).eq('teacher_id', teacherId)
-        .eq('status', 'pending').order('week_start').limit(extra);
-      if (pending && pending.length > 0) {
-        await db.from('cancellations').update({ status: 'made_up' }).in('id', pending.map(p => p.id));
-      }
-    }
-  }
+  // Cleanup: delete cancellations older than 3 weeks
+  const threeWeeksAgo = new Date(currentMonday);
+  threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 21);
+  await db.from('cancellations').delete().lt('week_start', formatDate(threeWeeksAgo));
 }
 
 async function loadTruants() {
   if (!state.profile || state.profile.role === 'student') return;
   const isAdmin = state.profile.role === 'admin';
+  const threeWeeksAgo = new Date(getMonday(new Date()));
+  threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 14);
   let q = db.from('cancellations')
     .select('*, student:students(first_name, last_name), recurring_lesson:recurring_lessons(start_time, end_time), teacher:profiles!teacher_id(full_name)')
-    .eq('status', 'pending');
+    .eq('status', 'pending')
+    .gte('week_start', formatDate(threeWeeksAgo));
   if (!isAdmin) q = q.eq('teacher_id', state.user.id);
   q = q.order('week_start', { ascending: false });
 
@@ -199,7 +183,10 @@ function renderTruants(cancellations) {
         <span class="truant-name">${t.student.first_name} ${t.student.last_name}</span>
         <span class="truant-count">${t.count} неотработ.</span>
       </div>
-      <button class="btn-place-truant" data-student-id="${t.studentId}" data-duration="${t.duration}" data-name="${t.student.first_name} ${t.student.last_name}">Разместить</button>
+      <div class="truant-actions">
+        <button class="btn-excuse-truant" data-student-id="${t.studentId}" data-teacher-id="${t.teacherId}" title="Уважительная причина">Ув. причина</button>
+        <button class="btn-place-truant" data-student-id="${t.studentId}" data-duration="${t.duration}" data-name="${t.student.first_name} ${t.student.last_name}">Разместить</button>
+      </div>
     </div>`;
   });
   listEl.innerHTML = html;
@@ -207,6 +194,17 @@ function renderTruants(cancellations) {
   listEl.querySelectorAll('.btn-place-truant').forEach(btn => {
     btn.addEventListener('click', () => {
       startTruantPlacing(btn.dataset.studentId, btn.dataset.name, +btn.dataset.duration);
+    });
+  });
+
+  listEl.querySelectorAll('.btn-excuse-truant').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const sid = btn.dataset.studentId;
+      const tid = btn.dataset.teacherId;
+      await db.from('cancellations').update({ status: 'made_up' })
+        .eq('student_id', sid).eq('teacher_id', tid).eq('status', 'pending');
+      showToast('Уважительная причина принята', 'success');
+      await loadTruants();
     });
   });
 }
@@ -248,9 +246,21 @@ async function placeTruantOnLesson(targetLessonId) {
   const tl = state.lessons.find(l => l.id === targetLessonId);
   if (!tl) { showToast('Занятие не найдено', 'error'); return; }
   if (tl.teacher_id !== t.teacherId) { showToast('Только к своему преподавателю', 'error'); return; }
-  if ((tl.lesson_students?.length || 0) >= 4) { showToast('Максимум 4 ученика', 'error'); return; }
-  await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: t.studentId });
 
+  const { data: truantStudent } = await db.from('students').select('is_individual').eq('id', t.studentId).single();
+  const isInd = truantStudent?.is_individual;
+  const targetStudents = tl.lesson_students || [];
+  const targetHasIndividual = targetStudents.some(ls => ls.student?.is_individual);
+
+  if (isInd && targetStudents.length > 0) {
+    showToast('Индивидуальное занятие — только один ученик', 'error'); return;
+  }
+  if (!isInd && targetHasIndividual) {
+    showToast('В занятии уже индивидуальный ученик', 'error'); return;
+  }
+  if (targetStudents.length >= getMaxGroup(tl.teacher_id)) { showToast(`Максимум ${getMaxGroup(tl.teacher_id)} учеников`, 'error'); return; }
+
+  await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: t.studentId });
   state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Ученик добавлен к занятию', 'success');
   await loadLessons();

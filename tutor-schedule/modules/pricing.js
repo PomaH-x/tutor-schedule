@@ -7,35 +7,6 @@ let currentPayrollOffset = 0;
 async function loadPricing() {
   const { data } = await db.from('pricing').select('*').eq('active', true).order('is_individual').order('duration_minutes').order('price_type');
   pricingList = data || [];
-  populateDurationTierSelect();
-}
-
-function populateDurationTierSelect() {
-  const sel = document.getElementById('student-duration-tier');
-  if (!sel) return;
-
-  // Unique combinations of duration + is_individual
-  const tiers = [];
-  const seen = new Set();
-  pricingList.forEach(p => {
-    const key = `${p.duration_minutes}-${p.is_individual}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      tiers.push({ duration: p.duration_minutes, isIndividual: p.is_individual });
-    }
-  });
-  tiers.sort((a, b) => {
-    if (a.isIndividual !== b.isIndividual) return a.isIndividual ? 1 : -1;
-    return a.duration - b.duration;
-  });
-
-  const current = sel.value;
-  sel.innerHTML = tiers.map(t => {
-    const label = formatTierLabel(t.duration, t.isIndividual);
-    const val = `${t.duration}-${t.isIndividual}`;
-    return `<option value="${val}">${label}</option>`;
-  }).join('');
-  if (current) sel.value = current;
 }
 
 function formatTierLabel(duration, isIndividual) {
@@ -175,7 +146,7 @@ async function loadPayroll() {
   const isAdmin = state.profile.role === 'admin';
 
   let q = db.from('lessons')
-    .select('id, teacher_id, teacher:profiles!teacher_id(full_name, color), lesson_students(student_id, student:students(first_name, last_name, lesson_duration, is_individual, price_type))')
+    .select('id, teacher_id, start_time, end_time, teacher:profiles!teacher_id(full_name, color, role), lesson_students(student_id, student:students(first_name, last_name, is_individual, price_type))')
     .eq('week_start', ws).eq('status', 'active');
   if (!isAdmin) q = q.eq('teacher_id', state.user.id);
 
@@ -187,38 +158,48 @@ function renderPayroll(lessons, isAdmin) {
   const container = document.getElementById('payroll-content');
   if (!container) return;
 
-  // Per-teacher: { teacherId: { name, color, revenue, profit, commission, students: { studentId: {name, amount, count} } } }
   const perTeacher = {};
   let totalRevenue = 0, totalProfit = 0, totalCommission = 0;
 
   lessons.forEach(lesson => {
     const tId = lesson.teacher_id;
+    const teacherRole = lesson.teacher?.role;
+    // Calculate actual lesson duration in minutes
+    const start = new Date(lesson.start_time);
+    const end = new Date(lesson.end_time);
+    const durationMin = Math.round((end - start) / 60000);
+
     if (!perTeacher[tId]) {
       perTeacher[tId] = {
         name: lesson.teacher?.full_name || '',
         color: lesson.teacher?.color || '#1e6fe8',
+        role: teacherRole,
         revenue: 0, profit: 0, commission: 0,
         students: {}
       };
     }
     (lesson.lesson_students || []).forEach(ls => {
       const s = ls.student; if (!s) return;
-      const price = findPricing(s.lesson_duration, s.is_individual, s.price_type || 'new');
+      const price = findPricing(durationMin, s.is_individual || false, s.price_type || 'new');
       if (!price) return;
+
+      // Admin: commission = 0, profit = student_price
+      const isTeacherAdmin = teacherRole === 'admin';
+      const effectiveProfit = isTeacherAdmin ? price.student_price : price.teacher_profit;
+      const effectiveCommission = isTeacherAdmin ? 0 : price.commission;
+
       perTeacher[tId].revenue += price.student_price;
-      perTeacher[tId].profit += price.teacher_profit;
-      perTeacher[tId].commission += price.commission;
+      perTeacher[tId].profit += effectiveProfit;
+      perTeacher[tId].commission += effectiveCommission;
       totalRevenue += price.student_price;
-      totalProfit += price.teacher_profit;
-      totalCommission += price.commission;
+      totalProfit += effectiveProfit;
+      totalCommission += effectiveCommission;
 
       const sKey = ls.student_id;
       if (!perTeacher[tId].students[sKey]) {
-        perTeacher[tId].students[sKey] = { name: `${s.first_name} ${s.last_name}`, amount: 0, count: 0, profit: 0, commission: 0 };
+        perTeacher[tId].students[sKey] = { name: `${s.first_name} ${s.last_name}`, amount: 0, count: 0 };
       }
       perTeacher[tId].students[sKey].amount += price.student_price;
-      perTeacher[tId].students[sKey].profit += price.teacher_profit;
-      perTeacher[tId].students[sKey].commission += price.commission;
       perTeacher[tId].students[sKey].count++;
     });
   });

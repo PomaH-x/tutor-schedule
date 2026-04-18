@@ -114,12 +114,28 @@ function renderTeachers() {
         <span class="teacher-name">${t.full_name}</span>
         <span class="teacher-role">${roleLabel[t.role] || t.role} · ${t.short_name || ''}</span>
       </div>
+      <div class="teacher-group-size" title="Макс. учеников в группе">
+        <label>Макс:</label>
+        <input type="number" class="input-group-size" data-id="${t.id}" value="${t.max_group_size || 4}" min="1" max="20">
+      </div>
       ${t.id !== state.user.id ? `<button class="btn-delete-teacher" data-id="${t.id}" data-name="${t.full_name}" title="Удалить">×</button>` : ''}
     </div>
   `).join('');
 
   list.querySelectorAll('.teacher-color').forEach(el => {
     el.addEventListener('click', () => openColorPicker(el.dataset.id));
+  });
+
+  list.querySelectorAll('.input-group-size').forEach(inp => {
+    inp.addEventListener('change', async () => {
+      const val = Math.max(1, Math.min(20, parseInt(inp.value) || 4));
+      inp.value = val;
+      await db.from('profiles').update({ max_group_size: val }).eq('id', inp.dataset.id);
+      const t = teachersList.find(x => x.id === inp.dataset.id);
+      if (t) t.max_group_size = val;
+      if (inp.dataset.id === state.user.id) state.profile.max_group_size = val;
+      showToast('Размер группы обновлён', 'success');
+    });
   });
 
   list.querySelectorAll('.btn-delete-teacher').forEach(btn => {

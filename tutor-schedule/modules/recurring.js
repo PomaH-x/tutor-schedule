@@ -392,7 +392,7 @@ function recSlotToTimeStr(slot) {
 // ===== AUTO-COPY TO NEXT WEEKS =====
 async function syncRecurringToWeeks(teacherFilter) {
   const now = getMonday(new Date());
-  const nextWeek = new Date(now); nextWeek.setDate(nextWeek.getDate() + 7);
+  // Auto-sync: only "2 weeks ahead". "Next week" is manual only.
   const twoWeeks = new Date(now); twoWeeks.setDate(twoWeeks.getDate() + 14);
   const isAdmin = state.profile.role === 'admin';
   const filterTid = teacherFilter || (isAdmin ? null : state.user.id);
@@ -402,7 +402,7 @@ async function syncRecurringToWeeks(teacherFilter) {
   const { data: recurring } = await q;
   if (!recurring || recurring.length === 0) return;
 
-  for (const weekStart of [nextWeek, twoWeeks]) {
+  for (const weekStart of [twoWeeks]) {
     const ws = formatDate(weekStart);
     const dates = getWeekDates(weekStart);
 
@@ -556,46 +556,87 @@ function initRecurring() {
   });
 }
 
+async function syncRecurringToWeeksManual(teacherFilter) {
+  const now = getMonday(new Date());
+  const nextWeek = new Date(now); nextWeek.setDate(nextWeek.getDate() + 7);
+  const twoWeeks = new Date(now); twoWeeks.setDate(twoWeeks.getDate() + 14);
+  const isAdmin = state.profile.role === 'admin';
+  const filterTid = teacherFilter || (isAdmin ? null : state.user.id);
+
+  let q = db.from('recurring_lessons').select('*, recurring_lesson_students(student_id)');
+  if (filterTid) q = q.eq('teacher_id', filterTid);
+  const { data: recurring } = await q;
+  if (!recurring || recurring.length === 0) return;
+
+  for (const weekStart of [nextWeek, twoWeeks]) {
+    const ws = formatDate(weekStart);
+    const dates = getWeekDates(weekStart);
+
+    let eq = db.from('lessons').select('id, teacher_id, start_time, room').eq('week_start', ws).eq('status', 'active');
+    if (filterTid) eq = eq.eq('teacher_id', filterTid);
+    const { data: existing } = await eq;
+
+    const existingKeys = new Set((existing || []).map(l => {
+      const s = new Date(l.start_time);
+      return `${l.teacher_id}-${s.getDay()}-${l.room}-${s.getHours()}:${s.getMinutes()}`;
+    }));
+
+    for (const rl of recurring) {
+      const dayDate = dates[rl.day_of_week];
+      if (!dayDate) continue;
+      const sp = rl.start_time.split(':');
+      const ep = rl.end_time.split(':');
+      const key = `${rl.teacher_id}-${dayDate.getDay()}-${rl.room}-${+sp[0]}:${+sp[1]}`;
+      if (existingKeys.has(key)) continue;
+
+      const sTime = new Date(dayDate); sTime.setHours(+sp[0], +sp[1], 0, 0);
+      const eTime = new Date(dayDate); eTime.setHours(+ep[0], +ep[1], 0, 0);
+
+      const { data: newLesson, error } = await db.from('lessons').insert({
+        teacher_id: rl.teacher_id, room: rl.room, week_start: ws,
+        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+      }).select().single();
+
+      if (!error && newLesson && rl.recurring_lesson_students?.length > 0) {
+        await db.from('lesson_students').insert(
+          rl.recurring_lesson_students.map(rs => ({ lesson_id: newLesson.id, student_id: rs.student_id }))
+        );
+      }
+    }
+  }
+}
+
 function closeCopyOverlay() {
   document.getElementById('copy-overlay').classList.remove('active');
 }
 
 async function onCopyRecurringClick() {
   const isAdmin = state.profile.role === 'admin';
-
   if (!isAdmin) {
     showToast('Копирование...', 'success');
-    await syncRecurringToWeeks(state.user.id);
+    await syncRecurringToWeeksManual(state.user.id);
     showToast('Расписание скопировано', 'success');
     return;
   }
-
   const { data: teachers } = await db.from('profiles')
     .select('id, full_name, color')
     .in('role', ['teacher', 'admin'])
     .eq('status', 'approved')
     .order('full_name');
-
   const list = document.getElementById('copy-teacher-list');
   let html = `<button class="copy-teacher-btn" data-tid="all"><span class="copy-teacher-dot" style="background:var(--accent)"></span>Все преподаватели</button>`;
   (teachers || []).forEach(t => {
     html += `<button class="copy-teacher-btn" data-tid="${t.id}"><span class="copy-teacher-dot" style="background:${t.color || '#1e6fe8'}"></span>${t.full_name}</button>`;
   });
   list.innerHTML = html;
-
   list.querySelectorAll('.copy-teacher-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       closeCopyOverlay();
       const tid = btn.dataset.tid;
       showToast('Копирование...', 'success');
-      if (tid === 'all') {
-        await syncRecurringToWeeks(null);
-      } else {
-        await syncRecurringToWeeks(tid);
-      }
+      await syncRecurringToWeeksManual(tid === 'all' ? null : tid);
       showToast('Расписание скопировано', 'success');
     });
   });
-
   document.getElementById('copy-overlay').classList.add('active');
 }
