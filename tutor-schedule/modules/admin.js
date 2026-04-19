@@ -202,6 +202,7 @@ function initProfileTabs() {
         loadTeachers();
         loadSubjectsAdmin();
         loadPricingAdmin();
+        loadAdminCancellationStats();
       }
       if (tab.dataset.tab === 'tab-payroll') {
         loadPayroll();
@@ -264,6 +265,35 @@ async function addSubject() {
   showToast('Предмет добавлен', 'success');
   await loadSubjectsAdmin();
   await loadSubjects();
+}
+
+async function loadAdminCancellationStats() {
+  const container = document.getElementById('admin-cancellations-stats');
+  if (!container) return;
+  const currentWs = formatDate(getMonday(new Date()));
+
+  const { data: cancellations } = await db.from('cancellations')
+    .select('id, student_id, teacher_id, student:students(first_name, last_name), teacher:profiles!teacher_id(full_name, color)')
+    .eq('status', 'pending').eq('week_start', currentWs);
+
+  if (!cancellations || cancellations.length === 0) {
+    container.innerHTML = '<div class="admin-empty">Нет отмен на этой неделе</div>';
+    return;
+  }
+
+  const byTeacher = {};
+  cancellations.forEach(c => {
+    const tid = c.teacher_id;
+    if (!byTeacher[tid]) byTeacher[tid] = { name: c.teacher?.full_name || '', color: c.teacher?.color || '#1e6fe8', students: [] };
+    if (c.student) byTeacher[tid].students.push(`${c.student.first_name} ${c.student.last_name}`);
+  });
+
+  let html = `<div class="cancel-stat-total">Всего отмен: <b>${cancellations.length}</b></div>`;
+  Object.values(byTeacher).forEach(t => {
+    html += `<div class="cancel-stat-teacher"><span class="teacher-color-dot" style="background:${t.color}"></span><span class="cancel-stat-name">${t.name}</span><span class="cancel-stat-count">${t.students.length} отм.</span></div>`;
+    t.students.forEach(s => { html += `<div class="cancel-stat-student">${s}</div>`; });
+  });
+  container.innerHTML = html;
 }
 
 function initAdmin() {

@@ -57,7 +57,7 @@ function renderPricingAdmin(pricing) {
       html += `<div class="pricing-card" data-id="${p.id}">
         <span class="pricing-duration">${formatTierLabel(p.duration_minutes, p.is_individual)}</span>
         <span class="pricing-values">
-          <span class="pv-item">Ученик: <b>${p.student_price}₽</b></span>
+          <span class="pv-item">Занятие: <b>${p.student_price}₽</b></span>
           <span class="pv-item">Преп.: <b>${p.teacher_profit}₽</b></span>
           <span class="pv-item">Центр: <b>${p.commission}₽</b></span>
         </span>
@@ -154,23 +154,23 @@ async function loadPayroll() {
   renderPayroll(lessons || [], isAdmin);
 }
 
+let payrollTeacherData = {};
+
 function renderPayroll(lessons, isAdmin) {
   const container = document.getElementById('payroll-content');
   if (!container) return;
 
-  const perTeacher = {};
-  let totalRevenue = 0, totalProfit = 0, totalCommission = 0;
+  payrollTeacherData = {};
 
   lessons.forEach(lesson => {
     const tId = lesson.teacher_id;
     const teacherRole = lesson.teacher?.role;
-    // Calculate actual lesson duration in minutes
     const start = new Date(lesson.start_time);
     const end = new Date(lesson.end_time);
     const durationMin = Math.round((end - start) / 60000);
 
-    if (!perTeacher[tId]) {
-      perTeacher[tId] = {
+    if (!payrollTeacherData[tId]) {
+      payrollTeacherData[tId] = {
         name: lesson.teacher?.full_name || '',
         color: lesson.teacher?.color || '#1e6fe8',
         role: teacherRole,
@@ -183,81 +183,97 @@ function renderPayroll(lessons, isAdmin) {
       const price = findPricing(durationMin, s.is_individual || false, s.price_type || 'new');
       if (!price) return;
 
-      // Admin: commission = 0, profit = student_price
       const isTeacherAdmin = teacherRole === 'admin';
       const effectiveProfit = isTeacherAdmin ? price.student_price : price.teacher_profit;
       const effectiveCommission = isTeacherAdmin ? 0 : price.commission;
 
-      perTeacher[tId].revenue += price.student_price;
-      perTeacher[tId].profit += effectiveProfit;
-      perTeacher[tId].commission += effectiveCommission;
-      totalRevenue += price.student_price;
-      totalProfit += effectiveProfit;
-      totalCommission += effectiveCommission;
+      payrollTeacherData[tId].revenue += price.student_price;
+      payrollTeacherData[tId].profit += effectiveProfit;
+      payrollTeacherData[tId].commission += effectiveCommission;
 
       const sKey = ls.student_id;
-      if (!perTeacher[tId].students[sKey]) {
-        perTeacher[tId].students[sKey] = { name: `${s.first_name} ${s.last_name}`, amount: 0, count: 0 };
+      if (!payrollTeacherData[tId].students[sKey]) {
+        payrollTeacherData[tId].students[sKey] = { name: `${s.first_name} ${s.last_name}`, amount: 0, count: 0 };
       }
-      perTeacher[tId].students[sKey].amount += price.student_price;
-      perTeacher[tId].students[sKey].count++;
+      payrollTeacherData[tId].students[sKey].amount += price.student_price;
+      payrollTeacherData[tId].students[sKey].count++;
     });
   });
 
-  let html = '';
-
-  if (isAdmin) {
-    html += `<div class="payroll-total">
-      <div class="payroll-stat"><span class="payroll-label">Общая выручка</span><span class="payroll-num">${totalRevenue} ₽</span></div>
-      <div class="payroll-stat"><span class="payroll-label">Прибыль преподавателей</span><span class="payroll-num">${totalProfit} ₽</span></div>
-      <div class="payroll-stat"><span class="payroll-label">Комиссия центра</span><span class="payroll-num">${totalCommission} ₽</span></div>
-    </div>`;
-  }
-
-  const teachers = Object.entries(perTeacher);
-  if (teachers.length === 0) {
-    html += '<div class="admin-empty">Нет занятий на этой неделе</div>';
-    container.innerHTML = html;
-    return;
-  }
-
+  const teachers = Object.entries(payrollTeacherData);
   teachers.sort((a, b) => {
     if (a[0] === state.user.id) return -1;
     if (b[0] === state.user.id) return 1;
     return a[1].name.localeCompare(b[1].name);
   });
 
+  let html = '';
+
+  if (isAdmin) {
+    html += `<div id="payroll-total" class="payroll-total"></div>`;
+    if (teachers.length > 1) {
+      html += `<div class="payroll-filter">`;
+      teachers.forEach(([tId, data]) => {
+        html += `<label class="payroll-filter-item"><input type="checkbox" class="payroll-teacher-check" data-tid="${tId}" checked><span class="teacher-color-dot" style="background:${data.color}"></span>${data.name}</label>`;
+      });
+      html += `</div>`;
+    }
+  }
+
+  if (teachers.length === 0) {
+    html += '<div class="admin-empty">Нет занятий на этой неделе</div>';
+    container.innerHTML = html;
+    return;
+  }
+
   teachers.forEach(([tId, data]) => {
     const students = Object.values(data.students).sort((a, b) => b.amount - a.amount);
-
     if (isAdmin) {
-      html += `<div class="payroll-teacher">
+      html += `<div class="payroll-teacher" data-teacher-id="${tId}">
         <div class="payroll-teacher-header">
           <span class="teacher-color-dot" style="background:${data.color}"></span>
           <span class="payroll-teacher-name">${data.name}</span>
         </div>`;
     } else {
-      html += `<div class="payroll-teacher">`;
+      html += `<div class="payroll-teacher" data-teacher-id="${tId}">`;
     }
-
     html += `<div class="payroll-summary">
       <div class="payroll-stat"><span class="payroll-label">Выручка</span><span class="payroll-num">${data.revenue} ₽</span></div>
       <div class="payroll-stat"><span class="payroll-label">Прибыль</span><span class="payroll-num payroll-num-profit">${data.profit} ₽</span></div>
       <div class="payroll-stat"><span class="payroll-label">Комиссия</span><span class="payroll-num">${data.commission} ₽</span></div>
     </div>`;
-
     html += `<div class="payroll-students">`;
     students.forEach(s => {
-      html += `<div class="payroll-student">
-        <span class="ps-name">${s.name}</span>
-        <span class="ps-count">${s.count} зан.</span>
-        <span class="ps-amount">${s.amount} ₽</span>
-      </div>`;
+      html += `<div class="payroll-student"><span class="ps-name">${s.name}</span><span class="ps-count">${s.count} зан.</span><span class="ps-amount">${s.amount} ₽</span></div>`;
     });
     html += `</div></div>`;
   });
 
   container.innerHTML = html;
+
+  if (isAdmin) {
+    updatePayrollTotals();
+    container.querySelectorAll('.payroll-teacher-check').forEach(cb => {
+      cb.addEventListener('change', updatePayrollTotals);
+    });
+  }
+}
+
+function updatePayrollTotals() {
+  const checked = new Set();
+  document.querySelectorAll('.payroll-teacher-check:checked').forEach(cb => checked.add(cb.dataset.tid));
+  let rev = 0, prof = 0, comm = 0;
+  Object.entries(payrollTeacherData).forEach(([tId, data]) => {
+    if (checked.has(tId)) { rev += data.revenue; prof += data.profit; comm += data.commission; }
+  });
+  const el = document.getElementById('payroll-total');
+  if (el) {
+    el.innerHTML = `
+      <div class="payroll-stat"><span class="payroll-label">Общая выручка</span><span class="payroll-num">${rev} ₽</span></div>
+      <div class="payroll-stat"><span class="payroll-label">Прибыль преподавателей</span><span class="payroll-num">${prof} ₽</span></div>
+      <div class="payroll-stat"><span class="payroll-label">Комиссия центра</span><span class="payroll-num">${comm} ₽</span></div>
+    `;
+  }
 }
 
 function initPricingAndPayroll() {
@@ -270,6 +286,15 @@ function initPricingAndPayroll() {
   document.getElementById('pricing-overlay').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closePricingModal();
   });
+
+  // Auto-calculate profit = price - commission
+  function updateProfit() {
+    const price = parseInt(document.getElementById('pricing-student-price').value) || 0;
+    const commission = parseInt(document.getElementById('pricing-commission').value) || 0;
+    document.getElementById('pricing-teacher-profit').value = price - commission;
+  }
+  document.getElementById('pricing-student-price').addEventListener('input', updateProfit);
+  document.getElementById('pricing-commission').addEventListener('input', updateProfit);
 
   // Payroll week slider
   document.querySelectorAll('.payroll-week-btn').forEach(btn => {

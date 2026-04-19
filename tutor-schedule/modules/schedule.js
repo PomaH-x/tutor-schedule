@@ -17,6 +17,7 @@ let hoveredTooltip = null;
 let durationLabel = null;
 let allTeacherStudents = [];
 let studentWeekStatus = {};
+let studentCancellations = {};
 let dragState = null;
 let dragMouseStart = null;
 let dragStarted = false;
@@ -589,23 +590,12 @@ async function finishDrag(targetDay, targetRoom, targetSlot) {
   const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(targetSlot * SLOT_MINUTES / 60), (targetSlot * SLOT_MINUTES) % 60, 0, 0);
   const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
 
-  // Detect if this is actually a move (different time or room)
-  const origStart = new Date(lesson.start_time);
-  const origEnd = new Date(lesson.end_time);
-  const isMoved = sTime.getTime() !== origStart.getTime() || eTime.getTime() !== origEnd.getTime() || targetRoom !== lesson.room;
-
   const updateData = {
     room: targetRoom,
     start_time: sTime.toISOString(),
     end_time: eTime.toISOString(),
     week_start: formatDate(state.currentWeekStart)
   };
-
-  if (isMoved) {
-    // Only set original if not already set (preserve first transfer origin)
-    updateData.original_start_time = lesson.original_start_time || lesson.start_time;
-    updateData.original_end_time = lesson.original_end_time || lesson.end_time;
-  }
 
   const { error } = await db.from('lessons').update(updateData).eq('id', lesson.id);
   if (error) { showToast('Ошибка переноса', 'error'); return; }
@@ -692,6 +682,11 @@ async function placeTransferredStudent(day, room, slot) {
   if (error) { showToast('Ошибка', 'error'); return; }
   await db.from('lesson_students').insert({ lesson_id: data.id, student_id: p.studentId });
   await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
+  // Record cancellation on the original week so the student shows as "Отменено"
+  const origWs = p.originalWeekStart || formatDate(getMonday(new Date()));
+  await db.from('cancellations').insert({
+    student_id: p.studentId, teacher_id: p.teacherId, week_start: origWs, status: 'pending'
+  });
   await cleanEmptyLesson(p.lessonId);
   state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Ученик перенесён на следующую неделю', 'success'); await loadLessons();
@@ -829,49 +824,65 @@ function removeCellTooltip() {
 
 let lessonTooltip = null;
 let lessonTooltipTimer = null;
-let lessonTooltipCardId = null;
+let lessonTooltipSlotKey = null;
 
 function handleLessonTooltip(e) {
   const card = e.target.closest('.lesson-card');
   if (!card || selecting || dragState || studentDragState || pendingClick) {
-    clearLessonTooltip();
-    return;
+    clearLessonTooltip(); return;
   }
 
-  if (card.dataset.lessonId === lessonTooltipCardId && lessonTooltip) return;
-  if (card.dataset.lessonId === lessonTooltipCardId && lessonTooltipTimer) return;
+  const grid = document.getElementById('schedule-grid');
+  const cell = findCellAt(e.clientX, e.clientY, grid);
+  if (!cell) { clearLessonTooltip(); return; }
+
+  const day = +cell.dataset.day, room = +cell.dataset.room, slot = +cell.dataset.slot;
+  const slotKey = `${day}-${room}-${slot}`;
+  if (slotKey === lessonTooltipSlotKey && (lessonTooltip || lessonTooltipTimer)) return;
 
   clearLessonTooltip();
-  lessonTooltipCardId = card.dataset.lessonId;
+  lessonTooltipSlotKey = slotKey;
   lessonTooltipTimer = setTimeout(() => {
-    const lesson = state.lessons.find(l => l.id === card.dataset.lessonId);
-    if (!lesson || !lesson.lesson_students?.length) { clearLessonTooltip(); return; }
+    const slotStartMin = START_HOUR * 60 + slot * SLOT_MINUTES;
+    const slotEndMin = slotStartMin + SLOT_MINUTES;
+    const dates = getWeekDates(state.currentWeekStart);
+    const date = dates[day];
+
+    const names = [];
+    state.lessons.forEach(l => {
+      if (l.room !== room) return;
+      const ls = new Date(l.start_time);
+      if (ls.getDate() !== date.getDate() || ls.getMonth() !== date.getMonth()) return;
+      const lS = ls.getHours() * 60 + ls.getMinutes();
+      const lE = new Date(l.end_time).getHours() * 60 + new Date(l.end_time).getMinutes();
+      if (slotStartMin >= lE || slotEndMin <= lS) return;
+      (l.lesson_students || []).forEach(s => {
+        if (s.student) names.push(`${s.student.first_name} ${s.student.last_name}`);
+      });
+    });
+
+    if (names.length === 0) { clearLessonTooltip(); return; }
 
     lessonTooltip = document.createElement('div');
     lessonTooltip.className = 'lesson-tooltip';
-    const names = lesson.lesson_students.map(ls => {
-      const s = ls.student;
-      return s ? `${s.first_name} ${s.last_name}` : '';
-    }).filter(Boolean);
     lessonTooltip.innerHTML = names.join('<br>');
-
     document.body.appendChild(lessonTooltip);
-    const rect = card.getBoundingClientRect();
-    const tw = lessonTooltip.offsetWidth;
-    const th = lessonTooltip.offsetHeight;
+
+    const rect = cell.getBoundingClientRect();
+    const tw = lessonTooltip.offsetWidth, th = lessonTooltip.offsetHeight;
     let left = rect.right + 8;
     if (left + tw > window.innerWidth - 16) left = rect.left - tw - 8;
     let top = rect.top;
     if (top + th > window.innerHeight - 16) top = window.innerHeight - th - 16;
     lessonTooltip.style.left = `${left}px`;
     lessonTooltip.style.top = `${top}px`;
-  }, 1000);
+  }, 500);
 }
 
 function clearLessonTooltip() {
   if (lessonTooltipTimer) { clearTimeout(lessonTooltipTimer); lessonTooltipTimer = null; }
   if (lessonTooltip) { lessonTooltip.remove(); lessonTooltip = null; }
-  lessonTooltipCardId = null;
+  lessonTooltipSlotKey = null;
 }
 
 function updateSelectionHighlight() {
@@ -906,7 +917,11 @@ async function loadLessons() {
     .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), lesson_students(student_id, student:students(first_name, last_name, subject, is_individual)), original_start_time, original_end_time, transferred_from_id')
     .eq('week_start', ws).eq('status', 'active');
   if (error) { showToast('Ошибка загрузки', 'error'); return; }
-  state.lessons = data || []; renderLessons();
+  state.lessons = (data || []).filter(l => l.lesson_students?.length > 0);
+  // Auto-clean empty lessons in DB
+  const emptyIds = (data || []).filter(l => !l.lesson_students?.length).map(l => l.id);
+  if (emptyIds.length > 0) db.from('lessons').delete().in('id', emptyIds);
+  renderLessons();
   const currentMonday = getMonday(new Date());
   if (formatDate(state.currentWeekStart) === formatDate(currentMonday)) {
     if (typeof computeAndSyncCancellations === 'function') computeAndSyncCancellations();
@@ -930,7 +945,6 @@ async function loadTeacherStudentsForModal(tid) {
     .eq('week_start', currentWs).eq('teacher_id', tid)
     .in('status', ['active', 'cancelled', 'transferred']);
 
-  // Build per-student indicator
   studentWeekStatus = {};
   (weekLessons || []).forEach(l => {
     (l.lesson_students || []).forEach(ls => {
@@ -939,6 +953,20 @@ async function loadTeacherStudentsForModal(tid) {
       if (!studentWeekStatus[sid]) studentWeekStatus[sid] = [];
       studentWeekStatus[sid].push(l);
     });
+  });
+
+  // Load cancellations (pending) for truant display
+  const threeWeeksAgo = new Date(getMonday(new Date()));
+  threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 14);
+  const { data: cancellations } = await db.from('cancellations')
+    .select('id, student_id, week_start, recurring_lesson:recurring_lessons(start_time, day_of_week)')
+    .eq('teacher_id', tid).eq('status', 'pending')
+    .gte('week_start', formatDate(threeWeeksAgo));
+
+  studentCancellations = {};
+  (cancellations || []).forEach(c => {
+    if (!studentCancellations[c.student_id]) studentCancellations[c.student_id] = [];
+    studentCancellations[c.student_id].push(c);
   });
 }
 
@@ -991,10 +1019,12 @@ function renderCurrentStudents() {
   ct.style.display = 'block';
   const sl = (s) => s || '';
   ct.innerHTML = `<label class="lesson-label">Текущие ученики</label>` + selected.map(s => {
+    const cancelBtn = canEdit && (m.mode === 'edit') ? `<button class="cs-cancel" data-student-id="${s.id}" title="Отменить ученика">✕</button>` : '';
     return `<div class="current-student-row" data-student-id="${s.id}">
       ${canEdit && (m.mode === 'edit' || m.mode === 'rec-edit') ? '<span class="cs-drag-handle" title="Перенести">⠿</span>' : ''}
       <span class="cs-name">${s.first_name} ${s.last_name} <span class="lesson-student-subject">${sl(s.subject)}</span></span>
-      ${canEdit ? `<button class="cs-remove" data-student-id="${s.id}">×</button>` : ''}
+      ${cancelBtn}
+      ${canEdit ? `<button class="cs-remove" data-student-id="${s.id}" title="Убрать из списка"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>` : ''}
     </div>`;
   }).join('');
 
@@ -1005,6 +1035,27 @@ function renderCurrentStudents() {
         m.selectedIds.delete(btn.dataset.studentId);
         renderCurrentStudents();
         renderLessonStudentsList(document.getElementById('lesson-student-search').value.trim());
+      });
+    });
+    ct.querySelectorAll('.cs-cancel').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sid = btn.dataset.studentId;
+        const s = allTeacherStudents.find(x => x.id === sid);
+        const lessonId = m.lessonId;
+        const teacherId = m.teacherId;
+        showConfirm(`Отменить ${s?.first_name || ''} ${s?.last_name || ''}?`, async () => {
+          await db.from('lesson_students').delete().eq('lesson_id', lessonId).eq('student_id', sid);
+          const ws = formatDate(getMonday(new Date()));
+          await db.from('cancellations').insert({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending' });
+          m.selectedIds.delete(sid);
+          await cleanEmptyLesson(lessonId);
+          await loadLessons();
+          await loadTeacherStudentsForModal(teacherId);
+          renderCurrentStudents();
+          renderLessonStudentsList(document.getElementById('lesson-student-search').value.trim());
+          showToast('Ученик отменён', 'success');
+        }, 'Отменить');
       });
     });
     if (m.mode === 'edit' || m.mode === 'rec-edit') {
@@ -1029,32 +1080,46 @@ function closeLessonModal() {
 }
 
 function buildStudentWeekBadge(studentId) {
-  const lessons = studentWeekStatus[studentId];
-  if (!lessons || lessons.length === 0) return '';
+  const lessons = studentWeekStatus[studentId] || [];
+  const cancels = studentCancellations[studentId] || [];
 
-  const badges = lessons.map(l => {
+  const badges = [];
+
+  lessons.forEach(l => {
     const start = new Date(l.start_time);
     const dayName = DAYS_SHORT[start.getDay() === 0 ? 6 : start.getDay() - 1];
     const time = `${start.getHours().toString().padStart(2,'0')}:${start.getMinutes().toString().padStart(2,'0')}`;
 
-    if (l.status === 'cancelled') {
-      return `<span class="student-week-badge badge-cancelled">Отменено (${dayName} ${time})</span>`;
+    if (l.status === 'cancelled' || l.status === 'transferred') {
+      badges.push(`<span class="student-week-badge badge-cancelled">Отменено ${dayName} ${time}</span>`);
+    } else if (l.status === 'active') {
+      badges.push(`<span class="student-week-badge badge-active">${dayName} ${time}</span>`);
     }
-    if (l.status === 'active' && (l.original_start_time || l.transferred_from_id)) {
-      if (l.original_start_time) {
-        const orig = new Date(l.original_start_time);
-        const origDay = DAYS_SHORT[orig.getDay() === 0 ? 6 : orig.getDay() - 1];
-        const origTime = `${orig.getHours().toString().padStart(2,'0')}:${orig.getMinutes().toString().padStart(2,'0')}`;
-        return `<span class="student-week-badge badge-transferred">С ${origDay} ${origTime} → ${dayName} ${time}</span>`;
-      }
-      return `<span class="student-week-badge badge-transferred">С пред. нед. → ${dayName} ${time}</span>`;
+  });
+
+  // Cancellations from cancellations table (e.g. student transferred to next week)
+  const currentWs = formatDate(getMonday(new Date()));
+  cancels.forEach(c => {
+    const rl = c.recurring_lesson;
+    if (!rl) {
+      badges.push(`<span class="student-week-badge badge-cancelled">Отменено</span>`);
+      return;
     }
-    if (l.status === 'active') {
-      return `<span class="student-week-badge badge-active">${dayName} ${time}</span>`;
+    const sp = rl.start_time.split(':');
+    const dayName = DAYS_SHORT[rl.day_of_week];
+    const time = `${(+sp[0]).toString().padStart(2,'0')}:${sp[1]}`;
+    if (c.week_start === currentWs) {
+      badges.push(`<span class="student-week-badge badge-cancelled">Отменено ${dayName} ${time}</span>`);
+    } else {
+      const d = new Date(c.week_start + 'T00:00:00');
+      const dd = d.getDate().toString().padStart(2,'0');
+      const mm = (d.getMonth()+1).toString().padStart(2,'0');
+      const yy = String(d.getFullYear()).slice(2);
+      badges.push(`<span class="student-week-badge badge-cancelled">Отменено ${dd}.${mm}.${yy}</span>`);
     }
-    return '';
-  }).filter(Boolean).join('');
-  return badges;
+  });
+
+  return badges.join('');
 }
 
 const DAYS_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -1067,11 +1132,36 @@ function renderLessonStudentsList(filter) {
   let students = allTeacherStudents;
   if (search) students = students.filter(s => s.first_name.toLowerCase().includes(search) || s.last_name.toLowerCase().includes(search));
 
-  if (students.length === 0) { list.innerHTML = '<div class="lesson-no-students">Нет учеников</div>'; return; }
-  const sl = (s) => s || '';
+  if (students.length === 0 && Object.keys(studentCancellations).length === 0) { list.innerHTML = '<div class="lesson-no-students">Нет учеников</div>'; return; }
   const canEdit = state.profile.role === 'admin' || (m.mode === 'create' || m.mode === 'rec-create') || (m.teacherId === state.user.id);
 
-  list.innerHTML = students.map(s => {
+  // Build truant block
+  let truantHTML = '';
+  const currentWs = formatDate(getMonday(new Date()));
+  const truantStudents = allTeacherStudents.filter(s => studentCancellations[s.id]?.length > 0);
+  if (truantStudents.length > 0 && !search) {
+    truantHTML = '<div class="modal-truant-block">';
+    truantStudents.forEach(s => {
+      const cancels = studentCancellations[s.id];
+      const labels = cancels.map(c => {
+        const rl = c.recurring_lesson;
+        if (!rl) return '';
+        const sp = rl.start_time.split(':');
+        const dayName = DAYS_SHORT[rl.day_of_week];
+        const time = `${(+sp[0]).toString().padStart(2,'0')}:${sp[1]}`;
+        if (c.week_start === currentWs) return `${dayName} ${time}`;
+        const d = new Date(c.week_start + 'T00:00:00');
+        const dd = d.getDate().toString().padStart(2,'0');
+        const mm = (d.getMonth()+1).toString().padStart(2,'0');
+        const yy = String(d.getFullYear()).slice(2);
+        return `${dd}.${mm}.${yy} ${dayName} ${time}`;
+      }).filter(Boolean);
+      truantHTML += `<div class="modal-truant-row"><span class="modal-truant-name">${s.first_name} ${s.last_name}</span><span class="modal-truant-dates">${labels.map(l => `<span class="modal-truant-date">${l}</span>`).join('')}</span></div>`;
+    });
+    truantHTML += '</div>';
+  }
+
+  list.innerHTML = truantHTML + students.map(s => {
     const ch = m.selectedIds.has(s.id);
     const indBadge = s.is_individual ? '<span class="lesson-ind-badge">Инд.</span>' : '';
     const weekBadge = buildStudentWeekBadge(s.id);
@@ -1108,6 +1198,17 @@ async function saveLesson() {
   if (m.mode === 'rec-create' || m.mode === 'rec-edit') { await saveRecurringLesson(); return; }
   const btn = document.getElementById('btn-save-lesson'); btn.disabled = true;
   if (m.selectedIds.size === 0) { showToast('Добавьте хотя бы одного ученика', 'error'); btn.disabled = false; return; }
+
+  // Tariff validation
+  const durationMin = (m.slotTo - m.slotFrom) * SLOT_MINUTES;
+  const selectedStudents = allTeacherStudents.filter(s => m.selectedIds.has(s.id));
+  for (const s of selectedStudents) {
+    if (!findPricing(durationMin, s.is_individual || false, s.price_type || 'new')) {
+      showToast(`Нет тарифа для ${s.first_name} ${s.last_name} (${durationMin} мин, ${s.is_individual ? 'инд.' : 'груп.'}, ${s.price_type === 'old' ? 'стар.' : 'нов.'})`, 'error');
+      btn.disabled = false; return;
+    }
+  }
+
   const tid = m.mode === 'create' || m.mode === 'rec-create' ? state.user.id : m.teacherId;
   const ct = await checkConflictServer(m.day, m.room, m.slotFrom, m.slotTo, m.mode === 'edit' || m.mode === 'rec-edit' ? m.lessonId : null, tid);
   if (ct) { conflictToast(ct); btn.disabled = false; return; }
@@ -1145,13 +1246,21 @@ async function deleteLesson() {
 
 async function cancelLesson() {
   const m = state.lessonModal; if (!m || m.mode !== 'edit') return;
-  const lid = m.lessonId; closeLessonModal();
-  showConfirm('Отменить занятие? Оно будет скрыто из расписания и не войдёт в расчёт оплаты.', async () => {
+  const lid = m.lessonId;
+  const teacherId = m.teacherId;
+  const studentIds = Array.from(m.selectedIds);
+  closeLessonModal();
+  showConfirm('Отменить занятие? Все ученики будут отменены.', async () => {
     await db.from('lessons').update({ status: 'cancelled' }).eq('id', lid);
+    const ws = formatDate(getMonday(new Date()));
+    if (studentIds.length > 0) {
+      await db.from('cancellations').insert(
+        studentIds.map(sid => ({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending' }))
+      );
+    }
     showToast('Занятие отменено', 'success');
     await loadLessons();
-    computeAndSyncCancellations();
-  });
+  }, 'Отменить');
 }
 
 // ===== NAVIGATION =====

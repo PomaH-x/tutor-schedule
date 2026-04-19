@@ -613,9 +613,9 @@ function closeCopyOverlay() {
 async function onCopyRecurringClick() {
   const isAdmin = state.profile.role === 'admin';
   if (!isAdmin) {
-    showToast('Копирование...', 'success');
+    showToast('Дублирование...', 'success');
     await syncRecurringToWeeksManual(state.user.id);
-    showToast('Расписание скопировано', 'success');
+    showToast('Расписание дублировано', 'success');
     return;
   }
   const { data: teachers } = await db.from('profiles')
@@ -633,9 +633,9 @@ async function onCopyRecurringClick() {
     btn.addEventListener('click', async () => {
       closeCopyOverlay();
       const tid = btn.dataset.tid;
-      showToast('Копирование...', 'success');
+      showToast('Дублирование...', 'success');
       await syncRecurringToWeeksManual(tid === 'all' ? null : tid);
-      showToast('Расписание скопировано', 'success');
+      showToast('Расписание дублировано', 'success');
     });
   });
   document.getElementById('copy-overlay').classList.add('active');

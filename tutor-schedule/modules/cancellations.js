@@ -184,7 +184,7 @@ function renderTruants(cancellations) {
         <span class="truant-count">${t.count} неотработ.</span>
       </div>
       <div class="truant-actions">
-        <button class="btn-excuse-truant" data-student-id="${t.studentId}" data-teacher-id="${t.teacherId}" title="Уважительная причина">Ув. причина</button>
+        <button class="btn-remove-truant" data-student-id="${t.studentId}" data-teacher-id="${t.teacherId}" data-name="${t.student.first_name} ${t.student.last_name}" title="Убрать из списка">Убрать</button>
         <button class="btn-place-truant" data-student-id="${t.studentId}" data-duration="${t.duration}" data-name="${t.student.first_name} ${t.student.last_name}">Разместить</button>
       </div>
     </div>`;
@@ -197,14 +197,17 @@ function renderTruants(cancellations) {
     });
   });
 
-  listEl.querySelectorAll('.btn-excuse-truant').forEach(btn => {
-    btn.addEventListener('click', async () => {
+  listEl.querySelectorAll('.btn-remove-truant').forEach(btn => {
+    btn.addEventListener('click', () => {
       const sid = btn.dataset.studentId;
       const tid = btn.dataset.teacherId;
-      await db.from('cancellations').update({ status: 'made_up' })
-        .eq('student_id', sid).eq('teacher_id', tid).eq('status', 'pending');
-      showToast('Уважительная причина принята', 'success');
-      await loadTruants();
+      const name = btn.dataset.name;
+      showConfirm(`Убрать ${name} из прогульщиков?`, async () => {
+        await db.from('cancellations').delete()
+          .eq('student_id', sid).eq('teacher_id', tid).eq('status', 'pending');
+        showToast('Убран из прогульщиков', 'success');
+        await loadTruants();
+      }, 'Убрать');
     });
   });
 }

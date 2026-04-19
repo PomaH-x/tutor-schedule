@@ -150,7 +150,7 @@
           </button>
           <button class="btn-copy-recurring" id="btn-copy-recurring">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            Копировать
+            Дублировать
           </button>
         </div>
         <div class="top-bar-right">
@@ -195,16 +195,16 @@
             </select>
           </div>
           <div class="form-group">
-            <label>Цена ученика</label>
+            <label>Цена занятия</label>
             <input type="number" id="pricing-student-price" placeholder="1500">
-          </div>
-          <div class="form-group">
-            <label>Прибыль преподавателя</label>
-            <input type="number" id="pricing-teacher-profit" placeholder="1000">
           </div>
           <div class="form-group">
             <label>Комиссия центра</label>
             <input type="number" id="pricing-commission" placeholder="500">
+          </div>
+          <div class="form-group">
+            <label>Прибыль преподавателя</label>
+            <input type="number" id="pricing-teacher-profit" placeholder="1000" disabled>
           </div>
         </div>
         <div class="modal-footer">
@@ -220,11 +220,11 @@
     <div id="copy-overlay" class="modal-overlay">
       <div class="modal modal-sm">
         <div class="modal-header">
-          <h3>Копировать расписание</h3>
+          <h3>Дублировать расписание</h3>
           <button class="btn-modal-close" id="btn-close-copy">×</button>
         </div>
         <div class="modal-body">
-          <p style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">Шаблон будет скопирован на «Следующую» и «2 нед. вперёд»</p>
+          <p style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">Шаблон будет дублирован на «Следующую» и «2 нед. вперёд»</p>
           <div id="copy-teacher-list" class="copy-teacher-list"></div>
         </div>
       </div>
@@ -315,6 +315,10 @@
         </div>
 
         <div id="tab-admin" class="profile-tab-content">
+          <div class="admin-section">
+            <h3>Отмены за текущую неделю</h3>
+            <div id="admin-cancellations-stats"></div>
+          </div>
           <div class="admin-section">
             <h3>Заявки на регистрацию</h3>
             <div id="pending-list" class="pending-list"></div>
