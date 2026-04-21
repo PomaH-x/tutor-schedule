@@ -682,10 +682,12 @@ async function placeTransferredStudent(day, room, slot) {
   if (error) { showToast('Ошибка', 'error'); return; }
   await db.from('lesson_students').insert({ lesson_id: data.id, student_id: p.studentId });
   await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
-  // Record cancellation on the original week so the student shows as "Отменено"
+  // Record transfer (not cancellation) - won't show in truants
+  const origLesson = state.lessons.find(l => l.id === p.lessonId);
   const origWs = p.originalWeekStart || formatDate(getMonday(new Date()));
   await db.from('cancellations').insert({
-    student_id: p.studentId, teacher_id: p.teacherId, week_start: origWs, status: 'pending'
+    student_id: p.studentId, teacher_id: p.teacherId, week_start: origWs, status: 'transferred',
+    lesson_start_time: origLesson?.start_time, lesson_day: origLesson ? new Date(origLesson.start_time).getDay() : null
   });
   await cleanEmptyLesson(p.lessonId);
   state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
@@ -959,8 +961,8 @@ async function loadTeacherStudentsForModal(tid) {
   const threeWeeksAgo = new Date(getMonday(new Date()));
   threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 14);
   const { data: cancellations } = await db.from('cancellations')
-    .select('id, student_id, week_start, recurring_lesson:recurring_lessons(start_time, day_of_week)')
-    .eq('teacher_id', tid).eq('status', 'pending')
+    .select('id, student_id, week_start, status, lesson_start_time, lesson_day, recurring_lesson:recurring_lessons(start_time, day_of_week)')
+    .eq('teacher_id', tid).in('status', ['pending', 'transferred'])
     .gte('week_start', formatDate(threeWeeksAgo));
 
   studentCancellations = {};
@@ -1044,13 +1046,18 @@ function renderCurrentStudents() {
         const s = allTeacherStudents.find(x => x.id === sid);
         const lessonId = m.lessonId;
         const teacherId = m.teacherId;
+        const lesson = state.lessons.find(l => l.id === lessonId);
+        const lessonStartTime = lesson?.start_time;
+        const lessonDay = m.day;
         showConfirm(`Отменить ${s?.first_name || ''} ${s?.last_name || ''}?`, async () => {
           await db.from('lesson_students').delete().eq('lesson_id', lessonId).eq('student_id', sid);
           const ws = formatDate(getMonday(new Date()));
-          await db.from('cancellations').insert({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending' });
+          await db.from('cancellations').insert({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_day: lessonDay });
           m.selectedIds.delete(sid);
+          const isEmpty = m.selectedIds.size === 0;
           await cleanEmptyLesson(lessonId);
           await loadLessons();
+          if (isEmpty) { closeLessonModal(); showToast('Ученик отменён, занятие удалено', 'success'); return; }
           await loadTeacherStudentsForModal(teacherId);
           renderCurrentStudents();
           renderLessonStudentsList(document.getElementById('lesson-student-search').value.trim());
@@ -1082,7 +1089,6 @@ function closeLessonModal() {
 function buildStudentWeekBadge(studentId) {
   const lessons = studentWeekStatus[studentId] || [];
   const cancels = studentCancellations[studentId] || [];
-
   const badges = [];
 
   lessons.forEach(l => {
@@ -1090,36 +1096,40 @@ function buildStudentWeekBadge(studentId) {
     const dayName = DAYS_SHORT[start.getDay() === 0 ? 6 : start.getDay() - 1];
     const time = `${start.getHours().toString().padStart(2,'0')}:${start.getMinutes().toString().padStart(2,'0')}`;
 
-    if (l.status === 'cancelled' || l.status === 'transferred') {
+    if (l.status === 'cancelled') {
       badges.push(`<span class="student-week-badge badge-cancelled">Отменено ${dayName} ${time}</span>`);
+    } else if (l.status === 'transferred') {
+      badges.push(`<span class="student-week-badge badge-transferred">Перенесён ${dayName} ${time}</span>`);
     } else if (l.status === 'active') {
       badges.push(`<span class="student-week-badge badge-active">${dayName} ${time}</span>`);
     }
   });
 
-  // Cancellations from cancellations table (e.g. student transferred to next week)
-  const currentWs = formatDate(getMonday(new Date()));
   cancels.forEach(c => {
-    const rl = c.recurring_lesson;
-    if (!rl) {
-      badges.push(`<span class="student-week-badge badge-cancelled">Отменено</span>`);
-      return;
-    }
-    const sp = rl.start_time.split(':');
-    const dayName = DAYS_SHORT[rl.day_of_week];
-    const time = `${(+sp[0]).toString().padStart(2,'0')}:${sp[1]}`;
-    if (c.week_start === currentWs) {
-      badges.push(`<span class="student-week-badge badge-cancelled">Отменено ${dayName} ${time}</span>`);
+    const timeStr = getCancelTimeStr(c);
+    if (c.status === 'transferred') {
+      badges.push(`<span class="student-week-badge badge-transferred">Перенесён ${timeStr}</span>`);
     } else {
-      const d = new Date(c.week_start + 'T00:00:00');
-      const dd = d.getDate().toString().padStart(2,'0');
-      const mm = (d.getMonth()+1).toString().padStart(2,'0');
-      const yy = String(d.getFullYear()).slice(2);
-      badges.push(`<span class="student-week-badge badge-cancelled">Отменено ${dd}.${mm}.${yy}</span>`);
+      badges.push(`<span class="student-week-badge badge-cancelled">Отменено ${timeStr}</span>`);
     }
   });
 
   return badges.join('');
+}
+
+function getCancelTimeStr(c) {
+  if (c.lesson_start_time) {
+    const d = new Date(c.lesson_start_time);
+    const dayName = DAYS_SHORT[d.getDay() === 0 ? 6 : d.getDay() - 1];
+    const time = `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+    return `${dayName} ${time}`;
+  }
+  if (c.recurring_lesson) {
+    const sp = c.recurring_lesson.start_time.split(':');
+    const dayName = DAYS_SHORT[c.recurring_lesson.day_of_week];
+    return `${dayName} ${(+sp[0]).toString().padStart(2,'0')}:${sp[1]}`;
+  }
+  return '';
 }
 
 const DAYS_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -1128,45 +1138,59 @@ function renderLessonStudentsList(filter) {
   const list = document.getElementById('lesson-students-list');
   const m = state.lessonModal; if (!m) return;
   const search = filter.toLowerCase();
-
-  let students = allTeacherStudents;
-  if (search) students = students.filter(s => s.first_name.toLowerCase().includes(search) || s.last_name.toLowerCase().includes(search));
-
-  if (students.length === 0 && Object.keys(studentCancellations).length === 0) { list.innerHTML = '<div class="lesson-no-students">Нет учеников</div>'; return; }
   const canEdit = state.profile.role === 'admin' || (m.mode === 'create' || m.mode === 'rec-create') || (m.teacherId === state.user.id);
-
-  // Build truant block
-  let truantHTML = '';
   const currentWs = formatDate(getMonday(new Date()));
-  const truantStudents = allTeacherStudents.filter(s => studentCancellations[s.id]?.length > 0);
-  if (truantStudents.length > 0 && !search) {
-    truantHTML = '<div class="modal-truant-block">';
+
+  // Truant students (only pending, not transferred)
+  const truantIds = new Set();
+  const pendingCancels = {};
+  Object.entries(studentCancellations).forEach(([sid, cancels]) => {
+    const pending = cancels.filter(c => c.status === 'pending');
+    if (pending.length > 0) { truantIds.add(sid); pendingCancels[sid] = pending; }
+  });
+
+  let allStudents = allTeacherStudents;
+  if (search) allStudents = allStudents.filter(s => s.first_name.toLowerCase().includes(search) || s.last_name.toLowerCase().includes(search));
+
+  const truantStudents = allStudents.filter(s => truantIds.has(s.id));
+  const regularStudents = allStudents.filter(s => !truantIds.has(s.id));
+
+  if (allStudents.length === 0) { list.innerHTML = '<div class="lesson-no-students">Нет учеников</div>'; return; }
+
+  let html = '';
+
+  // Truant block
+  if (truantStudents.length > 0) {
+    html += '<div class="modal-truant-block">';
     truantStudents.forEach(s => {
-      const cancels = studentCancellations[s.id];
-      const labels = cancels.map(c => {
-        const rl = c.recurring_lesson;
-        if (!rl) return '';
-        const sp = rl.start_time.split(':');
-        const dayName = DAYS_SHORT[rl.day_of_week];
-        const time = `${(+sp[0]).toString().padStart(2,'0')}:${sp[1]}`;
-        if (c.week_start === currentWs) return `${dayName} ${time}`;
-        const d = new Date(c.week_start + 'T00:00:00');
-        const dd = d.getDate().toString().padStart(2,'0');
-        const mm = (d.getMonth()+1).toString().padStart(2,'0');
-        const yy = String(d.getFullYear()).slice(2);
-        return `${dd}.${mm}.${yy} ${dayName} ${time}`;
-      }).filter(Boolean);
-      truantHTML += `<div class="modal-truant-row"><span class="modal-truant-name">${s.first_name} ${s.last_name}</span><span class="modal-truant-dates">${labels.map(l => `<span class="modal-truant-date">${l}</span>`).join('')}</span></div>`;
+      const ch = m.selectedIds.has(s.id);
+      const indBadge = s.is_individual ? '<span class="lesson-ind-badge">Инд.</span>' : '';
+      const cancels = pendingCancels[s.id] || [];
+      const dateBadges = cancels.map(c => {
+        const timeStr = getCancelTimeStr(c);
+        const isOld = c.week_start !== currentWs;
+        let datePrefix = '';
+        if (isOld) {
+          const d = new Date(c.week_start + 'T00:00:00');
+          datePrefix = `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}.${String(d.getFullYear()).slice(2)} `;
+        }
+        return `<span class="modal-truant-date">${datePrefix}${timeStr}</span>`;
+      }).join('');
+      const weekBadge = buildStudentWeekBadge(s.id);
+      html += `<label class="lesson-student-row truant-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${dateBadges}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
     });
-    truantHTML += '</div>';
+    html += '</div>';
   }
 
-  list.innerHTML = truantHTML + students.map(s => {
+  // Regular students
+  regularStudents.forEach(s => {
     const ch = m.selectedIds.has(s.id);
     const indBadge = s.is_individual ? '<span class="lesson-ind-badge">Инд.</span>' : '';
     const weekBadge = buildStudentWeekBadge(s.id);
-    return `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
-  }).join('');
+    html += `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
+  });
+
+  list.innerHTML = html;
 
   if (canEdit) {
     list.querySelectorAll('.lesson-checkbox').forEach(cb => {
@@ -1174,7 +1198,7 @@ function renderLessonStudentsList(filter) {
         const id = cb.dataset.id;
         const isInd = cb.dataset.individual === 'true';
         if (cb.checked) {
-          const selectedStudents = students.filter(s => m.selectedIds.has(s.id));
+          const selectedStudents = allStudents.filter(s => m.selectedIds.has(s.id));
           const hasIndividual = selectedStudents.some(s => s.is_individual);
           if (isInd && selectedStudents.length > 0) {
             cb.checked = false; showToast('Индивидуальное занятие — только один ученик', 'error'); return;
@@ -1249,13 +1273,16 @@ async function cancelLesson() {
   const lid = m.lessonId;
   const teacherId = m.teacherId;
   const studentIds = Array.from(m.selectedIds);
+  const lessonDay = m.day;
+  const lesson = state.lessons.find(l => l.id === lid);
+  const lessonStartTime = lesson?.start_time;
   closeLessonModal();
   showConfirm('Отменить занятие? Все ученики будут отменены.', async () => {
     await db.from('lessons').update({ status: 'cancelled' }).eq('id', lid);
     const ws = formatDate(getMonday(new Date()));
     if (studentIds.length > 0) {
       await db.from('cancellations').insert(
-        studentIds.map(sid => ({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending' }))
+        studentIds.map(sid => ({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_day: lessonDay }))
       );
     }
     showToast('Занятие отменено', 'success');

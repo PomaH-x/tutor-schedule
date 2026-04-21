@@ -1531,6 +1531,83 @@ input, textarea, select {
   color: var(--danger);
 }
 
+.btn-remove-truant-single {
+  padding: 4px 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--text-muted);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font);
+}
+
+.btn-remove-truant-single:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.truant-date-badge {
+  padding: 2px 8px;
+  background: rgba(220, 53, 69, 0.12);
+  color: var(--danger);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.truant-count-badge {
+  padding: 2px 8px;
+  background: rgba(220, 53, 69, 0.12);
+  color: var(--danger);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.truant-card-expandable {
+  flex-direction: column;
+  padding: 0;
+}
+
+.truant-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.truant-header:hover {
+  background: var(--bg-elevated);
+}
+
+.truant-expand-icon {
+  color: var(--text-muted);
+  font-size: 14px;
+  transition: transform 0.2s;
+}
+
+.truant-details {
+  border-top: 1px solid var(--border);
+  padding: 6px 14px;
+}
+
+.truant-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  gap: 8px;
+}
+
+.truant-detail-row + .truant-detail-row {
+  border-top: 1px solid var(--border);
+}
+
 .truant-group-title {
   font-size: 13px;
   font-weight: 600;
@@ -1849,41 +1926,34 @@ input, textarea, select {
   color: #f5c518;
 }
 
+.badge-transferred {
+  background: rgba(245, 197, 24, 0.15);
+  color: #f5c518;
+}
+
 .badge-cancelled {
   background: rgba(220, 53, 69, 0.15);
   color: var(--danger);
 }
 
-/* Modal truant block */
 .modal-truant-block {
-  background: rgba(220, 53, 69, 0.08);
-  border: 1px solid rgba(220, 53, 69, 0.25);
+  border: 1.5px solid var(--danger);
   border-radius: var(--radius-sm);
-  padding: 8px 10px;
+  padding: 4px 0;
   margin-bottom: 8px;
 }
 
-.modal-truant-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-  font-size: 12px;
+.lesson-student-row.truant-row {
+  border-bottom: 1px solid rgba(220, 53, 69, 0.15);
 }
 
-.modal-truant-name {
-  font-weight: 600;
-  color: var(--danger);
-  white-space: nowrap;
-}
-
-.modal-truant-dates {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+.lesson-student-row.truant-row:last-child {
+  border-bottom: none;
 }
 
 .modal-truant-date {
+  display: inline-block;
+  margin-left: 4px;
   padding: 1px 6px;
   background: rgba(220, 53, 69, 0.15);
   color: var(--danger);
