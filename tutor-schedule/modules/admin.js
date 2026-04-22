@@ -202,7 +202,6 @@ function initProfileTabs() {
         loadTeachers();
         loadSubjectsAdmin();
         loadPricingAdmin();
-        loadAdminCancellationStats();
       }
       if (tab.dataset.tab === 'tab-payroll') {
         loadPayroll();

@@ -259,6 +259,7 @@ function onRecGridMouseMove(e) {
       grid.classList.add('grid-dragging');
       grid.querySelector(`.lesson-card[data-lesson-id="${recDragState.lesson.id}"]`)?.classList.add('lesson-card-dragging');
       removeRecTooltip();
+      clearRecLessonTooltip();
     }
     clearRecDragHighlight();
     const cell = e.target.closest('.grid-cell');
@@ -276,7 +277,7 @@ function onRecGridMouseMove(e) {
     return;
   }
 
-  if (!recSelecting) handleRecTooltip(e);
+  if (!recSelecting) { handleRecTooltip(e); handleRecLessonTooltip(e); }
 
   if (recSelecting) {
     const cell = findRecCellAt(e.clientX, e.clientY);
@@ -317,6 +318,60 @@ function onRecGridMouseUp(e) {
     const st = Math.max(recSelStart.slot, recSelEnd.slot) + 1;
     openRecurringCreateModal({ day: recSelStart.day, room: recSelStart.room, slotFrom: sf, slotTo: st });
   }
+}
+
+let recLessonTooltip = null;
+let recLessonTooltipTimer = null;
+let recLessonTooltipSlotKey = null;
+
+function handleRecLessonTooltip(e) {
+  const card = e.target.closest('.lesson-card');
+  if (!card || recSelecting || recDragState || recPendingClick) {
+    clearRecLessonTooltip(); return;
+  }
+  const cell = findRecCellAt(e.clientX, e.clientY);
+  if (!cell) { clearRecLessonTooltip(); return; }
+
+  const day = +cell.dataset.day, room = +cell.dataset.room, slot = +cell.dataset.slot;
+  const slotKey = `${day}-${room}-${slot}`;
+  if (slotKey === recLessonTooltipSlotKey && (recLessonTooltip || recLessonTooltipTimer)) return;
+
+  clearRecLessonTooltip();
+  recLessonTooltipSlotKey = slotKey;
+  recLessonTooltipTimer = setTimeout(() => {
+    const slotStartMin = START_HOUR * 60 + slot * SLOT_MINUTES;
+    const slotEndMin = slotStartMin + SLOT_MINUTES;
+    const names = [];
+    recurringLessons.forEach(l => {
+      if (l.day_of_week !== day || l.room !== room) return;
+      const sp = l.start_time.split(':'); const ep = l.end_time.split(':');
+      const lS = +sp[0] * 60 + +sp[1];
+      const lE = +ep[0] * 60 + +ep[1];
+      if (slotStartMin >= lE || slotEndMin <= lS) return;
+      (l.recurring_lesson_students || []).forEach(s => {
+        if (s.student) names.push(`${s.student.first_name} ${s.student.last_name}`);
+      });
+    });
+    if (names.length === 0) { clearRecLessonTooltip(); return; }
+    recLessonTooltip = document.createElement('div');
+    recLessonTooltip.className = 'lesson-tooltip';
+    recLessonTooltip.innerHTML = names.join('<br>');
+    document.body.appendChild(recLessonTooltip);
+    const rect = cell.getBoundingClientRect();
+    const tw = recLessonTooltip.offsetWidth, th = recLessonTooltip.offsetHeight;
+    let left = rect.right + 8;
+    if (left + tw > window.innerWidth - 16) left = rect.left - tw - 8;
+    let top = rect.top;
+    if (top + th > window.innerHeight - 16) top = window.innerHeight - th - 16;
+    recLessonTooltip.style.left = `${left}px`;
+    recLessonTooltip.style.top = `${top}px`;
+  }, 500);
+}
+
+function clearRecLessonTooltip() {
+  if (recLessonTooltipTimer) { clearTimeout(recLessonTooltipTimer); recLessonTooltipTimer = null; }
+  if (recLessonTooltip) { recLessonTooltip.remove(); recLessonTooltip = null; }
+  recLessonTooltipSlotKey = null;
 }
 
 function handleRecTooltip(e) {
@@ -503,6 +558,7 @@ async function saveRecurringLesson() {
     showToast('Занятие обновлено', 'success');
   }
   closeLessonModal();
+  recurringByStudent = null;
   await loadRecurringLessons();
   syncRecurringToWeeks();
 }
@@ -514,6 +570,7 @@ async function deleteRecurringLesson() {
     await db.from('recurring_lesson_students').delete().eq('recurring_lesson_id', lid);
     await db.from('recurring_lessons').delete().eq('id', lid);
     showToast('Удалено', 'success');
+    recurringByStudent = null;
     await loadRecurringLessons();
     syncRecurringToWeeks();
   });

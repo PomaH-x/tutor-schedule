@@ -19,6 +19,10 @@ function findPricing(duration, isIndividual, priceType) {
   return pricingList.find(p => p.duration_minutes === duration && p.is_individual === isIndividual && p.price_type === priceType);
 }
 
+function hasAnyPricingForDuration(duration) {
+  return pricingList.some(p => p.duration_minutes === duration);
+}
+
 // ===== ADMIN PRICING MANAGEMENT =====
 
 async function loadPricingAdmin() {
@@ -146,23 +150,31 @@ async function loadPayroll() {
   const isAdmin = state.profile.role === 'admin';
 
   let q = db.from('lessons')
-    .select('id, teacher_id, start_time, end_time, teacher:profiles!teacher_id(full_name, color, role), lesson_students(student_id, student:students(first_name, last_name, is_individual, price_type))')
-    .eq('week_start', ws).eq('status', 'active');
+    .select('id, teacher_id, start_time, end_time, status, teacher:profiles!teacher_id(full_name, color, role), lesson_students(student_id, student:students(first_name, last_name, is_individual, price_type))')
+    .eq('week_start', ws).in('status', ['active', 'cancelled']);
   if (!isAdmin) q = q.eq('teacher_id', state.user.id);
 
-  const { data: lessons } = await q;
-  renderPayroll(lessons || [], isAdmin);
+  // Also fetch pending cancellations for this week
+  let qc = db.from('cancellations')
+    .select('id, student_id, teacher_id, lesson_start_time, student:students(first_name, last_name, is_individual, price_type)')
+    .eq('week_start', ws).eq('status', 'pending');
+  if (!isAdmin) qc = qc.eq('teacher_id', state.user.id);
+
+  const [{ data: lessons }, { data: cancellations }] = await Promise.all([q, qc]);
+  renderPayroll(lessons || [], cancellations || [], isAdmin);
 }
 
 let payrollTeacherData = {};
 
-function renderPayroll(lessons, isAdmin) {
+function renderPayroll(lessons, cancellations, isAdmin) {
   const container = document.getElementById('payroll-content');
   if (!container) return;
 
   payrollTeacherData = {};
 
+  // Process active lessons
   lessons.forEach(lesson => {
+    if (lesson.status !== 'active') return;
     const tId = lesson.teacher_id;
     const teacherRole = lesson.teacher?.role;
     const start = new Date(lesson.start_time);
@@ -175,7 +187,8 @@ function renderPayroll(lessons, isAdmin) {
         color: lesson.teacher?.color || '#1e6fe8',
         role: teacherRole,
         revenue: 0, profit: 0, commission: 0,
-        students: {}
+        cancelCount: 0,
+        students: {}, cancelledStudents: []
       };
     }
     (lesson.lesson_students || []).forEach(ls => {
@@ -200,6 +213,55 @@ function renderPayroll(lessons, isAdmin) {
     });
   });
 
+  // Process cancellations — add cancelled students (red rows) + counter
+  cancellations.forEach(c => {
+    const tId = c.teacher_id;
+    if (!payrollTeacherData[tId]) {
+      // Teacher may have only cancellations this week — fetch from a cancelled lesson if possible
+      const cancelledLesson = lessons.find(l => l.teacher_id === tId);
+      payrollTeacherData[tId] = {
+        name: cancelledLesson?.teacher?.full_name || '',
+        color: cancelledLesson?.teacher?.color || '#1e6fe8',
+        role: cancelledLesson?.teacher?.role,
+        revenue: 0, profit: 0, commission: 0,
+        cancelCount: 0,
+        students: {}, cancelledStudents: []
+      };
+    }
+    payrollTeacherData[tId].cancelCount++;
+
+    const s = c.student;
+    if (!s) return;
+    let amount = 0;
+    // Try to find cancelled lesson to get duration
+    if (c.lesson_start_time) {
+      const paired = lessons.find(l => l.teacher_id === tId && l.status === 'cancelled' && l.start_time === c.lesson_start_time);
+      if (paired) {
+        const durMin = Math.round((new Date(paired.end_time) - new Date(paired.start_time)) / 60000);
+        const price = findPricing(durMin, s.is_individual || false, s.price_type || 'new');
+        if (price) amount = price.student_price;
+      }
+    }
+    // Fallback: try all durations in pricing list for this student type
+    if (amount === 0) {
+      const match = pricingList.find(p => p.is_individual === (s.is_individual || false) && p.price_type === (s.price_type || 'new'));
+      if (match) amount = match.student_price;
+    }
+    payrollTeacherData[tId].cancelledStudents.push({
+      name: `${s.first_name} ${s.last_name}`,
+      amount
+    });
+  });
+
+function cancelDeclension(n) {
+  const abs = Math.abs(n) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return `${n} отмен`;
+  if (last === 1) return `${n} отмена`;
+  if (last >= 2 && last <= 4) return `${n} отмены`;
+  return `${n} отмен`;
+}
+
   const teachers = Object.entries(payrollTeacherData);
   teachers.sort((a, b) => {
     if (a[0] === state.user.id) return -1;
@@ -214,28 +276,31 @@ function renderPayroll(lessons, isAdmin) {
     if (teachers.length > 1) {
       html += `<div class="payroll-filter">`;
       teachers.forEach(([tId, data]) => {
-        html += `<label class="payroll-filter-item"><input type="checkbox" class="payroll-teacher-check" data-tid="${tId}" checked><span class="teacher-color-dot" style="background:${data.color}"></span>${data.name}</label>`;
+        html += `<button class="payroll-filter-pill active" data-tid="${tId}"><span class="teacher-color-dot" style="background:${data.color}"></span>${data.name}</button>`;
       });
       html += `</div>`;
     }
   }
 
   if (teachers.length === 0) {
-    html += '<div class="admin-empty">Нет занятий на этой неделе</div>';
+    html += '<div class="admin-empty">Нет данных на этой неделе</div>';
     container.innerHTML = html;
     return;
   }
 
   teachers.forEach(([tId, data]) => {
     const students = Object.values(data.students).sort((a, b) => b.amount - a.amount);
+    const cancelBadge = data.cancelCount > 0 ? `<span class="payroll-cancel-count">${cancelDeclension(data.cancelCount)}</span>` : '';
     if (isAdmin) {
       html += `<div class="payroll-teacher" data-teacher-id="${tId}">
         <div class="payroll-teacher-header">
           <span class="teacher-color-dot" style="background:${data.color}"></span>
           <span class="payroll-teacher-name">${data.name}</span>
+          ${cancelBadge}
         </div>`;
     } else {
-      html += `<div class="payroll-teacher" data-teacher-id="${tId}">`;
+      html += `<div class="payroll-teacher" data-teacher-id="${tId}">
+        ${cancelBadge ? `<div class="payroll-teacher-header">${cancelBadge}</div>` : ''}`;
     }
     html += `<div class="payroll-summary">
       <div class="payroll-stat"><span class="payroll-label">Выручка</span><span class="payroll-num">${data.revenue} ₽</span></div>
@@ -246,6 +311,9 @@ function renderPayroll(lessons, isAdmin) {
     students.forEach(s => {
       html += `<div class="payroll-student"><span class="ps-name">${s.name}</span><span class="ps-count">${s.count} зан.</span><span class="ps-amount">${s.amount} ₽</span></div>`;
     });
+    data.cancelledStudents.forEach(cs => {
+      html += `<div class="payroll-student payroll-student-cancelled"><span class="ps-name">${cs.name}</span><span class="ps-count">отменено</span><span class="ps-amount">${cs.amount} ₽</span></div>`;
+    });
     html += `</div></div>`;
   });
 
@@ -253,15 +321,18 @@ function renderPayroll(lessons, isAdmin) {
 
   if (isAdmin) {
     updatePayrollTotals();
-    container.querySelectorAll('.payroll-teacher-check').forEach(cb => {
-      cb.addEventListener('change', updatePayrollTotals);
+    container.querySelectorAll('.payroll-filter-pill').forEach(btn => {
+      btn.addEventListener('click', () => {
+        btn.classList.toggle('active');
+        updatePayrollTotals();
+      });
     });
   }
 }
 
 function updatePayrollTotals() {
   const checked = new Set();
-  document.querySelectorAll('.payroll-teacher-check:checked').forEach(cb => checked.add(cb.dataset.tid));
+  document.querySelectorAll('.payroll-filter-pill.active').forEach(btn => checked.add(btn.dataset.tid));
   let rev = 0, prof = 0, comm = 0;
   Object.entries(payrollTeacherData).forEach(([tId, data]) => {
     if (checked.has(tId)) { rev += data.revenue; prof += data.profit; comm += data.commission; }

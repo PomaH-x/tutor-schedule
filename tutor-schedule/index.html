@@ -152,6 +152,7 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             Дублировать
           </button>
+          <div class="recurring-warning">ⓘ Новые группы не попадут в «Текущую» и «Следующую» неделю — добавьте их вручную</div>
         </div>
         <div class="top-bar-right">
           <label class="theme-toggle" title="Сменить тему">
@@ -260,7 +261,7 @@
 
         <div class="profile-tabs" id="profile-tabs" style="display:none">
           <button class="profile-tab active" data-tab="tab-students">Ученики</button>
-          <button class="profile-tab" data-tab="tab-payroll">Расчёт оплаты</button>
+          <button class="profile-tab" data-tab="tab-payroll">Статистика</button>
           <button class="profile-tab" data-tab="tab-admin">Админ-панель</button>
         </div>
 
@@ -303,7 +304,7 @@
         <div id="tab-payroll" class="profile-tab-content">
           <div class="payroll-section">
             <div class="payroll-header">
-              <h3>Расчёт оплаты</h3>
+              <h3>Статистика</h3>
               <div class="payroll-week-slider">
                 <button class="payroll-week-btn" data-offset="-2">2 нед. назад</button>
                 <button class="payroll-week-btn" data-offset="-1">Прошлая</button>
@@ -315,10 +316,6 @@
         </div>
 
         <div id="tab-admin" class="profile-tab-content">
-          <div class="admin-section">
-            <h3>Отмены за текущую неделю</h3>
-            <div id="admin-cancellations-stats"></div>
-          </div>
           <div class="admin-section">
             <h3>Заявки на регистрацию</h3>
             <div id="pending-list" class="pending-list"></div>
@@ -427,8 +424,7 @@
           <div id="lesson-students-list" class="lesson-students-list"></div>
         </div>
         <div class="modal-footer lesson-modal-footer">
-          <button class="btn-cancel-action" id="btn-cancel-lesson" style="display:none">Отменить</button>
-          <button class="btn-danger" id="btn-delete-lesson" style="display:none">Удалить</button>
+          <button class="btn-danger" id="btn-delete-lesson" style="display:none" title="Без учёта в оплате">Расформировать</button>
           <div class="modal-footer-right">
             <button class="btn-secondary" id="btn-close-lesson-modal">Закрыть</button>
             <button class="btn-primary" id="btn-save-lesson">Сохранить</button>

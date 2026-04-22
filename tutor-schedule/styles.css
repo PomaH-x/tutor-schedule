@@ -753,6 +753,35 @@ input, textarea, select {
   to { opacity: 1; transform: translateY(0); }
 }
 
+.tooltip-transferred {
+  color: #f5c518;
+  font-weight: 600;
+}
+
+[data-theme="light"] .tooltip-transferred {
+  color: #8b5a00;
+}
+
+.recurring-warning {
+  padding: 6px 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  margin-left: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .recurring-warning {
+    display: none;
+  }
+}
+
 .schedule-grid {
   flex: 1;
   min-height: 0;
@@ -1570,6 +1599,7 @@ input, textarea, select {
 .truant-card-expandable {
   flex-direction: column;
   padding: 0;
+  align-items: stretch;
 }
 
 .truant-header {
@@ -1579,6 +1609,7 @@ input, textarea, select {
   padding: 10px 14px;
   cursor: pointer;
   transition: background 0.15s;
+  gap: 8px;
 }
 
 .truant-header:hover {
@@ -1589,23 +1620,50 @@ input, textarea, select {
   color: var(--text-muted);
   font-size: 14px;
   transition: transform 0.2s;
+  flex-shrink: 0;
 }
 
 .truant-details {
-  border-top: 1px solid var(--border);
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease, padding 0.2s ease;
+  padding: 0 14px;
+}
+
+.truant-details.open {
+  max-height: 600px;
   padding: 6px 14px;
+  border-top: 1px solid var(--border);
 }
 
 .truant-detail-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 0;
+  padding: 8px 0;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .truant-detail-row + .truant-detail-row {
   border-top: 1px solid var(--border);
+}
+
+@media (max-width: 520px) {
+  .truant-detail-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .truant-detail-row .truant-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .truant-info {
+    width: 100%;
+  }
+  .truant-card {
+    flex-wrap: wrap;
+  }
 }
 
 .truant-group-title {
@@ -1617,8 +1675,11 @@ input, textarea, select {
 
 .truant-info {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .truant-name {
@@ -1662,18 +1723,29 @@ input, textarea, select {
   margin-bottom: 8px;
 }
 
-.payroll-filter-item {
-  display: flex;
+.payroll-filter-pill {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--text-muted);
   font-size: 13px;
   font-weight: 500;
+  font-family: var(--font);
   cursor: pointer;
-  color: var(--text);
+  transition: all 0.15s;
 }
 
-.payroll-filter-item input {
-  accent-color: var(--accent);
+.payroll-filter-pill:hover {
+  border-color: var(--text-muted);
+}
+
+.payroll-filter-pill.active {
+  color: var(--text);
+  border-color: var(--accent);
 }
 
 .payroll-section {
@@ -1828,6 +1900,27 @@ input, textarea, select {
 .ps-amount {
   font-weight: 700;
   color: var(--accent);
+}
+
+.payroll-student-cancelled {
+  background: rgba(220, 53, 69, 0.12);
+  color: var(--danger);
+}
+
+.payroll-student-cancelled .ps-name,
+.payroll-student-cancelled .ps-count,
+.payroll-student-cancelled .ps-amount {
+  color: var(--danger);
+}
+
+.payroll-cancel-count {
+  margin-left: auto;
+  padding: 2px 8px;
+  background: rgba(220, 53, 69, 0.15);
+  color: var(--danger);
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 /* ===== PRICING ADMIN ===== */

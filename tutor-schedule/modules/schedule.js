@@ -439,6 +439,7 @@ function onGridMouseMove(e) {
       grid.classList.add('grid-dragging');
       grid.querySelector(`.lesson-card[data-lesson-id="${dragState.lesson.id}"]`)?.classList.add('lesson-card-dragging');
       removeCellTooltip();
+      clearLessonTooltip();
     }
     clearDragHighlight();
     const cell = e.target.closest('.grid-cell');
@@ -570,6 +571,11 @@ function onGridMouseUp(e) {
     selecting = false; clearSelectionHighlight(); removeDurationLabel();
     if (!selStart) return;
     const sf = Math.min(selStart.slot, selEnd.slot); const st = Math.max(selStart.slot, selEnd.slot) + 1;
+    const durationMin = (st - sf) * SLOT_MINUTES;
+    if (!hasAnyPricingForDuration(durationMin)) {
+      showToast(`Нет тарифов для ${durationMin} мин`, 'error');
+      return;
+    }
     openLessonModal({ day: selStart.day, room: selStart.room, slotFrom: sf, slotTo: st });
   }
 }
@@ -604,6 +610,7 @@ async function finishDrag(targetDay, targetRoom, targetSlot) {
 
 // ===== NEXT WEEK TRANSFER =====
 function startNextWeekTransfer(lesson) {
+  clearLessonTooltip(); removeCellTooltip();
   const st = new Date(lesson.start_time); const et = new Date(lesson.end_time);
   const ss = (st.getHours() * 60 + st.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
   const es = (et.getHours() * 60 + et.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
@@ -788,6 +795,7 @@ function cancelStudentDrag() {
 }
 
 function startStudentNextWeekTransfer() {
+  clearLessonTooltip(); removeCellTooltip();
   const s = studentDragState;
   if (!s) return;
   state.placingStudent = {
@@ -828,6 +836,29 @@ let lessonTooltip = null;
 let lessonTooltipTimer = null;
 let lessonTooltipSlotKey = null;
 
+let recurringByStudent = null;
+
+async function loadRecurringByStudent() {
+  const { data } = await db.from('recurring_lessons')
+    .select('day_of_week, start_time, end_time, room, teacher_id, recurring_lesson_students(student_id)');
+  recurringByStudent = {};
+  (data || []).forEach(rl => {
+    (rl.recurring_lesson_students || []).forEach(rs => {
+      if (!recurringByStudent[rs.student_id]) recurringByStudent[rs.student_id] = [];
+      recurringByStudent[rs.student_id].push(rl);
+    });
+  });
+}
+
+function isStudentInRecurringSlot(studentId, dayOfWeek, startHHMM, endHHMM, room) {
+  const entries = recurringByStudent?.[studentId] || [];
+  return entries.some(rl => {
+    if (rl.day_of_week !== dayOfWeek) return false;
+    if (rl.room !== room) return false;
+    return rl.start_time.slice(0,5) === startHHMM && rl.end_time.slice(0,5) === endHHMM;
+  });
+}
+
 function handleLessonTooltip(e) {
   const card = e.target.closest('.lesson-card');
   if (!card || selecting || dragState || studentDragState || pendingClick) {
@@ -856,10 +887,17 @@ function handleLessonTooltip(e) {
       const ls = new Date(l.start_time);
       if (ls.getDate() !== date.getDate() || ls.getMonth() !== date.getMonth()) return;
       const lS = ls.getHours() * 60 + ls.getMinutes();
-      const lE = new Date(l.end_time).getHours() * 60 + new Date(l.end_time).getMinutes();
+      const le = new Date(l.end_time);
+      const lE = le.getHours() * 60 + le.getMinutes();
       if (slotStartMin >= lE || slotEndMin <= lS) return;
+      const startHHMM = `${ls.getHours().toString().padStart(2,'0')}:${ls.getMinutes().toString().padStart(2,'0')}`;
+      const endHHMM = `${le.getHours().toString().padStart(2,'0')}:${le.getMinutes().toString().padStart(2,'0')}`;
+      const dayOfWeek = ls.getDay() === 0 ? 6 : ls.getDay() - 1;
       (l.lesson_students || []).forEach(s => {
-        if (s.student) names.push(`${s.student.first_name} ${s.student.last_name}`);
+        if (!s.student) return;
+        const inRecurring = recurringByStudent ? isStudentInRecurringSlot(s.student_id, dayOfWeek, startHHMM, endHHMM, l.room) : true;
+        const name = `${s.student.first_name} ${s.student.last_name}`;
+        names.push(inRecurring ? name : `<span class="tooltip-transferred">${name}</span>`);
       });
     });
 
@@ -920,9 +958,9 @@ async function loadLessons() {
     .eq('week_start', ws).eq('status', 'active');
   if (error) { showToast('Ошибка загрузки', 'error'); return; }
   state.lessons = (data || []).filter(l => l.lesson_students?.length > 0);
-  // Auto-clean empty lessons in DB
   const emptyIds = (data || []).filter(l => !l.lesson_students?.length).map(l => l.id);
   if (emptyIds.length > 0) db.from('lessons').delete().in('id', emptyIds);
+  if (!recurringByStudent) await loadRecurringByStudent();
   renderLessons();
   const currentMonday = getMonday(new Date());
   if (formatDate(state.currentWeekStart) === formatDate(currentMonday)) {
@@ -975,7 +1013,6 @@ async function loadTeacherStudentsForModal(tid) {
 function openLessonModal(sel) {
   document.getElementById('lesson-modal-title').textContent = buildModalTitle(sel.day, sel.room, sel.slotFrom, sel.slotTo);
   document.getElementById('btn-delete-lesson').style.display = 'none';
-  document.getElementById('btn-cancel-lesson').style.display = 'none';
   document.getElementById('btn-save-lesson').style.display = 'block';
   document.getElementById('lesson-student-search').parentElement.style.display = 'block';
   document.getElementById('lesson-current-students').innerHTML = '';
@@ -998,7 +1035,6 @@ function openEditLessonModal(lesson) {
   document.getElementById('lesson-modal-title').textContent = buildModalTitle(di, lesson.room, ss, es);
   const canEdit = state.profile.role === 'admin' || lesson.teacher_id === state.user.id;
   document.getElementById('btn-delete-lesson').style.display = canEdit ? 'block' : 'none';
-  document.getElementById('btn-cancel-lesson').style.display = canEdit ? 'block' : 'none';
   document.getElementById('btn-save-lesson').style.display = canEdit ? 'block' : 'none';
   document.getElementById('lesson-student-search').parentElement.style.display = canEdit ? 'block' : 'none';
   const selectedIds = new Set((lesson.lesson_students || []).map(ls => ls.student_id));
@@ -1048,10 +1084,11 @@ function renderCurrentStudents() {
         const teacherId = m.teacherId;
         const lesson = state.lessons.find(l => l.id === lessonId);
         const lessonStartTime = lesson?.start_time;
+        const lessonWeekStart = lesson?.week_start;
         const lessonDay = m.day;
         showConfirm(`Отменить ${s?.first_name || ''} ${s?.last_name || ''}?`, async () => {
           await db.from('lesson_students').delete().eq('lesson_id', lessonId).eq('student_id', sid);
-          const ws = formatDate(getMonday(new Date()));
+          const ws = lessonWeekStart || formatDate(getMonday(new Date()));
           await db.from('cancellations').insert({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_day: lessonDay });
           m.selectedIds.delete(sid);
           const isEmpty = m.selectedIds.size === 0;
@@ -1089,27 +1126,30 @@ function closeLessonModal() {
 function buildStudentWeekBadge(studentId) {
   const lessons = studentWeekStatus[studentId] || [];
   const cancels = studentCancellations[studentId] || [];
+  const currentWs = formatDate(getMonday(new Date()));
   const badges = [];
 
+  // Collect active lesson day+time keys for current week
+  const activeKeys = new Set();
   lessons.forEach(l => {
+    if (l.status !== 'active') return;
     const start = new Date(l.start_time);
     const dayName = DAYS_SHORT[start.getDay() === 0 ? 6 : start.getDay() - 1];
     const time = `${start.getHours().toString().padStart(2,'0')}:${start.getMinutes().toString().padStart(2,'0')}`;
-
-    if (l.status === 'cancelled') {
-      badges.push(`<span class="student-week-badge badge-cancelled">Отменено ${dayName} ${time}</span>`);
-    } else if (l.status === 'transferred') {
-      badges.push(`<span class="student-week-badge badge-transferred">Перенесён ${dayName} ${time}</span>`);
-    } else if (l.status === 'active') {
-      badges.push(`<span class="student-week-badge badge-active">${dayName} ${time}</span>`);
-    }
+    activeKeys.add(`${dayName} ${time}`);
+    badges.push(`<span class="student-week-badge badge-active">${dayName} ${time}</span>`);
   });
 
+  // Cancellations / transfers: skip if there's already an active lesson for same day+time on current week
   cancels.forEach(c => {
     const timeStr = getCancelTimeStr(c);
+    if (!timeStr) return;
+    const isCurrentWeek = !c.week_start || c.week_start === currentWs;
+    // If same day+time exists as active lesson on current week, skip this cancellation badge
+    if (isCurrentWeek && activeKeys.has(timeStr)) return;
     if (c.status === 'transferred') {
       badges.push(`<span class="student-week-badge badge-transferred">Перенесён ${timeStr}</span>`);
-    } else {
+    } else if (c.status === 'pending') {
       badges.push(`<span class="student-week-badge badge-cancelled">Отменено ${timeStr}</span>`);
     }
   });
@@ -1118,18 +1158,26 @@ function buildStudentWeekBadge(studentId) {
 }
 
 function getCancelTimeStr(c) {
+  const currentWs = formatDate(getMonday(new Date()));
+  let dayName = '', time = '';
   if (c.lesson_start_time) {
     const d = new Date(c.lesson_start_time);
-    const dayName = DAYS_SHORT[d.getDay() === 0 ? 6 : d.getDay() - 1];
-    const time = `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
-    return `${dayName} ${time}`;
-  }
-  if (c.recurring_lesson) {
+    dayName = DAYS_SHORT[d.getDay() === 0 ? 6 : d.getDay() - 1];
+    time = `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+  } else if (c.recurring_lesson) {
     const sp = c.recurring_lesson.start_time.split(':');
-    const dayName = DAYS_SHORT[c.recurring_lesson.day_of_week];
-    return `${dayName} ${(+sp[0]).toString().padStart(2,'0')}:${sp[1]}`;
+    dayName = DAYS_SHORT[c.recurring_lesson.day_of_week];
+    time = `${(+sp[0]).toString().padStart(2,'0')}:${sp[1]}`;
   }
-  return '';
+  if (!dayName) return '';
+  if (c.week_start && c.week_start !== currentWs) {
+    const wd = new Date(c.week_start + 'T00:00:00');
+    const dd = wd.getDate().toString().padStart(2,'0');
+    const mm = (wd.getMonth()+1).toString().padStart(2,'0');
+    const yy = String(wd.getFullYear()).slice(2);
+    return `${dd}.${mm}.${yy} ${dayName} ${time}`;
+  }
+  return `${dayName} ${time}`;
 }
 
 const DAYS_SHORT = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -1168,16 +1216,9 @@ function renderLessonStudentsList(filter) {
       const cancels = pendingCancels[s.id] || [];
       const dateBadges = cancels.map(c => {
         const timeStr = getCancelTimeStr(c);
-        const isOld = c.week_start !== currentWs;
-        let datePrefix = '';
-        if (isOld) {
-          const d = new Date(c.week_start + 'T00:00:00');
-          datePrefix = `${d.getDate().toString().padStart(2,'0')}.${(d.getMonth()+1).toString().padStart(2,'0')}.${String(d.getFullYear()).slice(2)} `;
-        }
-        return `<span class="modal-truant-date">${datePrefix}${timeStr}</span>`;
-      }).join('');
-      const weekBadge = buildStudentWeekBadge(s.id);
-      html += `<label class="lesson-student-row truant-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${dateBadges}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
+        return timeStr ? `<span class="modal-truant-date">${timeStr}</span>` : '';
+      }).filter(Boolean).join('');
+      html += `<label class="lesson-student-row truant-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${dateBadges}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
     });
     html += '</div>';
   }
@@ -1260,12 +1301,30 @@ async function saveLesson() {
 async function deleteLesson() {
   const m = state.lessonModal; if (!m || (m.mode !== 'edit' && m.mode !== 'rec-edit')) return;
   if (m.mode === 'rec-edit') { await deleteRecurringLesson(); return; }
-  const lid = m.lessonId; closeLessonModal();
-  showConfirm('Удалить занятие?', async () => {
+  const lid = m.lessonId;
+  const lesson = state.lessons.find(l => l.id === lid);
+  const transferredFromId = lesson?.transferred_from_id;
+  const teacherId = lesson?.teacher_id;
+  const studentIds = (lesson?.lesson_students || []).map(ls => ls.student_id);
+  closeLessonModal();
+  showConfirm('Расформировать занятие? Оно удалится без учёта в оплате.', async () => {
+    // If this was a transferred lesson, turn its existing "transferred" cancellations into "pending"
+    // so the students appear in truants for origin week
+    if (transferredFromId && studentIds.length > 0) {
+      // Look up the transferred-origin cancellations (status='transferred') for these students + teacher
+      const { data: origCancels } = await db.from('cancellations')
+        .select('id, student_id, week_start')
+        .eq('teacher_id', teacherId)
+        .eq('status', 'transferred')
+        .in('student_id', studentIds);
+      if (origCancels?.length > 0) {
+        await db.from('cancellations').update({ status: 'pending' }).in('id', origCancels.map(c => c.id));
+      }
+    }
     await db.from('lesson_students').delete().eq('lesson_id', lid);
     await db.from('lessons').delete().eq('id', lid);
-    showToast('Занятие удалено', 'success'); await loadLessons();
-  });
+    showToast('Занятие расформировано', 'success'); await loadLessons();
+  }, 'Расформировать');
 }
 
 async function cancelLesson() {
@@ -1276,10 +1335,11 @@ async function cancelLesson() {
   const lessonDay = m.day;
   const lesson = state.lessons.find(l => l.id === lid);
   const lessonStartTime = lesson?.start_time;
+  const lessonWeekStart = lesson?.week_start;
   closeLessonModal();
   showConfirm('Отменить занятие? Все ученики будут отменены.', async () => {
     await db.from('lessons').update({ status: 'cancelled' }).eq('id', lid);
-    const ws = formatDate(getMonday(new Date()));
+    const ws = lessonWeekStart || formatDate(getMonday(new Date()));
     if (studentIds.length > 0) {
       await db.from('cancellations').insert(
         studentIds.map(sid => ({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_day: lessonDay }))
@@ -1343,7 +1403,6 @@ function initSchedule() {
   });
 
   document.getElementById('btn-save-lesson').addEventListener('click', saveLesson);
-  document.getElementById('btn-cancel-lesson').addEventListener('click', cancelLesson);
   document.getElementById('btn-close-lesson').addEventListener('click', closeLessonModal);
   document.getElementById('btn-close-lesson-modal').addEventListener('click', closeLessonModal);
   document.getElementById('btn-delete-lesson').addEventListener('click', deleteLesson);

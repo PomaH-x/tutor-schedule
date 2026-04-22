@@ -151,7 +151,7 @@ function renderTruants(cancellations) {
   const thisWeek = formatDate(getMonday(new Date()));
   const thisWeekCount = cancellations.filter(c => c.week_start === thisWeek).length;
 
-  statsEl.innerHTML = '<div class="truant-stat"><span class="truant-stat-num">' + thisWeekCount + '</span><span class="truant-stat-label">Отмен на этой неделе</span></div><div class="truant-stat"><span class="truant-stat-num">' + cancellations.length + '</span><span class="truant-stat-label">Неотработанных</span></div>';
+  statsEl.innerHTML = '<div class="truant-stat"><span class="truant-stat-num">' + thisWeekCount + '</span><span class="truant-stat-label">Отмен на этой неделе</span></div><div class="truant-stat"><span class="truant-stat-num">' + cancellations.length + '</span><span class="truant-stat-label">Неотработанных за 3 недели</span></div>';
 
   var grouped = {};
   cancellations.forEach(function(c) {
@@ -200,7 +200,7 @@ function renderTruants(cancellations) {
       var label = getCancelLabel(t.cancels[0]);
       html += '<div class="truant-card"><div class="truant-info"><span class="truant-name">' + name + '</span><span class="truant-date-badge">' + label + '</span></div><div class="truant-actions"><button class="btn-remove-truant-single" data-cid="' + t.cancels[0].id + '" data-name="' + name + '" title="Убрать">Убрать</button><button class="btn-place-truant" data-student-id="' + t.studentId + '" data-duration="' + dur + '" data-name="' + name + '">Разместить</button></div></div>';
     } else {
-      html += '<div class="truant-card truant-card-expandable"><div class="truant-header" data-toggle="' + t.studentId + '"><div class="truant-info"><span class="truant-name">' + name + '</span><span class="truant-count-badge">' + count + ' неотработ.</span></div><span class="truant-expand-icon">▸</span></div><div class="truant-details" id="truant-details-' + t.studentId + '" style="display:none">';
+      html += '<div class="truant-card truant-card-expandable"><div class="truant-header" data-toggle="' + t.studentId + '"><div class="truant-info"><span class="truant-name">' + name + '</span><span class="truant-count-badge">' + count + ' неотработ.</span></div><span class="truant-expand-icon">▸</span></div><div class="truant-details" id="truant-details-' + t.studentId + '">';
       t.cancels.forEach(function(c) {
         var clabel = getCancelLabel(c);
         html += '<div class="truant-detail-row"><span class="truant-date-badge">' + clabel + '</span><div class="truant-actions"><button class="btn-remove-truant-single" data-cid="' + c.id + '" data-name="' + name + '" title="Убрать">Убрать</button><button class="btn-place-truant" data-student-id="' + t.studentId + '" data-duration="' + dur + '" data-name="' + name + '">Разместить</button></div></div>';
@@ -214,8 +214,8 @@ function renderTruants(cancellations) {
     header.addEventListener('click', function() {
       var details = document.getElementById('truant-details-' + header.dataset.toggle);
       var icon = header.querySelector('.truant-expand-icon');
-      if (details.style.display === 'none') { details.style.display = 'block'; icon.textContent = '▾'; }
-      else { details.style.display = 'none'; icon.textContent = '▸'; }
+      var isOpen = details.classList.toggle('open');
+      icon.textContent = isOpen ? '▾' : '▸';
     });
   });
 
@@ -265,6 +265,10 @@ async function placeTruantOnCell(day, room, slot) {
   if (result.error) { showToast('Ошибка', 'error'); return; }
   await db.from('lesson_students').insert({ lesson_id: result.data.id, student_id: t.studentId });
 
+  // Close one pending cancellation for this student
+  var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
+  if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
+
   state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Ученик размещён для отработки', 'success');
   await loadLessons();
@@ -290,6 +294,11 @@ async function placeTruantOnLesson(targetLessonId) {
   if (targetStudents.length >= getMaxGroup(tl.teacher_id)) { showToast('Максимум ' + getMaxGroup(tl.teacher_id) + ' учеников', 'error'); return; }
 
   await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: t.studentId });
+
+  // Close one pending cancellation for this student
+  var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
+  if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
+
   state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Ученик добавлен к занятию', 'success');
   await loadLessons();
