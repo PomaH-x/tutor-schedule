@@ -954,10 +954,10 @@ function removeDurationLabel() { if (durationLabel) { durationLabel.remove(); du
 async function loadLessons() {
   const ws = formatDate(state.currentWeekStart);
   const { data, error } = await db.from('lessons')
-    .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), lesson_students(student_id, student:students(first_name, last_name, subject, is_individual)), original_start_time, original_end_time, transferred_from_id')
+    .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), lesson_students(student_id, student:students(first_name, last_name, subject, is_individual, is_online, price_type)), original_start_time, original_end_time, transferred_from_id')
     .eq('week_start', ws).eq('status', 'active');
   if (error) { showToast('Ошибка загрузки', 'error'); return; }
-  state.lessons = (data || []).filter(l => l.lesson_students?.length > 0);
+  state.lessons = (data || []).filter(l => l.lesson_students?.length > 0 && l.room !== 0);
   const emptyIds = (data || []).filter(l => !l.lesson_students?.length).map(l => l.id);
   if (emptyIds.length > 0) db.from('lessons').delete().in('id', emptyIds);
   if (!recurringByStudent) await loadRecurringByStudent();
@@ -971,7 +971,7 @@ async function loadLessons() {
 function buildModalTitle(di, room, sf, st) { return `${DAYS_FULL[di]} · ${ROOM_FULL[room - 1]} · ${slotToTime(sf)}–${slotToTime(st)}`; }
 
 async function loadTeacherStudentsForModal(tid) {
-  const { data } = await db.from('students').select('id, first_name, last_name, subject, is_individual, price_type').eq('teacher_id', tid).order('first_name');
+  const { data } = await db.from('students').select('id, first_name, last_name, subject, is_individual, is_online, price_type').eq('teacher_id', tid).order('first_name');
   const seen = new Set();
   allTeacherStudents = (data || []).filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
 
@@ -1060,7 +1060,7 @@ function renderCurrentStudents() {
     const cancelBtn = canEdit && (m.mode === 'edit') ? `<button class="cs-cancel" data-student-id="${s.id}" title="Отменить ученика">✕</button>` : '';
     return `<div class="current-student-row" data-student-id="${s.id}">
       ${canEdit && (m.mode === 'edit' || m.mode === 'rec-edit') ? '<span class="cs-drag-handle" title="Перенести">⠿</span>' : ''}
-      <span class="cs-name">${s.first_name} ${s.last_name} <span class="lesson-student-subject">${sl(s.subject)}</span></span>
+      <span class="cs-name">${s.first_name} ${s.last_name} <span class="lesson-student-subject">${sl(s.subject)}</span>${s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : ''}</span>
       ${cancelBtn}
       ${canEdit ? `<button class="cs-remove" data-student-id="${s.id}" title="Убрать из списка"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>` : ''}
     </div>`;
@@ -1213,12 +1213,13 @@ function renderLessonStudentsList(filter) {
     truantStudents.forEach(s => {
       const ch = m.selectedIds.has(s.id);
       const indBadge = s.is_individual ? '<span class="lesson-ind-badge">Инд.</span>' : '';
+      const onlBadge = s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : '';
       const cancels = pendingCancels[s.id] || [];
       const dateBadges = cancels.map(c => {
         const timeStr = getCancelTimeStr(c);
         return timeStr ? `<span class="modal-truant-date">${timeStr}</span>` : '';
       }).filter(Boolean).join('');
-      html += `<label class="lesson-student-row truant-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${dateBadges}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
+      html += `<label class="lesson-student-row truant-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${onlBadge}${dateBadges}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
     });
     html += '</div>';
   }
@@ -1227,8 +1228,9 @@ function renderLessonStudentsList(filter) {
   regularStudents.forEach(s => {
     const ch = m.selectedIds.has(s.id);
     const indBadge = s.is_individual ? '<span class="lesson-ind-badge">Инд.</span>' : '';
+    const onlBadge = s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : '';
     const weekBadge = buildStudentWeekBadge(s.id);
-    html += `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
+    html += `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${onlBadge}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
   });
 
   list.innerHTML = html;
@@ -1268,7 +1270,7 @@ async function saveLesson() {
   const durationMin = (m.slotTo - m.slotFrom) * SLOT_MINUTES;
   const selectedStudents = allTeacherStudents.filter(s => m.selectedIds.has(s.id));
   for (const s of selectedStudents) {
-    if (!findPricing(durationMin, s.is_individual || false, s.price_type || 'new')) {
+    if (!findPricing(durationMin, s.is_individual || false, s.price_type || 'new', s.is_online || false)) {
       showToast(`Нет тарифа для ${s.first_name} ${s.last_name} (${durationMin} мин, ${s.is_individual ? 'инд.' : 'груп.'}, ${s.price_type === 'old' ? 'стар.' : 'нов.'})`, 'error');
       btn.disabled = false; return;
     }

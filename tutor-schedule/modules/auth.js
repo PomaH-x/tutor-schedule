@@ -31,6 +31,9 @@ function showAuthStep(stepId) {
 function showScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(screenId).classList.add('active');
+  if (typeof clearLessonTooltip === 'function') clearLessonTooltip();
+  if (typeof removeCellTooltip === 'function') removeCellTooltip();
+  if (typeof clearRecLessonTooltip === 'function') clearRecLessonTooltip();
 }
 
 async function loadProfile(userId) {

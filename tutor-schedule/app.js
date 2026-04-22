@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initRecurring();
   initCancellations();
   initPricingAndPayroll();
+  initOnline();
 
   document.getElementById('btn-profile').addEventListener('click', () => {
     openProfileScreen();

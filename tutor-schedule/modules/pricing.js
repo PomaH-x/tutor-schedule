@@ -15,8 +15,13 @@ function formatTierLabel(duration, isIndividual) {
   return isIndividual ? `${hStr} (Инд.)` : hStr;
 }
 
-function findPricing(duration, isIndividual, priceType) {
-  return pricingList.find(p => p.duration_minutes === duration && p.is_individual === isIndividual && p.price_type === priceType);
+function findPricing(duration, isIndividual, priceType, isOnline) {
+  if (isOnline) {
+    const online = pricingList.find(p => p.is_online === true && p.duration_minutes === duration && p.price_type === priceType);
+    if (online) return online;
+    return pricingList.find(p => p.is_individual === true && p.duration_minutes === duration && p.price_type === priceType);
+  }
+  return pricingList.find(p => !p.is_online && p.duration_minutes === duration && p.is_individual === isIndividual && p.price_type === priceType);
 }
 
 function hasAnyPricingForDuration(duration) {
@@ -39,17 +44,23 @@ function renderPricingAdmin(pricing) {
   }
 
   // Group: group first, then individual; within each, by price type
-  const grouped = { group_old: [], group_new: [], ind_old: [], ind_new: [] };
+  const grouped = { group_old: [], group_new: [], ind_old: [], ind_new: [], online_old: [], online_new: [] };
   pricing.forEach(p => {
-    const key = `${p.is_individual ? 'ind' : 'group'}_${p.price_type}`;
-    grouped[key].push(p);
+    if (p.is_online) {
+      grouped[`online_${p.price_type}`].push(p);
+    } else {
+      const key = `${p.is_individual ? 'ind' : 'group'}_${p.price_type}`;
+      if (grouped[key]) grouped[key].push(p);
+    }
   });
 
   const sections = [
     { key: 'group_new', title: 'Групповые · Новые цены' },
     { key: 'group_old', title: 'Групповые · Старые цены' },
     { key: 'ind_new', title: 'Индивидуальные · Новые цены' },
-    { key: 'ind_old', title: 'Индивидуальные · Старые цены' }
+    { key: 'ind_old', title: 'Индивидуальные · Старые цены' },
+    { key: 'online_new', title: 'Онлайн · Новые цены' },
+    { key: 'online_old', title: 'Онлайн · Старые цены' }
   ];
 
   let html = '';
@@ -80,7 +91,7 @@ function openPricingModal(pricing = null) {
   editingPricingId = pricing ? pricing.id : null;
   document.getElementById('pricing-modal-title').textContent = pricing ? 'Редактировать тариф' : 'Добавить тариф';
   document.getElementById('pricing-duration').value = pricing?.duration_minutes || 90;
-  document.getElementById('pricing-is-individual').value = String(pricing?.is_individual || false);
+  document.getElementById('pricing-is-individual').value = pricing?.is_online ? 'online' : String(pricing?.is_individual || false);
   document.getElementById('pricing-price-type').value = pricing?.price_type || 'new';
   document.getElementById('pricing-student-price').value = pricing?.student_price || '';
   document.getElementById('pricing-teacher-profit').value = pricing?.teacher_profit || '';
@@ -96,7 +107,9 @@ function closePricingModal() {
 
 async function savePricing() {
   const duration = parseInt(document.getElementById('pricing-duration').value);
-  const isIndividual = document.getElementById('pricing-is-individual').value === 'true';
+  const typeVal = document.getElementById('pricing-is-individual').value;
+  const isIndividual = typeVal === 'true' || typeVal === 'online';
+  const isOnline = typeVal === 'online';
   const priceType = document.getElementById('pricing-price-type').value;
   const studentPrice = parseInt(document.getElementById('pricing-student-price').value);
   const teacherProfit = parseInt(document.getElementById('pricing-teacher-profit').value);
@@ -106,7 +119,7 @@ async function savePricing() {
   if (isNaN(studentPrice) || isNaN(teacherProfit) || isNaN(commission)) { showToast('Заполните все суммы', 'error'); return; }
 
   const record = {
-    duration_minutes: duration, is_individual: isIndividual, price_type: priceType,
+    duration_minutes: duration, is_individual: isIndividual, is_online: isOnline, price_type: priceType,
     student_price: studentPrice, teacher_profit: teacherProfit, commission
   };
 
@@ -150,13 +163,13 @@ async function loadPayroll() {
   const isAdmin = state.profile.role === 'admin';
 
   let q = db.from('lessons')
-    .select('id, teacher_id, start_time, end_time, status, teacher:profiles!teacher_id(full_name, color, role), lesson_students(student_id, student:students(first_name, last_name, is_individual, price_type))')
+    .select('id, teacher_id, start_time, end_time, status, teacher:profiles!teacher_id(full_name, color, role), lesson_students(student_id, student:students(first_name, last_name, is_individual, is_online, price_type))')
     .eq('week_start', ws).in('status', ['active', 'cancelled']);
   if (!isAdmin) q = q.eq('teacher_id', state.user.id);
 
   // Also fetch pending cancellations for this week
   let qc = db.from('cancellations')
-    .select('id, student_id, teacher_id, lesson_start_time, student:students(first_name, last_name, is_individual, price_type)')
+    .select('id, student_id, teacher_id, lesson_start_time, student:students(first_name, last_name, is_individual, is_online, price_type)')
     .eq('week_start', ws).eq('status', 'pending');
   if (!isAdmin) qc = qc.eq('teacher_id', state.user.id);
 
@@ -193,7 +206,7 @@ function renderPayroll(lessons, cancellations, isAdmin) {
     }
     (lesson.lesson_students || []).forEach(ls => {
       const s = ls.student; if (!s) return;
-      const price = findPricing(durationMin, s.is_individual || false, s.price_type || 'new');
+      const price = findPricing(durationMin, s.is_individual || false, s.price_type || 'new', s.is_online || false);
       if (!price) return;
 
       const isTeacherAdmin = teacherRole === 'admin';
@@ -238,7 +251,7 @@ function renderPayroll(lessons, cancellations, isAdmin) {
       const paired = lessons.find(l => l.teacher_id === tId && l.status === 'cancelled' && l.start_time === c.lesson_start_time);
       if (paired) {
         const durMin = Math.round((new Date(paired.end_time) - new Date(paired.start_time)) / 60000);
-        const price = findPricing(durMin, s.is_individual || false, s.price_type || 'new');
+        const price = findPricing(durMin, s.is_individual || false, s.price_type || 'new', s.is_online || false);
         if (price) amount = price.student_price;
       }
     }

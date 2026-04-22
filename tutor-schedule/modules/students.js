@@ -132,7 +132,7 @@ function openStudentModal(title, student = null) {
   populateSubjectSelects();
   document.getElementById('student-subject').value = student?.subject || (subjectsList[0]?.name || '');
   document.getElementById('student-grade').value = student?.grade || 11;
-  document.getElementById('student-is-individual').value = String(student?.is_individual || false);
+  document.getElementById('student-is-individual').value = student?.is_online ? 'online' : String(student?.is_individual || false);
   document.getElementById('student-price-type').value = student?.price_type || 'new';
   document.getElementById('student-notes').value = student?.notes || '';
   document.getElementById('btn-delete-student').style.display = student ? 'block' : 'none';
@@ -154,7 +154,9 @@ async function saveStudent() {
   const lastName = document.getElementById('student-last-name').value.trim();
   const subject = document.getElementById('student-subject').value;
   const grade = parseInt(document.getElementById('student-grade').value);
-  const isIndividual = document.getElementById('student-is-individual').value === 'true';
+  const typeVal = document.getElementById('student-is-individual').value;
+  const isIndividual = typeVal === 'true' || typeVal === 'online';
+  const isOnline = typeVal === 'online';
   const priceType = document.getElementById('student-price-type').value;
   const notes = document.getElementById('student-notes').value.trim();
 
@@ -162,7 +164,7 @@ async function saveStudent() {
 
   const record = {
     first_name: firstName, last_name: lastName, subject, grade,
-    is_individual: isIndividual, price_type: priceType,
+    is_individual: isIndividual, is_online: isOnline, price_type: priceType,
     notes: notes || null, teacher_id: state.user.id
   };
 
