@@ -999,7 +999,7 @@ async function loadTeacherStudentsForModal(tid) {
   const threeWeeksAgo = new Date(getMonday(new Date()));
   threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 14);
   const { data: cancellations } = await db.from('cancellations')
-    .select('id, student_id, week_start, status, lesson_start_time, lesson_day, recurring_lesson:recurring_lessons(start_time, day_of_week)')
+    .select('id, student_id, week_start, status, lesson_start_time, lesson_day, is_paid, recurring_lesson:recurring_lessons(start_time, day_of_week)')
     .eq('teacher_id', tid).in('status', ['pending', 'transferred'])
     .gte('week_start', formatDate(threeWeeksAgo));
 
@@ -1086,20 +1086,20 @@ function renderCurrentStudents() {
         const lessonStartTime = lesson?.start_time;
         const lessonWeekStart = lesson?.week_start;
         const lessonDay = m.day;
-        showConfirm(`Отменить ${s?.first_name || ''} ${s?.last_name || ''}?`, async () => {
+        showCancelConfirm(`Отменить ${s?.first_name || ''} ${s?.last_name || ''}?`, async (isPaid) => {
           await db.from('lesson_students').delete().eq('lesson_id', lessonId).eq('student_id', sid);
           const ws = lessonWeekStart || formatDate(getMonday(new Date()));
-          await db.from('cancellations').insert({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_day: lessonDay });
+          await db.from('cancellations').insert({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_day: lessonDay, is_paid: isPaid });
           m.selectedIds.delete(sid);
           const isEmpty = m.selectedIds.size === 0;
           await cleanEmptyLesson(lessonId);
           await loadLessons();
-          if (isEmpty) { closeLessonModal(); showToast('Ученик отменён, занятие удалено', 'success'); return; }
+          if (isEmpty) { closeLessonModal(); showToast(isPaid ? 'Ученик отменён (платно), занятие удалено' : 'Ученик отменён, занятие удалено', 'success'); return; }
           await loadTeacherStudentsForModal(teacherId);
           renderCurrentStudents();
           renderLessonStudentsList(document.getElementById('lesson-student-search').value.trim());
-          showToast('Ученик отменён', 'success');
-        }, 'Отменить');
+          showToast(isPaid ? 'Ученик отменён (платно)' : 'Ученик отменён', 'success');
+        });
       });
     });
     if (m.mode === 'edit' || m.mode === 'rec-edit') {
@@ -1193,7 +1193,7 @@ function renderLessonStudentsList(filter) {
   const truantIds = new Set();
   const pendingCancels = {};
   Object.entries(studentCancellations).forEach(([sid, cancels]) => {
-    const pending = cancels.filter(c => c.status === 'pending');
+    const pending = cancels.filter(c => c.status === 'pending' && !c.is_paid);
     if (pending.length > 0) { truantIds.add(sid); pendingCancels[sid] = pending; }
   });
 

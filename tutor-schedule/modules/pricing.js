@@ -169,7 +169,7 @@ async function loadPayroll() {
 
   // Also fetch pending cancellations for this week
   let qc = db.from('cancellations')
-    .select('id, student_id, teacher_id, lesson_start_time, student:students(first_name, last_name, is_individual, is_online, price_type)')
+    .select('id, student_id, teacher_id, lesson_start_time, is_paid, student:students(first_name, last_name, is_individual, is_online, price_type)')
     .eq('week_start', ws).eq('status', 'pending');
   if (!isAdmin) qc = qc.eq('teacher_id', state.user.id);
 
@@ -226,11 +226,10 @@ function renderPayroll(lessons, cancellations, isAdmin) {
     });
   });
 
-  // Process cancellations — add cancelled students (red rows) + counter
+  // Process cancellations — add cancelled students (red/yellow rows) + counter
   cancellations.forEach(c => {
     const tId = c.teacher_id;
     if (!payrollTeacherData[tId]) {
-      // Teacher may have only cancellations this week — fetch from a cancelled lesson if possible
       const cancelledLesson = lessons.find(l => l.teacher_id === tId);
       payrollTeacherData[tId] = {
         name: cancelledLesson?.teacher?.full_name || '',
@@ -246,7 +245,6 @@ function renderPayroll(lessons, cancellations, isAdmin) {
     const s = c.student;
     if (!s) return;
     let amount = 0;
-    // Try to find cancelled lesson to get duration
     if (c.lesson_start_time) {
       const paired = lessons.find(l => l.teacher_id === tId && l.status === 'cancelled' && l.start_time === c.lesson_start_time);
       if (paired) {
@@ -255,14 +253,36 @@ function renderPayroll(lessons, cancellations, isAdmin) {
         if (price) amount = price.student_price;
       }
     }
-    // Fallback: try all durations in pricing list for this student type
     if (amount === 0) {
       const match = pricingList.find(p => p.is_individual === (s.is_individual || false) && p.price_type === (s.price_type || 'new'));
       if (match) amount = match.student_price;
     }
+
+    // If paid cancellation — add to revenue/profit/commission as a regular lesson
+    if (c.is_paid && amount > 0) {
+      const isTeacherAdmin = payrollTeacherData[tId].role === 'admin';
+      // Try to find tariff again for proper profit/commission
+      const dur = c.lesson_start_time ? (() => {
+        const paired = lessons.find(l => l.teacher_id === tId && l.status === 'cancelled' && l.start_time === c.lesson_start_time);
+        if (paired) return Math.round((new Date(paired.end_time) - new Date(paired.start_time)) / 60000);
+        return null;
+      })() : null;
+      let priceObj = null;
+      if (dur) priceObj = findPricing(dur, s.is_individual || false, s.price_type || 'new', s.is_online || false);
+      if (!priceObj) priceObj = pricingList.find(p => p.is_individual === (s.is_individual || false) && p.price_type === (s.price_type || 'new'));
+      if (priceObj) {
+        const eff = isTeacherAdmin ? priceObj.student_price : priceObj.teacher_profit;
+        const com = isTeacherAdmin ? 0 : priceObj.commission;
+        payrollTeacherData[tId].revenue += priceObj.student_price;
+        payrollTeacherData[tId].profit += eff;
+        payrollTeacherData[tId].commission += com;
+      }
+    }
+
     payrollTeacherData[tId].cancelledStudents.push({
       name: `${s.first_name} ${s.last_name}`,
-      amount
+      amount,
+      isPaid: !!c.is_paid
     });
   });
 
@@ -325,7 +345,7 @@ function cancelDeclension(n) {
       html += `<div class="payroll-student"><span class="ps-name">${s.name}</span><span class="ps-count">${s.count} зан.</span><span class="ps-amount">${s.amount} ₽</span></div>`;
     });
     data.cancelledStudents.forEach(cs => {
-      html += `<div class="payroll-student payroll-student-cancelled"><span class="ps-name">${cs.name}</span><span class="ps-count">отменено</span><span class="ps-amount">${cs.amount} ₽</span></div>`;
+      html += `<div class="payroll-student ${cs.isPaid ? 'payroll-student-paid' : 'payroll-student-cancelled'}"><span class="ps-name">${cs.name}</span><span class="ps-count">отменено</span><span class="ps-amount">${cs.amount} ₽</span></div>`;
     });
     html += `</div></div>`;
   });

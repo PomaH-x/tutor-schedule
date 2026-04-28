@@ -90,7 +90,7 @@ async function computeAndSyncCancellations() {
     const recurringCount = (recurringByStudent[sid] || []).length;
     const extra = (activeByStudent[sid] || []).length - recurringCount;
     if (extra > 0) {
-      const { data: pending } = await db.from('cancellations').select('id').eq('student_id', sid).eq('teacher_id', teacherId).eq('status', 'pending').order('week_start').limit(extra);
+      const { data: pending } = await db.from('cancellations').select('id').eq('student_id', sid).eq('teacher_id', teacherId).eq('status', 'pending').eq('is_paid', false).order('week_start').limit(extra);
       if (pending?.length > 0) await db.from('cancellations').update({ status: 'made_up' }).in('id', pending.map(p => p.id));
     }
   }
@@ -98,7 +98,7 @@ async function computeAndSyncCancellations() {
     const recurringCount = (recurringByStudent[sid] || []).length;
     const extra = nextStudentCount[sid] - recurringCount;
     if (extra > 0) {
-      const { data: pending } = await db.from('cancellations').select('id').eq('student_id', sid).eq('teacher_id', teacherId).eq('status', 'pending').order('week_start').limit(extra);
+      const { data: pending } = await db.from('cancellations').select('id').eq('student_id', sid).eq('teacher_id', teacherId).eq('status', 'pending').eq('is_paid', false).order('week_start').limit(extra);
       if (pending?.length > 0) await db.from('cancellations').update({ status: 'made_up' }).in('id', pending.map(p => p.id));
     }
   }
@@ -118,6 +118,7 @@ async function loadTruants() {
   let q = db.from('cancellations')
     .select('*, student:students(first_name, last_name), recurring_lesson:recurring_lessons(start_time, end_time, day_of_week), teacher:profiles!teacher_id(full_name)')
     .eq('status', 'pending')
+    .eq('is_paid', false)
     .gte('week_start', formatDate(threeWeeksAgo));
   if (!isAdmin) q = q.eq('teacher_id', state.user.id);
   q = q.order('week_start', { ascending: false });
@@ -266,7 +267,7 @@ async function placeTruantOnCell(day, room, slot) {
   await db.from('lesson_students').insert({ lesson_id: result.data.id, student_id: t.studentId });
 
   // Close one pending cancellation for this student
-  var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
+  var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').eq('is_paid', false).order('week_start').limit(1);
   if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
 
   state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
@@ -296,7 +297,7 @@ async function placeTruantOnLesson(targetLessonId) {
   await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: t.studentId });
 
   // Close one pending cancellation for this student
-  var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
+  var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').eq('is_paid', false).order('week_start').limit(1);
   if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
 
   state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();

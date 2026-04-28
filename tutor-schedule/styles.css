@@ -1913,6 +1913,39 @@ input, textarea, select {
   color: var(--danger);
 }
 
+.payroll-student-paid {
+  background: rgba(245, 197, 24, 0.12);
+}
+
+.payroll-student-paid .ps-name,
+.payroll-student-paid .ps-count,
+.payroll-student-paid .ps-amount {
+  color: #f5c518;
+}
+
+[data-theme="light"] .payroll-student-paid .ps-name,
+[data-theme="light"] .payroll-student-paid .ps-count,
+[data-theme="light"] .payroll-student-paid .ps-amount {
+  color: #8b5a00;
+}
+
+.paid-cancel-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.paid-cancel-checkbox input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .payroll-cancel-count {
   margin-left: auto;
   padding: 2px 8px;
@@ -2410,7 +2443,8 @@ input, textarea, select {
   padding: 16px;
 }
 
-#confirm-overlay {
+#confirm-overlay,
+#cancel-confirm-overlay {
   z-index: 200;
 }
 

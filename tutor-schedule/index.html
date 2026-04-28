@@ -490,6 +490,22 @@
       </div>
     </div>
 
+    <div id="cancel-confirm-overlay" class="modal-overlay">
+      <div class="modal modal-sm">
+        <div class="modal-body" style="padding:20px 24px">
+          <p id="cancel-confirm-text" style="margin-bottom:14px">Отменить ученика?</p>
+          <label class="paid-cancel-checkbox">
+            <input type="checkbox" id="cancel-is-paid">
+            <span>Платная отмена (день занятия)</span>
+          </label>
+        </div>
+        <div class="modal-footer" style="justify-content:center">
+          <button class="btn-secondary" id="btn-cancel-confirm-close">Закрыть</button>
+          <button class="btn-cancel-action" id="btn-cancel-confirm-ok">Отменить</button>
+        </div>
+      </div>
+    </div>
+
     <div id="lesson-overlay" class="modal-overlay">
       <div class="modal" id="modal-lesson">
         <div class="modal-header">

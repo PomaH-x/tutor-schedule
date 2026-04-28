@@ -92,7 +92,7 @@ function renderOnlineLessons() {
       const sid = btn.dataset.studentId;
       const name = btn.dataset.name;
       const lesson = onlineLessons.find(l => l.id === lid);
-      showConfirm(`Отменить ${name}?`, async () => {
+      showCancelConfirm(`Отменить ${name}?`, async (isPaid) => {
         await db.from('lesson_students').delete().eq('lesson_id', lid).eq('student_id', sid);
         const ws = lesson?.week_start || formatDate(getOnlineWeekStart());
         const startTime = lesson?.start_time || null;
@@ -100,16 +100,16 @@ function renderOnlineLessons() {
         const { error: cancelErr } = await db.from('cancellations').insert({
           student_id: sid, teacher_id: lesson?.teacher_id || state.user.id,
           week_start: ws, status: 'pending',
-          lesson_start_time: startTime, lesson_day: startDay
+          lesson_start_time: startTime, lesson_day: startDay, is_paid: isPaid
         });
         if (cancelErr) console.error('Cancel insert error:', cancelErr);
         const { data: remaining } = await db.from('lesson_students').select('student_id').eq('lesson_id', lid);
         if (!remaining || remaining.length === 0) {
           await db.from('lessons').delete().eq('id', lid);
         }
-        showToast('Ученик отменён', 'success');
+        showToast(isPaid ? 'Ученик отменён (платно)' : 'Ученик отменён', 'success');
         await loadOnlineLessons();
-      }, 'Отменить');
+      });
     });
   });
 

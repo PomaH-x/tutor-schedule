@@ -184,6 +184,7 @@ async function saveStudent() {
 }
 
 let confirmCallback = null;
+let cancelConfirmCallback = null;
 
 function showConfirm(text, callback, btnLabel) {
   document.getElementById('confirm-text').textContent = text;
@@ -195,6 +196,18 @@ function showConfirm(text, callback, btnLabel) {
 function closeConfirm() {
   document.getElementById('confirm-overlay').classList.remove('active');
   confirmCallback = null;
+}
+
+function showCancelConfirm(text, callback) {
+  document.getElementById('cancel-confirm-text').textContent = text;
+  document.getElementById('cancel-is-paid').checked = false;
+  cancelConfirmCallback = callback;
+  document.getElementById('cancel-confirm-overlay').classList.add('active');
+}
+
+function closeCancelConfirm() {
+  document.getElementById('cancel-confirm-overlay').classList.remove('active');
+  cancelConfirmCallback = null;
 }
 
 async function deleteStudent() {
@@ -226,6 +239,13 @@ function initStudents() {
   document.getElementById('btn-confirm-ok').addEventListener('click', () => {
     if (confirmCallback) confirmCallback();
     closeConfirm();
+  });
+
+  document.getElementById('btn-cancel-confirm-close').addEventListener('click', closeCancelConfirm);
+  document.getElementById('btn-cancel-confirm-ok').addEventListener('click', () => {
+    const isPaid = document.getElementById('cancel-is-paid').checked;
+    if (cancelConfirmCallback) cancelConfirmCallback(isPaid);
+    closeCancelConfirm();
   });
 
   document.getElementById('student-search').addEventListener('input', (e) => {
