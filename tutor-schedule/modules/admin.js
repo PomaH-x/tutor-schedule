@@ -335,9 +335,13 @@ async function openTeacherSubjectsModal(teacherId, teacherName) {
       const sid = cb.dataset.id;
       cb.closest('.lesson-student-row').classList.toggle('checked', cb.checked);
       if (cb.checked) {
-        await db.from('teacher_subjects').insert({ teacher_id: teacherId, subject_id: sid });
+        const { error } = await db.from('teacher_subjects').insert({ teacher_id: teacherId, subject_id: sid });
+        if (error) { console.error('Subject insert error:', error); showToast('Ошибка сохранения: ' + error.message, 'error'); cb.checked = false; cb.closest('.lesson-student-row').classList.remove('checked'); }
+        else showToast('Предмет добавлен', 'success');
       } else {
-        await db.from('teacher_subjects').delete().eq('teacher_id', teacherId).eq('subject_id', sid);
+        const { error } = await db.from('teacher_subjects').delete().eq('teacher_id', teacherId).eq('subject_id', sid);
+        if (error) { console.error('Subject delete error:', error); showToast('Ошибка удаления: ' + error.message, 'error'); cb.checked = true; cb.closest('.lesson-student-row').classList.add('checked'); }
+        else showToast('Предмет убран', 'success');
       }
     });
   });

@@ -108,7 +108,7 @@ function renderStudents(filter = '') {
   }
 
   list.querySelectorAll('.student-card').forEach(card => {
-    card.addEventListener('click', () => openEditStudent(card.dataset.id));
+    card.addEventListener('click', () => openStudentDetail(card.dataset.id));
   });
 }
 
@@ -267,4 +267,186 @@ function initStudents() {
   document.getElementById('confirm-overlay').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeConfirm();
   });
+
+  // Student detail modal
+  document.getElementById('btn-close-student-detail').addEventListener('click', closeStudentDetail);
+  document.getElementById('btn-cancel-student-detail').addEventListener('click', closeStudentDetail);
+  document.getElementById('btn-save-student-detail').addEventListener('click', saveStudentDetail);
+  document.getElementById('student-detail-overlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeStudentDetail();
+  });
+}
+
+let studentDetailId = null;
+
+async function openStudentDetail(studentId) {
+  studentDetailId = studentId;
+  const { data: student } = await db.from('students')
+    .select('*, teacher:profiles!teacher_id(full_name, color)')
+    .eq('id', studentId).single();
+  if (!student) { showToast('Ученик не найден', 'error'); return; }
+
+  document.getElementById('student-detail-title').textContent = `${student.first_name} ${student.last_name}`;
+
+  // Attendance
+  const attendance = await computeStudentAttendance(studentId);
+
+  // Recent lessons (last 4 weeks)
+  const fourWeeksAgo = new Date(); fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
+  const { data: lessons } = await db.from('lessons')
+    .select('id, start_time, end_time, status, room, week_start, lesson_students!inner(student_id)')
+    .eq('lesson_students.student_id', studentId)
+    .gte('start_time', fourWeeksAgo.toISOString())
+    .in('status', ['active', 'cancelled'])
+    .order('start_time', { ascending: false })
+    .limit(20);
+
+  // Payments
+  const { data: payments } = await db.from('payments')
+    .select('id, lesson_id, amount, payment_method, status, submitted_at')
+    .eq('student_id', studentId)
+    .order('submitted_at', { ascending: false });
+
+  const pendingPayments = (payments || []).filter(p => p.status === 'pending');
+  const paymentsByLesson = {};
+  (payments || []).forEach(p => { paymentsByLesson[p.lesson_id] = p; });
+
+  // Build body
+  const body = document.getElementById('student-detail-body');
+  const typeLabel = student.is_online ? 'Онлайн' : (student.is_individual ? 'Индивидуальное' : 'Групповое');
+  const priceLabel = student.price_type === 'old' ? 'Старая' : 'Новая';
+
+  let html = `
+    <div class="sd-top">
+      <div class="sd-attendance"><span class="sd-att-num">${attendance}%</span><span class="sd-att-label">Посещаемость</span></div>
+      <div class="sd-fields">
+        <div class="form-row">
+          <div class="form-group"><label>Предмет</label><input type="text" id="sd-subject" value="${student.subject || ''}"></div>
+          <div class="form-group"><label>Класс</label><input type="number" id="sd-grade" value="${student.grade || ''}" min="5" max="11"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Тип занятия</label>
+            <select id="sd-type">
+              <option value="false" ${!student.is_individual && !student.is_online ? 'selected' : ''}>Групповое</option>
+              <option value="true" ${student.is_individual && !student.is_online ? 'selected' : ''}>Индивидуальное</option>
+              <option value="online" ${student.is_online ? 'selected' : ''}>Онлайн</option>
+            </select>
+          </div>
+          <div class="form-group"><label>Тип цены</label>
+            <select id="sd-price-type">
+              <option value="new" ${student.price_type === 'new' ? 'selected' : ''}>Новая</option>
+              <option value="old" ${student.price_type === 'old' ? 'selected' : ''}>Старая</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group"><label>Примечание</label><textarea id="sd-note" rows="2">${student.notes || ''}</textarea></div>
+      </div>
+    </div>
+
+    <div class="sd-section">
+      <h4>Занятия</h4>
+      <div class="sd-table-wrap">
+        <table class="sd-table">
+          <thead><tr><th>Дата</th><th>Время</th><th>Длит.</th><th>Каб.</th><th>Статус</th><th>Оплата</th></tr></thead>
+          <tbody>`;
+
+  (lessons || []).forEach(l => {
+    const s = new Date(l.start_time); const e = new Date(l.end_time);
+    const dur = Math.round((e - s) / 60000);
+    const dd = s.getDate().toString().padStart(2,'0');
+    const mm = (s.getMonth()+1).toString().padStart(2,'0');
+    const dayIdx = s.getDay() === 0 ? 6 : s.getDay() - 1;
+    const day = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][dayIdx];
+    const time = `${s.getHours().toString().padStart(2,'0')}:${s.getMinutes().toString().padStart(2,'0')}`;
+    const room = l.room === 0 ? 'Онл.' : ['Л','Ц','П'][l.room - 1] || '';
+    const isActive = l.status === 'active';
+    const past = e < new Date();
+    const statusStr = l.status === 'cancelled' ? '<span class="history-status history-cancelled">Отм.</span>'
+      : past ? '<span class="history-status history-completed">✓</span>'
+      : '<span class="history-status history-planned">⏳</span>';
+    const p = paymentsByLesson[l.id];
+    const payStr = !past ? '—' : p?.status === 'approved' ? '<span class="pay-paid">✓</span>' : p?.status === 'pending' ? '<span class="pay-pending">⏳</span>' : '<span class="pay-unpaid">✕</span>';
+
+    html += `<tr><td>${dd}.${mm} ${day}</td><td>${time}</td><td>${dur}</td><td>${room}</td><td>${statusStr}</td><td>${payStr}</td></tr>`;
+  });
+
+  html += `</tbody></table></div></div>`;
+
+  // Pending payments
+  if (pendingPayments.length > 0) {
+    html += `<div class="sd-section"><h4>Заявки на оплату</h4><div class="sd-payments">`;
+    pendingPayments.forEach(p => {
+      const d = new Date(p.submitted_at);
+      const dd = d.getDate().toString().padStart(2,'0');
+      const mm = (d.getMonth()+1).toString().padStart(2,'0');
+      const methodLabel = p.payment_method === 'cash' ? 'Наличными' : 'Переводом';
+      html += `<div class="sd-payment-row">
+        <span class="sd-pay-info">${dd}.${mm} · ${p.amount} ₽ · ${methodLabel}</span>
+        <div class="sd-pay-actions">
+          <button class="btn-sm btn-primary" data-approve="${p.id}">Подтвердить</button>
+          <button class="btn-sm btn-danger" data-reject="${p.id}">Отклонить</button>
+        </div>
+      </div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  body.innerHTML = html;
+
+  body.querySelectorAll('[data-approve]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await db.from('payments').update({ status: 'approved', approved_at: new Date().toISOString(), approved_by_id: state.user.id }).eq('id', btn.dataset.approve);
+      showToast('Оплата подтверждена', 'success');
+      await openStudentDetail(studentId);
+    });
+  });
+
+  body.querySelectorAll('[data-reject]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await db.from('payments').update({ status: 'rejected' }).eq('id', btn.dataset.reject);
+      showToast('Оплата отклонена', 'success');
+      await openStudentDetail(studentId);
+    });
+  });
+
+  document.getElementById('student-detail-overlay').classList.add('active');
+}
+
+function closeStudentDetail() {
+  document.getElementById('student-detail-overlay').classList.remove('active');
+  studentDetailId = null;
+}
+
+async function saveStudentDetail() {
+  if (!studentDetailId) return;
+  const typeVal = document.getElementById('sd-type').value;
+  const update = {
+    subject: document.getElementById('sd-subject').value.trim(),
+    grade: parseInt(document.getElementById('sd-grade').value) || null,
+    is_individual: typeVal === 'true' || typeVal === 'online',
+    is_online: typeVal === 'online',
+    price_type: document.getElementById('sd-price-type').value,
+    notes: document.getElementById('sd-note').value.trim() || null
+  };
+  const { error } = await db.from('students').update(update).eq('id', studentDetailId);
+  if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
+  showToast('Сохранено', 'success');
+  closeStudentDetail();
+  renderStudents(document.getElementById('student-search').value);
+}
+
+async function computeStudentAttendance(studentId) {
+  const { data: lessons } = await db.from('lessons')
+    .select('id, status, lesson_students!inner(student_id)')
+    .eq('lesson_students.student_id', studentId)
+    .lte('start_time', new Date().toISOString())
+    .in('status', ['active', 'cancelled']);
+  const { data: cancellations } = await db.from('cancellations')
+    .select('id, is_paid, status')
+    .eq('student_id', studentId).eq('status', 'pending');
+  const total = (lessons || []).length + (cancellations || []).length;
+  if (total === 0) return 0;
+  const completed = (lessons || []).filter(l => l.status === 'active').length
+    + (cancellations || []).filter(c => c.is_paid).length;
+  return Math.round((completed / total) * 100);
 }

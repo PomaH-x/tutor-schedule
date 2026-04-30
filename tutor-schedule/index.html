@@ -83,14 +83,14 @@
             <input type="text" id="input-name1" placeholder="" autocomplete="given-name">
             <input type="text" id="input-name2" placeholder="" autocomplete="family-name">
             <input type="tel" id="input-reg-login" placeholder="Телефон" autocomplete="tel">
-            <div id="student-reg-fields" style="display:none">
-              <select id="reg-teacher-id" class="auth-select">
+            <div id="student-reg-fields" class="student-reg-fields" style="display:none">
+              <select id="reg-teacher-id">
                 <option value="">Выберите преподавателя</option>
               </select>
-              <select id="reg-subject" class="auth-select">
-                <option value="">Выберите предмет</option>
+              <select id="reg-subject">
+                <option value="">Сначала выберите преподавателя</option>
               </select>
-              <select id="reg-grade" class="auth-select">
+              <select id="reg-grade">
                 <option value="">Класс</option>
                 <option value="5">5 класс</option>
                 <option value="6">6 класс</option>
@@ -619,6 +619,23 @@
           <div class="modal-footer-right">
             <button class="btn-secondary" id="btn-payment-cancel">Закрыть</button>
             <button class="btn-primary" id="btn-payment-submit">Отправить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="student-detail-overlay" class="modal-overlay">
+      <div class="modal modal-wide">
+        <div class="modal-header">
+          <h3 id="student-detail-title">Карточка ученика</h3>
+          <button class="btn-modal-close" id="btn-close-student-detail">×</button>
+        </div>
+        <div class="modal-body" id="student-detail-body">
+        </div>
+        <div class="modal-footer">
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-cancel-student-detail">Закрыть</button>
+            <button class="btn-primary" id="btn-save-student-detail">Сохранить</button>
           </div>
         </div>
       </div>

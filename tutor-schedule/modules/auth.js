@@ -76,11 +76,18 @@ async function loadTeachersForRegistration() {
   sel.innerHTML = '<option value="">Выберите преподавателя</option>';
   subjSel.innerHTML = '<option value="">Сначала выберите преподавателя</option>';
 
-  const { data } = await db.from('profiles')
+  const { data, error } = await db.from('profiles')
     .select('id, full_name')
     .in('role', ['teacher', 'admin'])
     .eq('status', 'approved')
     .order('full_name');
+
+  if (error) console.error('Load teachers error:', error);
+
+  if (!data || data.length === 0) {
+    sel.innerHTML = '<option value="">Нет преподавателей</option>';
+    return;
+  }
 
   (data || []).forEach(t => {
     const opt = document.createElement('option');
