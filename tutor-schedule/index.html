@@ -64,7 +64,7 @@
           <button class="auth-back" id="btn-back-to-role">← Назад</button>
           <p class="auth-subtitle">Вход</p>
           <div class="auth-form">
-            <input type="text" id="input-login" placeholder="Логин" autocomplete="username">
+            <input type="tel" id="input-login" placeholder="Телефон" autocomplete="tel">
             <div class="password-field">
               <input type="password" id="input-password" placeholder="Пароль" autocomplete="current-password">
               <button type="button" class="btn-eye" data-target="input-password">
@@ -82,7 +82,25 @@
           <div class="auth-form">
             <input type="text" id="input-name1" placeholder="" autocomplete="given-name">
             <input type="text" id="input-name2" placeholder="" autocomplete="family-name">
-            <input type="text" id="input-reg-login" placeholder="Логин" autocomplete="username">
+            <input type="tel" id="input-reg-login" placeholder="Телефон" autocomplete="tel">
+            <div id="student-reg-fields" style="display:none">
+              <select id="reg-teacher-id" class="auth-select">
+                <option value="">Выберите преподавателя</option>
+              </select>
+              <select id="reg-subject" class="auth-select">
+                <option value="">Выберите предмет</option>
+              </select>
+              <select id="reg-grade" class="auth-select">
+                <option value="">Класс</option>
+                <option value="5">5 класс</option>
+                <option value="6">6 класс</option>
+                <option value="7">7 класс</option>
+                <option value="8">8 класс</option>
+                <option value="9">9 класс</option>
+                <option value="10">10 класс</option>
+                <option value="11">11 класс</option>
+              </select>
+            </div>
             <div class="password-field">
               <input type="password" id="input-reg-password" placeholder="Пароль" autocomplete="new-password">
               <button type="button" class="btn-eye" data-target="input-reg-password">
@@ -205,6 +223,87 @@
         <button class="week-tab" data-offset="2">2 нед. вперёд</button>
       </div>
       <div id="online-lessons-list" class="online-lessons-list"></div>
+    </div>
+
+    <div id="screen-student" class="screen">
+      <header class="top-bar">
+        <div class="top-bar-left">
+          <h2>Расписание</h2>
+          <button class="btn-schedule-type" id="btn-student-history" title="История занятий">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>
+            История
+          </button>
+        </div>
+        <div class="top-bar-right">
+          <label class="theme-toggle" title="Сменить тему">
+            <input type="checkbox" id="theme-switch-student" class="theme-switch-sync">
+            <span class="theme-slider"></span>
+          </label>
+          <button class="btn-icon" id="btn-profile-student" title="Профиль">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+      <div class="week-tabs" id="student-week-tabs">
+        <button class="week-tab" data-offset="-2">2 нед. назад</button>
+        <button class="week-tab" data-offset="-1">Предыдущая</button>
+        <button class="week-tab active" data-offset="0">Текущая</button>
+        <button class="week-tab" data-offset="1">Следующая</button>
+        <button class="week-tab" data-offset="2">2 нед. вперёд</button>
+      </div>
+      <div class="student-summary" id="student-summary"></div>
+      <div class="student-lessons-list" id="student-lessons-list"></div>
+    </div>
+
+    <div id="screen-student-history" class="screen">
+      <header class="top-bar">
+        <div class="top-bar-left">
+          <h2>История занятий</h2>
+          <button class="btn-schedule-type" id="btn-student-back" title="Назад">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+            Назад
+          </button>
+        </div>
+        <div class="top-bar-right">
+          <label class="theme-toggle" title="Сменить тему">
+            <input type="checkbox" id="theme-switch-student-history" class="theme-switch-sync">
+            <span class="theme-slider"></span>
+          </label>
+          <button class="btn-icon" id="btn-profile-student-history" title="Профиль">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+      <div class="month-slider">
+        <button class="month-nav" id="btn-month-prev">‹</button>
+        <span class="month-label" id="month-label">Май 2026</span>
+        <button class="month-nav" id="btn-month-next">›</button>
+      </div>
+      <div class="student-history-table-wrap">
+        <table class="student-history-table">
+          <thead>
+            <tr>
+              <th>Дата</th>
+              <th>День</th>
+              <th>Время</th>
+              <th>Длит.</th>
+              <th>Предмет</th>
+              <th>Преподаватель</th>
+              <th>Кабинет</th>
+              <th>Статус</th>
+              <th>Сумма</th>
+              <th>Оплата</th>
+            </tr>
+          </thead>
+          <tbody id="student-history-tbody"></tbody>
+        </table>
+      </div>
     </div>
 
     <div id="online-create-overlay" class="modal-overlay">
@@ -337,6 +436,11 @@
           <div class="profile-details">
             <h3 id="profile-name"></h3>
             <span class="profile-role" id="profile-role"></span>
+          </div>
+          <div class="profile-telegram" id="profile-telegram-wrap" style="display:none">
+            <label>Telegram:</label>
+            <input type="text" id="profile-telegram-input" placeholder="username (без @)">
+            <button class="btn-sm btn-primary" id="btn-save-telegram">Сохранить</button>
           </div>
         </div>
 
@@ -490,13 +594,62 @@
       </div>
     </div>
 
+    <div id="payment-overlay" class="modal-overlay">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <h3>Оплата занятия</h3>
+          <button class="btn-modal-close" id="btn-close-payment">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="payment-amount-display">
+            <span class="payment-label">Сумма к оплате</span>
+            <span class="payment-amount" id="payment-amount">0 ₽</span>
+          </div>
+          <label class="payment-method-label">Способ оплаты</label>
+          <label class="lesson-student-row payment-method-row">
+            <span class="lesson-student-name">Наличными</span>
+            <input type="radio" name="payment-method" value="cash" class="lesson-checkbox">
+          </label>
+          <label class="lesson-student-row payment-method-row">
+            <span class="lesson-student-name">Переводом</span>
+            <input type="radio" name="payment-method" value="transfer" class="lesson-checkbox">
+          </label>
+        </div>
+        <div class="modal-footer">
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-payment-cancel">Закрыть</button>
+            <button class="btn-primary" id="btn-payment-submit">Отправить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="teacher-subj-overlay" class="modal-overlay">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <h3 id="teacher-subj-title">Предметы преподавателя</h3>
+          <button class="btn-modal-close" id="btn-close-teacher-subj">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="teacher-subj-modal" data-teacher-id="">
+            <div id="teacher-subj-list" class="lesson-students-list" style="max-height:300px;overflow-y:auto"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-cancel-teacher-subj">Закрыть</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="cancel-confirm-overlay" class="modal-overlay">
       <div class="modal modal-sm">
         <div class="modal-body" style="padding:20px 24px">
           <p id="cancel-confirm-text" style="margin-bottom:14px">Отменить ученика?</p>
-          <label class="paid-cancel-checkbox">
-            <input type="checkbox" id="cancel-is-paid">
-            <span>Платная отмена (день занятия)</span>
+          <label class="lesson-student-row" style="margin-top:8px;cursor:pointer">
+            <span class="lesson-student-name">Платная отмена</span>
+            <input type="checkbox" id="cancel-is-paid" class="lesson-checkbox">
           </label>
         </div>
         <div class="modal-footer" style="justify-content:center">
@@ -558,6 +711,7 @@
   <script src="modules/recurring.js"></script>
   <script src="modules/cancellations.js"></script>
   <script src="modules/online.js"></script>
+  <script src="modules/student.js"></script>
   <script src="modules/pricing.js"></script>
   <script src="modules/admin.js"></script>
   <script src="app.js"></script>

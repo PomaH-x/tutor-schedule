@@ -27,7 +27,7 @@ async function loadPendingCount() {
 async function loadPendingUsers() {
   const { data } = await db
     .from('profiles')
-    .select('*')
+    .select('*, requested_teacher:profiles!requested_teacher_id(full_name, color)')
     .eq('status', 'pending')
     .order('created_at');
   pendingUsers = data || [];
@@ -43,18 +43,33 @@ function renderPendingUsers() {
 
   const roleLabel = { teacher: 'Преподаватель', student: 'Ученик', admin: 'Админ' };
 
-  list.innerHTML = pendingUsers.map(u => `
-    <div class="pending-card" data-id="${u.id}">
-      <div class="pending-info">
-        <span class="pending-name">${u.full_name}</span>
-        <span class="pending-role">${roleLabel[u.role] || u.role}</span>
+  list.innerHTML = pendingUsers.map(u => {
+    const isStudent = u.role === 'student';
+    let details = '';
+    if (isStudent) {
+      const tColor = u.requested_teacher?.color || '#1e6fe8';
+      const tName = u.requested_teacher?.full_name || '—';
+      details = `<div class="pending-details">
+        ${u.phone ? `<div class="pending-row"><span class="pending-label">Телефон:</span><span>${u.phone}</span></div>` : ''}
+        <div class="pending-row"><span class="pending-label">Преподаватель:</span><span><span class="teacher-color-dot" style="background:${tColor}"></span>${tName}</span></div>
+        ${u.requested_subject ? `<div class="pending-row"><span class="pending-label">Предмет:</span><span>${u.requested_subject}</span></div>` : ''}
+        ${u.requested_grade ? `<div class="pending-row"><span class="pending-label">Класс:</span><span>${u.requested_grade}</span></div>` : ''}
+      </div>`;
+    }
+    return `<div class="pending-card pending-card-expanded" data-id="${u.id}">
+      <div class="pending-header">
+        <div class="pending-info">
+          <span class="pending-name">${u.full_name}</span>
+          <span class="pending-role">${roleLabel[u.role] || u.role}</span>
+        </div>
+        <div class="pending-actions">
+          <button class="btn-approve" data-id="${u.id}" title="Одобрить">✓</button>
+          <button class="btn-reject" data-id="${u.id}" title="Отклонить">✕</button>
+        </div>
       </div>
-      <div class="pending-actions">
-        <button class="btn-approve" data-id="${u.id}" title="Одобрить">✓</button>
-        <button class="btn-reject" data-id="${u.id}" title="Отклонить">✕</button>
-      </div>
-    </div>
-  `).join('');
+      ${details}
+    </div>`;
+  }).join('');
 
   list.querySelectorAll('.btn-approve').forEach(btn => {
     btn.addEventListener('click', () => approveUser(btn.dataset.id));
@@ -66,9 +81,32 @@ function renderPendingUsers() {
 }
 
 async function approveUser(userId) {
+  const user = pendingUsers.find(u => u.id === userId);
+  if (!user) return;
+
+  // For students — also create a students record linked to teacher
+  if (user.role === 'student' && user.requested_teacher_id) {
+    const { error: studentErr } = await db.from('students').insert({
+      first_name: user.full_name.split(' ')[0] || user.full_name,
+      last_name: user.full_name.split(' ').slice(1).join(' ') || '',
+      subject: user.requested_subject || '',
+      grade: user.requested_grade || null,
+      teacher_id: user.requested_teacher_id,
+      profile_id: user.id,
+      is_individual: false,
+      is_online: false,
+      price_type: 'new'
+    });
+    if (studentErr) {
+      console.error('Student create error:', studentErr);
+      showToast('Ошибка создания ученика: ' + studentErr.message, 'error');
+      return;
+    }
+  }
+
   const { error } = await db.from('profiles').update({ status: 'approved' }).eq('id', userId);
   if (error) { showToast('Ошибка', 'error'); return; }
-  showToast('Пользователь одобрен', 'success');
+  showToast('Заявка одобрена', 'success');
   await loadPendingUsers();
   await loadPendingCount();
 }
@@ -114,6 +152,10 @@ function renderTeachers() {
         <span class="teacher-name">${t.full_name}</span>
         <span class="teacher-role">${roleLabel[t.role] || t.role} · ${t.short_name || ''}</span>
       </div>
+      <button class="btn-teacher-subjects" data-id="${t.id}" data-name="${t.full_name}" title="Предметы">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        Предметы
+      </button>
       <div class="teacher-group-size" title="Макс. учеников в группе">
         <label>Макс:</label>
         <input type="number" class="input-group-size" data-id="${t.id}" value="${t.max_group_size || 4}" min="1" max="20">
@@ -124,6 +166,10 @@ function renderTeachers() {
 
   list.querySelectorAll('.teacher-color').forEach(el => {
     el.addEventListener('click', () => openColorPicker(el.dataset.id));
+  });
+
+  list.querySelectorAll('.btn-teacher-subjects').forEach(btn => {
+    btn.addEventListener('click', () => openTeacherSubjectsModal(btn.dataset.id, btn.dataset.name));
   });
 
   list.querySelectorAll('.input-group-size').forEach(inp => {
@@ -266,6 +312,43 @@ async function addSubject() {
   await loadSubjects();
 }
 
+async function openTeacherSubjectsModal(teacherId, teacherName) {
+  document.getElementById('teacher-subj-title').textContent = `Предметы: ${teacherName}`;
+  document.getElementById('teacher-subj-modal').dataset.teacherId = teacherId;
+
+  const { data: subjects } = await db.from('subjects').select('id, name').order('name');
+  const { data: teacherSubjects } = await db.from('teacher_subjects')
+    .select('subject_id').eq('teacher_id', teacherId);
+  const selected = new Set((teacherSubjects || []).map(t => t.subject_id));
+
+  const list = document.getElementById('teacher-subj-list');
+  list.innerHTML = (subjects || []).map(s => {
+    const checked = selected.has(s.id);
+    return `<label class="lesson-student-row${checked ? ' checked' : ''}">
+      <span class="lesson-student-name">${s.name}</span>
+      <input type="checkbox" class="lesson-checkbox" data-id="${s.id}" ${checked ? 'checked' : ''}>
+    </label>`;
+  }).join('') || '<div class="lesson-no-students">Нет предметов</div>';
+
+  list.querySelectorAll('input.lesson-checkbox').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      const sid = cb.dataset.id;
+      cb.closest('.lesson-student-row').classList.toggle('checked', cb.checked);
+      if (cb.checked) {
+        await db.from('teacher_subjects').insert({ teacher_id: teacherId, subject_id: sid });
+      } else {
+        await db.from('teacher_subjects').delete().eq('teacher_id', teacherId).eq('subject_id', sid);
+      }
+    });
+  });
+
+  document.getElementById('teacher-subj-overlay').classList.add('active');
+}
+
+function closeTeacherSubjectsModal() {
+  document.getElementById('teacher-subj-overlay').classList.remove('active');
+}
+
 async function loadAdminCancellationStats() {
   const container = document.getElementById('admin-cancellations-stats');
   if (!container) return;
@@ -297,4 +380,9 @@ async function loadAdminCancellationStats() {
 
 function initAdmin() {
   initProfileTabs();
+  document.getElementById('btn-close-teacher-subj').addEventListener('click', closeTeacherSubjectsModal);
+  document.getElementById('btn-cancel-teacher-subj').addEventListener('click', closeTeacherSubjectsModal);
+  document.getElementById('teacher-subj-overlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeTeacherSubjectsModal();
+  });
 }

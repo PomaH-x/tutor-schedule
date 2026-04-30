@@ -1,4 +1,7 @@
 document.addEventListener('DOMContentLoaded', async () => {
+  // Warm up Supabase connection before user interaction
+  db.from('profiles').select('id').limit(1).then(() => {}).catch(() => {});
+
   initAuth();
   initStudents();
   initAdmin();
@@ -7,6 +10,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   initCancellations();
   initPricingAndPayroll();
   initOnline();
+  initStudent();
+
+  document.getElementById('btn-save-telegram')?.addEventListener('click', async () => {
+    const tg = document.getElementById('profile-telegram-input').value.trim().replace(/^@/, '');
+    const { error } = await db.from('profiles').update({ telegram: tg || null }).eq('id', state.user.id);
+    if (error) { showToast('Ошибка', 'error'); return; }
+    state.profile.telegram = tg || null;
+    showToast('Telegram сохранён', 'success');
+  });
 
   document.getElementById('btn-profile').addEventListener('click', () => {
     openProfileScreen();
@@ -46,6 +58,14 @@ function openProfileScreen() {
 
   const roles = { admin: 'Администратор', teacher: 'Преподаватель', student: 'Ученик' };
   document.getElementById('profile-role').textContent = roles[p.role];
+
+  const tgWrap = document.getElementById('profile-telegram-wrap');
+  if (p.role === 'teacher' || p.role === 'admin') {
+    tgWrap.style.display = 'flex';
+    document.getElementById('profile-telegram-input').value = p.telegram || '';
+  } else {
+    tgWrap.style.display = 'none';
+  }
 
   const tabs = document.getElementById('profile-tabs');
   const adminTab = document.querySelector('[data-tab="tab-admin"]');

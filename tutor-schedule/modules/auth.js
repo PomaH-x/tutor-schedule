@@ -6,7 +6,14 @@ const TEACHER_COLORS = [
 const EMAIL_DOMAIN = '@tutor.local';
 
 function loginToEmail(login) {
+  // Strip non-digits for phone, fallback to original for legacy logins
+  const digits = login.replace(/\D/g, '');
+  if (digits.length >= 10) return digits + EMAIL_DOMAIN;
   return login.toLowerCase().trim() + EMAIL_DOMAIN;
+}
+
+function normalizePhone(phone) {
+  return phone.replace(/\D/g, '');
 }
 
 function generateShortName(name1, name2) {
@@ -46,17 +53,65 @@ async function loadProfile(userId) {
   return data;
 }
 
-function updateRegisterForm(role) {
+async function updateRegisterForm(role) {
   const name1 = document.getElementById('input-name1');
   const name2 = document.getElementById('input-name2');
+  const studentFields = document.getElementById('student-reg-fields');
 
   if (role === 'student') {
     name1.placeholder = 'Имя';
     name2.placeholder = 'Фамилия';
+    studentFields.style.display = 'block';
+    await loadTeachersForRegistration();
   } else {
     name1.placeholder = 'Имя';
     name2.placeholder = 'Отчество';
+    studentFields.style.display = 'none';
   }
+}
+
+async function loadTeachersForRegistration() {
+  const sel = document.getElementById('reg-teacher-id');
+  const subjSel = document.getElementById('reg-subject');
+  sel.innerHTML = '<option value="">Выберите преподавателя</option>';
+  subjSel.innerHTML = '<option value="">Сначала выберите преподавателя</option>';
+
+  const { data } = await db.from('profiles')
+    .select('id, full_name')
+    .in('role', ['teacher', 'admin'])
+    .eq('status', 'approved')
+    .order('full_name');
+
+  (data || []).forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t.id;
+    opt.textContent = t.full_name;
+    sel.appendChild(opt);
+  });
+
+  sel.onchange = async () => {
+    const tid = sel.value;
+    subjSel.innerHTML = '<option value="">Загрузка...</option>';
+    if (!tid) { subjSel.innerHTML = '<option value="">Сначала выберите преподавателя</option>'; return; }
+
+    const { data: ts } = await db.from('teacher_subjects')
+      .select('subject:subjects(id, name)')
+      .eq('teacher_id', tid);
+
+    if (!ts || ts.length === 0) {
+      subjSel.innerHTML = '<option value="">У преподавателя нет предметов</option>';
+      return;
+    }
+
+    subjSel.innerHTML = '<option value="">Выберите предмет</option>';
+    ts.forEach(row => {
+      if (!row.subject) return;
+      const opt = document.createElement('option');
+      opt.value = row.subject.name;
+      opt.textContent = row.subject.name;
+      subjSel.appendChild(opt);
+    });
+  };
 }
 
 async function handleLogin() {
@@ -97,8 +152,11 @@ async function handleRegister() {
     return;
   }
 
-  if (login.length < 3) {
-    showToast('Логин минимум 3 символа', 'error');
+  const role = state.selectedRole;
+  const phone = normalizePhone(login);
+
+  if (phone.length < 10) {
+    showToast('Введите корректный телефон', 'error');
     return;
   }
 
@@ -107,18 +165,31 @@ async function handleRegister() {
     return;
   }
 
+  let requestedTeacherId = null;
+  let requestedSubject = null;
+  let requestedGrade = null;
+
+  if (role === 'student') {
+    requestedTeacherId = document.getElementById('reg-teacher-id').value;
+    requestedSubject = document.getElementById('reg-subject').value;
+    requestedGrade = document.getElementById('reg-grade').value;
+
+    if (!requestedTeacherId || !requestedSubject || !requestedGrade) {
+      showToast('Заполните все поля', 'error');
+      return;
+    }
+  }
+
   const btn = document.getElementById('btn-register');
   btn.disabled = true;
 
-  const role = state.selectedRole;
   const email = loginToEmail(login);
-
   const { data, error } = await db.auth.signUp({ email, password });
 
   if (error) {
     btn.disabled = false;
     if (error.message.includes('already registered')) {
-      showToast('Этот логин уже занят', 'error');
+      showToast('Этот телефон уже зарегистрирован', 'error');
     } else {
       showToast(error.message, 'error');
     }
@@ -129,16 +200,25 @@ async function handleRegister() {
   const shortName = (role === 'teacher' || role === 'admin') ? generateShortName(name1, name2) : null;
   const color = (role === 'teacher' || role === 'admin') ? await getRandomColor() : null;
 
+  const profileData = {
+    id: data.user.id,
+    role: role,
+    status: role === 'admin' ? 'approved' : 'pending',
+    full_name: fullName,
+    short_name: shortName,
+    color: color,
+    phone: phone
+  };
+
+  if (role === 'student') {
+    profileData.requested_teacher_id = requestedTeacherId;
+    profileData.requested_subject = requestedSubject;
+    profileData.requested_grade = +requestedGrade;
+  }
+
   const { error: profileError } = await db
     .from('profiles')
-    .insert({
-      id: data.user.id,
-      role: role,
-      status: role === 'admin' ? 'approved' : 'pending',
-      full_name: fullName,
-      short_name: shortName,
-      color: color
-    });
+    .insert(profileData);
 
   btn.disabled = false;
 
@@ -168,6 +248,11 @@ async function onAuthSuccess(user) {
   if (profile.status === 'rejected') {
     showToast('Заявка отклонена', 'error');
     await db.auth.signOut();
+    return;
+  }
+
+  if (profile.role === 'student') {
+    showStudentScreen();
     return;
   }
 
