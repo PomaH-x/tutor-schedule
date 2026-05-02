@@ -25,7 +25,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.getElementById('btn-back-to-schedule').addEventListener('click', () => {
-    showScreen('screen-schedule');
+    if (state.profile?.role === 'student') showScreen('screen-student');
+    else showScreen('screen-schedule');
   });
 
   document.getElementById('btn-logout').addEventListener('click', handleLogout);
@@ -78,10 +79,26 @@ function openProfileScreen() {
   } else {
     tabs.style.display = 'none';
   }
+
+  // Hide all teacher/admin-specific tab content for students
+  const tabStudents = document.getElementById('tab-students');
+  const tabPayroll = document.getElementById('tab-payroll');
+  const tabAdmin = document.getElementById('tab-admin');
+  if (p.role === 'student') {
+    if (tabStudents) tabStudents.style.display = 'none';
+    if (tabPayroll) tabPayroll.style.display = 'none';
+    if (tabAdmin) tabAdmin.style.display = 'none';
+  } else {
+    if (tabStudents) tabStudents.style.display = '';
+    if (tabPayroll) tabPayroll.style.display = '';
+  }
+
   document.querySelectorAll('.profile-tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.profile-tab-content').forEach(c => c.classList.remove('active'));
-  document.querySelector('[data-tab="tab-students"]').classList.add('active');
-  document.getElementById('tab-students').classList.add('active');
+  if (p.role !== 'student') {
+    document.querySelector('[data-tab="tab-students"]').classList.add('active');
+    document.getElementById('tab-students').classList.add('active');
+  }
 
   showScreen('screen-profile');
   loadStudents();

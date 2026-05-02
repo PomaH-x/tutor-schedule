@@ -26,10 +26,11 @@ function updateStudentWeekTabs() {
 
 async function loadStudentRecord() {
   if (studentRecord) return studentRecord;
-  const { data } = await db.from('students')
+  const { data, error } = await db.from('students')
     .select('id, first_name, last_name, subject, grade, is_individual, is_online, price_type, teacher_id, profile_id')
     .eq('profile_id', state.user.id)
     .single();
+  if (error) console.error('loadStudentRecord error:', error);
   studentRecord = data;
   return data;
 }
