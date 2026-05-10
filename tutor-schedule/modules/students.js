@@ -113,13 +113,15 @@ function renderStudents(filter = '') {
 }
 
 function studentCardHTML(s) {
-  return `<div class="student-card" data-id="${s.id}">
+  const isUnlinked = !s.profile_id;
+  return `<div class="student-card ${isUnlinked ? 'student-card-unlinked' : ''}" data-id="${s.id}">
     <div class="student-card-main">
       <span class="student-name">${s.first_name} ${s.last_name}</span>
       <span class="student-subject">${s.subject || ''}</span>
     </div>
     <div class="student-card-meta">
       ${s.grade ? `<span>${s.grade} класс</span>` : ''}
+      ${isUnlinked ? '<span class="student-unlinked-badge" title="Не привязан к аккаунту">Тест</span>' : ''}
     </div>
   </div>`;
 }
@@ -275,6 +277,16 @@ function initStudents() {
   document.getElementById('student-detail-overlay').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeStudentDetail();
   });
+
+  // Link student modal
+  document.getElementById('btn-close-link-student').addEventListener('click', closeLinkStudentModal);
+  document.getElementById('btn-cancel-link-student').addEventListener('click', closeLinkStudentModal);
+  document.getElementById('link-student-overlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeLinkStudentModal();
+  });
+  document.getElementById('link-student-search').addEventListener('input', (e) => {
+    renderLinkStudentList(e.target.value);
+  });
 }
 
 let studentDetailId = null;
@@ -320,6 +332,10 @@ async function openStudentDetail(studentId) {
     <div class="sd-top">
       <div class="sd-attendance"><span class="sd-att-num">${attendance}%</span><span class="sd-att-label">Посещаемость</span></div>
       <div class="sd-fields">
+        ${!student.profile_id ? `<div class="sd-link-banner">
+          <div class="sd-link-banner-text">Тестовая карточка — не привязана к аккаунту ученика.</div>
+          <button class="btn-link-account" type="button">Привязать аккаунт</button>
+        </div>` : ''}
         <div class="form-row">
           <div class="form-group"><label>Предмет</label><input type="text" id="sd-subject" value="${student.subject || ''}"></div>
           <div class="form-group"><label>Класс</label><input type="number" id="sd-grade" value="${student.grade || ''}" min="5" max="11"></div>
@@ -409,6 +425,11 @@ async function openStudentDetail(studentId) {
     });
   });
 
+  const linkBtn = body.querySelector('.btn-link-account');
+  if (linkBtn) {
+    linkBtn.addEventListener('click', () => openLinkStudentModal(studentId, student.teacher_id));
+  }
+
   document.getElementById('student-detail-overlay').classList.add('active');
 }
 
@@ -433,6 +454,130 @@ async function saveStudentDetail() {
   showToast('Сохранено', 'success');
   closeStudentDetail();
   renderStudents(document.getElementById('student-search').value);
+}
+
+// === Link unregistered (fake) student to a real registered account ===
+
+let linkContext = null; // { fakeStudentId, teacherId, profiles: [...] }
+
+async function openLinkStudentModal(fakeStudentId, teacherId) {
+  // Pull all approved student profiles. Filter out ones already linked
+  // to this teacher via the students table (avoid offering duplicates).
+  const { data: profiles, error: pErr } = await db.from('profiles')
+    .select('id, full_name, phone, telegram')
+    .eq('role', 'student')
+    .eq('status', 'approved')
+    .order('full_name');
+  if (pErr) { showToast('Ошибка загрузки: ' + pErr.message, 'error'); return; }
+
+  linkContext = { fakeStudentId, teacherId, profiles: profiles || [] };
+  document.getElementById('link-student-search').value = '';
+  renderLinkStudentList('');
+  document.getElementById('link-student-overlay').classList.add('active');
+}
+
+function closeLinkStudentModal() {
+  document.getElementById('link-student-overlay').classList.remove('active');
+  linkContext = null;
+}
+
+function renderLinkStudentList(search) {
+  const list = document.getElementById('link-student-list');
+  if (!linkContext) { list.innerHTML = ''; return; }
+
+  const q = (search || '').trim().toLowerCase();
+  const filtered = linkContext.profiles.filter(p => {
+    if (!q) return true;
+    const hay = `${p.full_name || ''} ${p.phone || ''} ${p.telegram || ''}`.toLowerCase();
+    return hay.includes(q);
+  });
+
+  if (filtered.length === 0) {
+    list.innerHTML = '<div class="link-student-empty">Никто не найден</div>';
+    return;
+  }
+
+  list.innerHTML = filtered.map(p => `
+    <div class="link-student-item" data-profile-id="${p.id}">
+      <div class="link-student-item-main">
+        <span class="link-student-name">${p.full_name || '(без имени)'}</span>
+        ${p.phone ? `<span class="link-student-phone">${p.phone}</span>` : ''}
+      </div>
+      <button class="btn-primary btn-sm" data-pick="${p.id}">Выбрать</button>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('[data-pick]').forEach(btn => {
+    btn.addEventListener('click', () => confirmLinkStudent(btn.dataset.pick));
+  });
+}
+
+function confirmLinkStudent(profileId) {
+  if (!linkContext) return;
+  const profile = linkContext.profiles.find(p => p.id === profileId);
+  const name = profile?.full_name || 'этому ученику';
+  showConfirm(
+    `Перенести все занятия и платежи на «${name}»? Тестовая карточка будет удалена.`,
+    () => performLinkStudent(linkContext.fakeStudentId, profileId, linkContext.teacherId),
+    'Привязать'
+  );
+}
+
+async function performLinkStudent(fakeStudentId, profileId, teacherId) {
+  try {
+    // Does the real student record already exist for this teacher?
+    const { data: existingReal } = await db.from('students')
+      .select('id')
+      .eq('profile_id', profileId)
+      .eq('teacher_id', teacherId)
+      .maybeSingle();
+
+    if (existingReal) {
+      const realId = existingReal.id;
+
+      // lesson_students PK = (lesson_id, student_id) — clean up potential collisions
+      const { data: fakeLs } = await db.from('lesson_students').select('lesson_id').eq('student_id', fakeStudentId);
+      const { data: realLs } = await db.from('lesson_students').select('lesson_id').eq('student_id', realId);
+      const realLessonIds = new Set((realLs || []).map(r => r.lesson_id));
+      for (const row of (fakeLs || [])) {
+        if (realLessonIds.has(row.lesson_id)) {
+          await db.from('lesson_students').delete().eq('lesson_id', row.lesson_id).eq('student_id', fakeStudentId);
+        }
+      }
+
+      // Same for recurring_lesson_students
+      const { data: fakeRls } = await db.from('recurring_lesson_students').select('recurring_lesson_id').eq('student_id', fakeStudentId);
+      const { data: realRls } = await db.from('recurring_lesson_students').select('recurring_lesson_id').eq('student_id', realId);
+      const realRecIds = new Set((realRls || []).map(r => r.recurring_lesson_id));
+      for (const row of (fakeRls || [])) {
+        if (realRecIds.has(row.recurring_lesson_id)) {
+          await db.from('recurring_lesson_students').delete().eq('recurring_lesson_id', row.recurring_lesson_id).eq('student_id', fakeStudentId);
+        }
+      }
+
+      // Transfer all remaining references
+      await db.from('lesson_students').update({ student_id: realId }).eq('student_id', fakeStudentId);
+      await db.from('recurring_lesson_students').update({ student_id: realId }).eq('student_id', fakeStudentId);
+      await db.from('cancellations').update({ student_id: realId }).eq('student_id', fakeStudentId);
+      await db.from('payments').update({ student_id: realId }).eq('student_id', fakeStudentId);
+
+      // Delete the fake record
+      const { error: delErr } = await db.from('students').delete().eq('id', fakeStudentId);
+      if (delErr) throw delErr;
+    } else {
+      // Simpler path: no real record exists yet for this teacher — just attach the profile_id
+      const { error: updErr } = await db.from('students').update({ profile_id: profileId }).eq('id', fakeStudentId);
+      if (updErr) throw updErr;
+    }
+
+    closeLinkStudentModal();
+    closeStudentDetail();
+    showToast('Ученик привязан', 'success');
+    await loadStudents();
+  } catch (e) {
+    console.error('linkStudent error:', e);
+    showToast('Ошибка привязки: ' + (e.message || 'неизвестно'), 'error');
+  }
 }
 
 async function computeStudentAttendance(studentId) {
