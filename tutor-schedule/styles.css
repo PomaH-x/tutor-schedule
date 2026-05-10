@@ -3487,6 +3487,102 @@ input, textarea, select {
   font-size: 13px;
 }
 
+/* Cancellation reason button on payroll cancelled rows */
+.btn-reason {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  font-family: inherit;
+}
+
+.btn-reason-empty {
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+.btn-reason-empty:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn-reason-filled {
+  color: var(--success);
+  border-color: var(--success);
+  background: rgba(40, 167, 69, 0.08);
+}
+.btn-reason-filled:hover {
+  background: rgba(40, 167, 69, 0.18);
+}
+
+.btn-reason-missing {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  cursor: default;
+}
+
+.payroll-student .ps-reason {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  margin-right: 12px;
+}
+
+/* Reason modal */
+.reason-image-preview {
+  min-height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.reason-image-preview img {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: var(--radius-sm);
+  display: block;
+}
+
+.reason-img-empty,
+.reason-img-error {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.reason-img-error {
+  color: var(--danger);
+}
+
+.reason-edit-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.reason-upload-label {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.reason-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
 .sd-section {
   margin-bottom: 12px;
 }

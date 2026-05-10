@@ -169,7 +169,7 @@ async function loadPayroll() {
 
   // Also fetch pending cancellations for this week
   let qc = db.from('cancellations')
-    .select('id, student_id, teacher_id, lesson_start_time, is_paid, student:students(first_name, last_name, is_individual, is_online, price_type)')
+    .select('id, student_id, teacher_id, lesson_start_time, is_paid, reason_text, reason_image_url, student:students(first_name, last_name, is_individual, is_online, price_type)')
     .eq('week_start', ws).eq('status', 'pending');
   if (!isAdmin) qc = qc.eq('teacher_id', state.user.id);
 
@@ -280,9 +280,12 @@ function renderPayroll(lessons, cancellations, isAdmin) {
     }
 
     payrollTeacherData[tId].cancelledStudents.push({
+      cancellationId: c.id,
+      teacherId: c.teacher_id,
       name: `${s.first_name} ${s.last_name}`,
       amount,
-      isPaid: !!c.is_paid
+      isPaid: !!c.is_paid,
+      hasReason: !!(c.reason_text || c.reason_image_url)
     });
   });
 
@@ -343,7 +346,7 @@ function cancelDeclension(n) {
     html += `<div class="payroll-students">`;
     // 1. Unpaid cancellations on top (red)
     data.cancelledStudents.filter(cs => !cs.isPaid).forEach(cs => {
-      html += `<div class="payroll-student payroll-student-cancelled"><span class="ps-name">${cs.name}</span><span class="ps-count">отменено</span><span class="ps-amount">${cs.amount} ₽</span></div>`;
+      html += renderCancellationRow(cs, 'payroll-student-cancelled', isAdmin);
     });
     // 2. Conducted lessons in the middle (blue), sorted by amount descending
     students.forEach(s => {
@@ -351,7 +354,7 @@ function cancelDeclension(n) {
     });
     // 3. Paid cancellations at the bottom (yellow)
     data.cancelledStudents.filter(cs => cs.isPaid).forEach(cs => {
-      html += `<div class="payroll-student payroll-student-paid"><span class="ps-name">${cs.name}</span><span class="ps-count">отменено</span><span class="ps-amount">${cs.amount} ₽</span></div>`;
+      html += renderCancellationRow(cs, 'payroll-student-paid', isAdmin);
     });
     html += `</div></div>`;
   });
@@ -415,4 +418,187 @@ function initPricingAndPayroll() {
       loadPayroll();
     });
   });
+
+  // Delegated handler: click on any "Указать причину" / "Причина" / "Не указана" button
+  document.getElementById('payroll-content').addEventListener('click', (e) => {
+    const btn = e.target.closest('.btn-reason');
+    if (!btn) return;
+    const id = btn.dataset.cancellationId;
+    const editable = btn.dataset.editable === '1';
+    openReasonModal(id, editable);
+  });
+
+  // Reason modal buttons
+  document.getElementById('btn-close-reason').addEventListener('click', closeReasonModal);
+  document.getElementById('btn-cancel-reason').addEventListener('click', closeReasonModal);
+  document.getElementById('btn-save-reason').addEventListener('click', saveReason);
+  document.getElementById('btn-remove-reason-image').addEventListener('click', removeReasonImage);
+  document.getElementById('reason-overlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeReasonModal();
+  });
+  document.getElementById('reason-image-input').addEventListener('change', onReasonImagePicked);
+}
+
+// ===== CANCELLATION REASON =====
+
+function renderCancellationRow(cs, colorClass, isAdmin) {
+  const editable = !isAdmin || cs.teacherId === state.user.id;
+  let btn;
+  if (cs.hasReason) {
+    btn = `<button class="btn-reason btn-reason-filled" data-cancellation-id="${cs.cancellationId}" data-editable="${editable ? 1 : 0}" title="${editable ? 'Изменить причину' : 'Посмотреть причину'}">Причина</button>`;
+  } else if (editable) {
+    btn = `<button class="btn-reason btn-reason-empty" data-cancellation-id="${cs.cancellationId}" data-editable="1" title="Указать причину">Указать причину</button>`;
+  } else {
+    btn = `<button class="btn-reason btn-reason-missing" data-cancellation-id="${cs.cancellationId}" data-editable="0" disabled title="Причина не указана">Не указана</button>`;
+  }
+  return `<div class="payroll-student ${colorClass}">
+    <span class="ps-name">${cs.name}</span>
+    <span class="ps-reason">${btn}</span>
+    <span class="ps-count">отменено</span>
+    <span class="ps-amount">${cs.amount} ₽</span>
+  </div>`;
+}
+
+let reasonCtx = null; // { id, editable, existingImagePath, pendingFile, removeExistingImage }
+
+async function openReasonModal(cancellationId, editable) {
+  const { data: c, error } = await db.from('cancellations')
+    .select('id, teacher_id, reason_text, reason_image_url, student:students(first_name, last_name)')
+    .eq('id', cancellationId).single();
+  if (error || !c) { showToast('Не удалось загрузить отмену', 'error'); return; }
+
+  reasonCtx = {
+    id: c.id,
+    editable,
+    teacherId: c.teacher_id,
+    existingImagePath: c.reason_image_url || null,
+    pendingFile: null,
+    removeExistingImage: false
+  };
+
+  document.getElementById('reason-modal-title').textContent =
+    `${editable ? 'Причина отмены' : 'Причина отмены'}: ${c.student?.first_name || ''} ${c.student?.last_name || ''}`.trim();
+
+  const textarea = document.getElementById('reason-text');
+  textarea.value = c.reason_text || '';
+  textarea.disabled = !editable;
+
+  // Image preview
+  await refreshReasonImagePreview();
+
+  document.getElementById('reason-edit-controls').style.display = editable ? 'flex' : 'none';
+  document.getElementById('btn-save-reason').style.display = editable ? '' : 'none';
+  document.getElementById('btn-cancel-reason').textContent = editable ? 'Отмена' : 'Закрыть';
+
+  document.getElementById('reason-overlay').classList.add('active');
+}
+
+function closeReasonModal() {
+  document.getElementById('reason-overlay').classList.remove('active');
+  document.getElementById('reason-image-input').value = '';
+  reasonCtx = null;
+}
+
+async function refreshReasonImagePreview() {
+  const wrap = document.getElementById('reason-image-preview');
+  if (!reasonCtx) { wrap.innerHTML = ''; return; }
+
+  // Priority: pending local file > existing in storage > nothing
+  if (reasonCtx.pendingFile) {
+    const url = URL.createObjectURL(reasonCtx.pendingFile);
+    wrap.innerHTML = `<img src="${url}" alt="">`;
+    document.getElementById('btn-remove-reason-image').style.display = reasonCtx.editable ? '' : 'none';
+    return;
+  }
+  if (reasonCtx.existingImagePath && !reasonCtx.removeExistingImage) {
+    const { data: signed, error } = await db.storage.from('cancellation-reasons')
+      .createSignedUrl(reasonCtx.existingImagePath, 3600);
+    if (!error && signed?.signedUrl) {
+      wrap.innerHTML = `<img src="${signed.signedUrl}" alt="">`;
+    } else {
+      wrap.innerHTML = '<div class="reason-img-error">Не удалось загрузить изображение</div>';
+    }
+    document.getElementById('btn-remove-reason-image').style.display = reasonCtx.editable ? '' : 'none';
+    return;
+  }
+  wrap.innerHTML = '<div class="reason-img-empty">Скриншот не прикреплён</div>';
+  document.getElementById('btn-remove-reason-image').style.display = 'none';
+}
+
+function onReasonImagePicked(e) {
+  const file = e.target.files?.[0];
+  if (!file || !reasonCtx) return;
+  if (!file.type.startsWith('image/')) {
+    showToast('Можно загружать только изображения', 'error');
+    e.target.value = '';
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    showToast('Файл больше 5 МБ — сожмите перед загрузкой', 'error');
+    e.target.value = '';
+    return;
+  }
+  reasonCtx.pendingFile = file;
+  reasonCtx.removeExistingImage = false; // adding new replaces existing
+  refreshReasonImagePreview();
+}
+
+function removeReasonImage() {
+  if (!reasonCtx) return;
+  reasonCtx.pendingFile = null;
+  reasonCtx.removeExistingImage = true;
+  document.getElementById('reason-image-input').value = '';
+  refreshReasonImagePreview();
+}
+
+async function saveReason() {
+  if (!reasonCtx || !reasonCtx.editable) return;
+  const text = document.getElementById('reason-text').value.trim();
+  const willHaveImage = !!reasonCtx.pendingFile || (reasonCtx.existingImagePath && !reasonCtx.removeExistingImage);
+
+  if (!text && !willHaveImage) {
+    showToast('Нужно указать текст или прикрепить скриншот', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btn-save-reason');
+  btn.disabled = true;
+
+  try {
+    let imagePathToSave = reasonCtx.existingImagePath;
+
+    // Upload new file if picked
+    if (reasonCtx.pendingFile) {
+      const ext = (reasonCtx.pendingFile.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+      const path = `${reasonCtx.teacherId}/${reasonCtx.id}.${ext}`;
+      const { error: upErr } = await db.storage.from('cancellation-reasons')
+        .upload(path, reasonCtx.pendingFile, { upsert: true, contentType: reasonCtx.pendingFile.type });
+      if (upErr) throw upErr;
+
+      // If previous file had a different extension, delete it
+      if (reasonCtx.existingImagePath && reasonCtx.existingImagePath !== path) {
+        await db.storage.from('cancellation-reasons').remove([reasonCtx.existingImagePath]);
+      }
+      imagePathToSave = path;
+    } else if (reasonCtx.removeExistingImage && reasonCtx.existingImagePath) {
+      await db.storage.from('cancellation-reasons').remove([reasonCtx.existingImagePath]);
+      imagePathToSave = null;
+    }
+
+    const { error: dbErr } = await db.from('cancellations').update({
+      reason_text: text || null,
+      reason_image_url: imagePathToSave,
+      reason_updated_at: new Date().toISOString()
+    }).eq('id', reasonCtx.id);
+    if (dbErr) throw dbErr;
+
+    showToast('Причина сохранена', 'success');
+    closeReasonModal();
+    await loadPayroll();
+  } catch (e) {
+    console.error('saveReason error:', e);
+    showToast('Ошибка: ' + (e.message || 'неизвестно'), 'error');
+  } finally {
+    btn.disabled = false;
+  }
 }

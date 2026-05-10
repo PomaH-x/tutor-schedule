@@ -662,6 +662,39 @@
       </div>
     </div>
 
+    <div id="reason-overlay" class="modal-overlay">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <h3 id="reason-modal-title">Причина отмены</h3>
+          <button class="btn-modal-close" id="btn-close-reason">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Описание</label>
+            <textarea id="reason-text" rows="4" placeholder="Что случилось? (необязательно, если есть скриншот)"></textarea>
+          </div>
+          <div class="form-group">
+            <label>Скриншот переписки</label>
+            <div id="reason-image-preview" class="reason-image-preview"></div>
+            <div id="reason-edit-controls" class="reason-edit-controls">
+              <label class="btn-secondary btn-sm reason-upload-label">
+                Выбрать файл
+                <input type="file" id="reason-image-input" accept="image/*" hidden>
+              </label>
+              <button type="button" class="btn-secondary btn-sm" id="btn-remove-reason-image">Убрать</button>
+            </div>
+          </div>
+          <div class="reason-hint">Нужно указать текст, прикрепить скриншот, или и то и другое.</div>
+        </div>
+        <div class="modal-footer">
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-cancel-reason">Отмена</button>
+            <button class="btn-primary" id="btn-save-reason">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="teacher-subj-overlay" class="modal-overlay">
       <div class="modal modal-sm">
         <div class="modal-header">
