@@ -67,6 +67,25 @@ async function fetchStudentLessons(weekStartDate, weekEndDate) {
   };
 }
 
+// Past lessons (from previous weeks) without an approved payment.
+// They "follow" the student on the current week until paid + confirmed.
+async function fetchOverduePastLessons(student, payments) {
+  const currentWs = formatDate(getMonday(new Date()));
+  const nowIso = new Date().toISOString();
+
+  const { data, error } = await db.from('lessons')
+    .select('id, week_start, room, start_time, end_time, status, teacher:profiles!teacher_id(full_name, color, telegram), lesson_students!inner(student_id)')
+    .lt('week_start', currentWs)
+    .lt('end_time', nowIso)
+    .eq('status', 'active')
+    .eq('lesson_students.student_id', student.id);
+
+  if (error) { console.error('fetchOverduePastLessons error:', error); return []; }
+
+  const approvedLessonIds = new Set((payments || []).filter(p => p.status === 'approved').map(p => p.lesson_id));
+  return (data || []).filter(l => !approvedLessonIds.has(l.id));
+}
+
 function buildLessonItems(lessons, cancellations, payments, student) {
   const items = [];
 
@@ -145,6 +164,8 @@ function findNearestUpcomingItem(items) {
 async function renderStudentSchedule() {
   const ws = getStudentWeekStart();
   const we = new Date(ws); we.setDate(we.getDate() + 6);
+  const isCurrentWeek = (studentWeekOffset === 0);
+  const isPastWeek = (studentWeekOffset < 0);
 
   const { lessons, cancellations, payments, student } = await fetchStudentLessons(ws, we);
   if (!student) {
@@ -153,12 +174,35 @@ async function renderStudentSchedule() {
     return;
   }
 
-  const items = buildLessonItems(lessons, cancellations, payments, student);
+  const approvedLessonIds = new Set((payments || []).filter(p => p.status === 'approved').map(p => p.lesson_id));
+  const now = new Date();
+
+  // On past weeks: hide past unpaid lessons — they "moved" to the current week.
+  // After approval they'll come back here automatically (filter no longer matches).
+  let lessonsForWeek = lessons;
+  if (isPastWeek) {
+    lessonsForWeek = lessons.filter(l => {
+      const isPastUnpaid = l.status === 'active' && new Date(l.end_time) < now && !approvedLessonIds.has(l.id);
+      return !isPastUnpaid;
+    });
+  }
+
+  const items = buildLessonItems(lessonsForWeek, cancellations, payments, student);
+
+  // On current week: pull overdue past unpaid lessons and prepend them as "follow-up" cards.
+  let overdueItems = [];
+  if (isCurrentWeek) {
+    const overdueLessons = await fetchOverduePastLessons(student, payments);
+    overdueItems = buildLessonItems(overdueLessons, [], payments, student);
+    overdueItems.forEach(it => { it.isOverdue = true; });
+  }
 
   const summaryEl = document.getElementById('student-summary');
   const planned = items.filter(it => it.status === 'planned').length;
   const completed = items.filter(it => it.status === 'completed' || it.status === 'paid_cancel').length;
-  const toPay = items.filter(it => (it.status === 'completed' || it.status === 'paid_cancel') && !it.isPaid && !it.paymentPending)
+  // "К оплате" includes overdue items too — debt should be visible here.
+  const toPay = [...items, ...overdueItems]
+    .filter(it => (it.status === 'completed' || it.status === 'paid_cancel') && !it.isPaid && !it.paymentPending)
     .reduce((sum, it) => sum + it.cost, 0);
 
   const attendance = await computeAttendance(student.id);
@@ -171,13 +215,16 @@ async function renderStudentSchedule() {
   `;
 
   const list = document.getElementById('student-lessons-list');
-  if (items.length === 0) {
+  if (items.length === 0 && overdueItems.length === 0) {
     list.innerHTML = '<div class="online-empty">Нет занятий на этой неделе</div>';
     return;
   }
 
   const nearestId = findNearestUpcomingItem(items);
-  const sorted = [...items].sort((a, b) => a.date - b.date);
+  // Order: overdue first (oldest at top), then current-week items by date.
+  const overdueSorted = [...overdueItems].sort((a, b) => a.date - b.date);
+  const regularSorted = [...items].sort((a, b) => a.date - b.date);
+  const sorted = [...overdueSorted, ...regularSorted];
 
   let html = '';
   sorted.forEach(it => {
@@ -187,7 +234,8 @@ async function renderStudentSchedule() {
     const mm = (it.date.getMonth() + 1).toString().padStart(2, '0');
     const isCancelled = it.status === 'cancelled';
     const isNearest = it.id === nearestId;
-    const cardClass = `student-card ${isCancelled ? 'student-card-cancelled' : ''} ${isNearest ? 'student-card-nearest' : ''}`;
+    const isOverdue = it.isOverdue === true;
+    const cardClass = `student-card ${isCancelled ? 'student-card-cancelled' : ''} ${isNearest ? 'student-card-nearest' : ''} ${isOverdue ? 'student-card-overdue' : ''}`;
 
     let statusBadge = '';
     if (it.status === 'cancelled') statusBadge = '<span class="student-card-status status-cancelled">Отменено</span>';

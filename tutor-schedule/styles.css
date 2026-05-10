@@ -2890,6 +2890,19 @@ input, textarea, select {
   50% { box-shadow: 0 0 0 4px rgba(30, 111, 232, 0.15); }
 }
 
+.student-card-overdue {
+  animation: overduePulse 2.5s ease-in-out infinite;
+}
+
+@keyframes overduePulse {
+  0%, 100% {
+    box-shadow: 0 0 0 1px rgba(224, 85, 85, 0.35), 0 0 12px 0 rgba(224, 85, 85, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 2px rgba(224, 85, 85, 0.65), 0 0 22px 4px rgba(224, 85, 85, 0.6);
+  }
+}
+
 .student-card-header {
   display: flex;
   align-items: center;
