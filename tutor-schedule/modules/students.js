@@ -436,17 +436,22 @@ async function saveStudentDetail() {
 }
 
 async function computeStudentAttendance(studentId) {
-  const { data: lessons } = await db.from('lessons')
-    .select('id, status, lesson_students!inner(student_id)')
+  // Numerator: actually conducted past lessons (status='active', already happened)
+  const { data: completedLessons } = await db.from('lessons')
+    .select('id, lesson_students!inner(student_id)')
     .eq('lesson_students.student_id', studentId)
     .lte('start_time', new Date().toISOString())
-    .in('status', ['active', 'cancelled']);
-  const { data: cancellations } = await db.from('cancellations')
-    .select('id, is_paid, status')
-    .eq('student_id', studentId).eq('status', 'pending');
-  const total = (lessons || []).length + (cancellations || []).length;
+    .eq('status', 'active');
+  // Denominator addition: outstanding misses (any reason — paid or unpaid)
+  // lessons with status='cancelled' are NOT queried separately to avoid double-counting:
+  // computeAndSyncCancellations creates a cancellations record for each cancelled lesson.
+  const { data: pendingCancellations } = await db.from('cancellations')
+    .select('id')
+    .eq('student_id', studentId)
+    .eq('status', 'pending');
+  const completed = (completedLessons || []).length;
+  const missed = (pendingCancellations || []).length;
+  const total = completed + missed;
   if (total === 0) return 0;
-  const completed = (lessons || []).filter(l => l.status === 'active').length
-    + (cancellations || []).filter(c => c.is_paid).length;
   return Math.round((completed / total) * 100);
 }
