@@ -341,11 +341,17 @@ function cancelDeclension(n) {
       <div class="payroll-stat"><span class="payroll-label">Комиссия</span><span class="payroll-num">${data.commission} ₽</span></div>
     </div>`;
     html += `<div class="payroll-students">`;
+    // 1. Unpaid cancellations on top (red)
+    data.cancelledStudents.filter(cs => !cs.isPaid).forEach(cs => {
+      html += `<div class="payroll-student payroll-student-cancelled"><span class="ps-name">${cs.name}</span><span class="ps-count">отменено</span><span class="ps-amount">${cs.amount} ₽</span></div>`;
+    });
+    // 2. Conducted lessons in the middle (blue), sorted by amount descending
     students.forEach(s => {
       html += `<div class="payroll-student"><span class="ps-name">${s.name}</span><span class="ps-count">${s.count} зан.</span><span class="ps-amount">${s.amount} ₽</span></div>`;
     });
-    data.cancelledStudents.forEach(cs => {
-      html += `<div class="payroll-student ${cs.isPaid ? 'payroll-student-paid' : 'payroll-student-cancelled'}"><span class="ps-name">${cs.name}</span><span class="ps-count">отменено</span><span class="ps-amount">${cs.amount} ₽</span></div>`;
+    // 3. Paid cancellations at the bottom (yellow)
+    data.cancelledStudents.filter(cs => cs.isPaid).forEach(cs => {
+      html += `<div class="payroll-student payroll-student-paid"><span class="ps-name">${cs.name}</span><span class="ps-count">отменено</span><span class="ps-amount">${cs.amount} ₽</span></div>`;
     });
     html += `</div></div>`;
   });
