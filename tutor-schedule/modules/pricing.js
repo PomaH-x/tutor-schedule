@@ -437,6 +437,17 @@ function initPricingAndPayroll() {
     if (e.target === e.currentTarget) closeReasonModal();
   });
   document.getElementById('reason-image-input').addEventListener('change', onReasonImagePicked);
+
+  // Lightbox: click on overlay or close button → close; click on image → stay open; ESC → close
+  const lightboxOverlay = document.getElementById('lightbox-overlay');
+  lightboxOverlay.addEventListener('click', (e) => {
+    if (e.target === lightboxOverlay || e.target.closest('#lightbox-close')) {
+      closeLightbox();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && lightboxOverlay.classList.contains('active')) closeLightbox();
+  });
 }
 
 // ===== CANCELLATION REASON =====
@@ -507,6 +518,7 @@ async function refreshReasonImagePreview() {
   if (reasonCtx.pendingFile) {
     const url = URL.createObjectURL(reasonCtx.pendingFile);
     wrap.innerHTML = `<img src="${url}" alt="">`;
+    attachReasonImageZoom(wrap, url);
     document.getElementById('btn-remove-reason-image').style.display = reasonCtx.editable ? '' : 'none';
     return;
   }
@@ -515,6 +527,7 @@ async function refreshReasonImagePreview() {
       .createSignedUrl(reasonCtx.existingImagePath, 3600);
     if (!error && signed?.signedUrl) {
       wrap.innerHTML = `<img src="${signed.signedUrl}" alt="">`;
+      attachReasonImageZoom(wrap, signed.signedUrl);
     } else {
       wrap.innerHTML = '<div class="reason-img-error">Не удалось загрузить изображение</div>';
     }
@@ -523,6 +536,29 @@ async function refreshReasonImagePreview() {
   }
   wrap.innerHTML = '<div class="reason-img-empty">Скриншот не прикреплён</div>';
   document.getElementById('btn-remove-reason-image').style.display = 'none';
+}
+
+function attachReasonImageZoom(wrap, src) {
+  const img = wrap.querySelector('img');
+  if (!img) return;
+  img.addEventListener('click', () => openLightbox(src));
+}
+
+// ===== LIGHTBOX (image viewer) =====
+
+function openLightbox(src) {
+  const overlay = document.getElementById('lightbox-overlay');
+  const img = document.getElementById('lightbox-img');
+  img.src = src;
+  overlay.classList.add('active');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeLightbox() {
+  const overlay = document.getElementById('lightbox-overlay');
+  overlay.classList.remove('active');
+  document.getElementById('lightbox-img').src = '';
+  document.body.style.overflow = '';
 }
 
 function onReasonImagePicked(e) {

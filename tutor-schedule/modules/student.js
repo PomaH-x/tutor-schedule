@@ -24,61 +24,69 @@ function updateStudentWeekTabs() {
   });
 }
 
-async function loadStudentRecord() {
+async function loadStudentRecords() {
   if (studentRecord) return studentRecord;
   const { data, error } = await db.from('students')
     .select('id, first_name, last_name, subject, grade, is_individual, is_online, price_type, teacher_id, profile_id')
-    .eq('profile_id', state.user.id)
-    .single();
-  if (error) console.error('loadStudentRecord error:', error);
-  studentRecord = data;
-  return data;
+    .eq('profile_id', state.user.id);
+  if (error) console.error('loadStudentRecords error:', error);
+  studentRecord = data || [];
+  return studentRecord;
+}
+
+// Find the students-record for a given teacher (used to pick correct pricing/subject)
+function findStudentByTeacher(records, teacherId) {
+  if (!Array.isArray(records)) return records;
+  return records.find(s => s.teacher_id === teacherId) || records[0] || null;
 }
 
 async function fetchStudentLessons(weekStartDate, weekEndDate) {
-  const student = await loadStudentRecord();
-  if (!student) return { lessons: [], cancellations: [], payments: [] };
+  const records = await loadStudentRecords();
+  if (!records || records.length === 0) return { lessons: [], cancellations: [], payments: [], records: [] };
 
+  const studentIds = records.map(r => r.id);
   const ws = formatDate(weekStartDate);
   const we = formatDate(weekEndDate);
 
   const lessonsQ = db.from('lessons')
-    .select('id, week_start, room, start_time, end_time, status, teacher:profiles!teacher_id(full_name, color, telegram), lesson_students!inner(student_id)')
+    .select('id, teacher_id, week_start, room, start_time, end_time, status, teacher:profiles!teacher_id(full_name, color, telegram), lesson_students!inner(student_id)')
     .gte('week_start', ws).lte('week_start', we)
     .in('status', ['active', 'cancelled'])
-    .eq('lesson_students.student_id', student.id);
+    .in('lesson_students.student_id', studentIds);
 
   const cancelQ = db.from('cancellations')
-    .select('id, week_start, lesson_start_time, status, is_paid, teacher:profiles!teacher_id(full_name, color, telegram)')
-    .eq('student_id', student.id)
+    .select('id, teacher_id, week_start, lesson_start_time, status, is_paid, teacher:profiles!teacher_id(full_name, color, telegram)')
+    .in('student_id', studentIds)
     .gte('week_start', ws).lte('week_start', we)
     .eq('status', 'pending');
 
   const paymentsQ = db.from('payments')
     .select('id, lesson_id, status')
-    .eq('student_id', student.id);
+    .in('student_id', studentIds);
 
   const [lessonsRes, cancelRes, paymentsRes] = await Promise.all([lessonsQ, cancelQ, paymentsQ]);
   return {
     lessons: lessonsRes.data || [],
     cancellations: cancelRes.data || [],
     payments: paymentsRes.data || [],
-    student
+    records
   };
 }
 
 // Past lessons (from previous weeks) without an approved payment.
 // They "follow" the student on the current week until paid + confirmed.
-async function fetchOverduePastLessons(student, payments) {
+async function fetchOverduePastLessons(records, payments) {
+  const studentIds = (records || []).map(r => r.id);
+  if (studentIds.length === 0) return [];
   const currentWs = formatDate(getMonday(new Date()));
   const nowIso = new Date().toISOString();
 
   const { data, error } = await db.from('lessons')
-    .select('id, week_start, room, start_time, end_time, status, teacher:profiles!teacher_id(full_name, color, telegram), lesson_students!inner(student_id)')
+    .select('id, teacher_id, week_start, room, start_time, end_time, status, teacher:profiles!teacher_id(full_name, color, telegram), lesson_students!inner(student_id)')
     .lt('week_start', currentWs)
     .lt('end_time', nowIso)
     .eq('status', 'active')
-    .eq('lesson_students.student_id', student.id);
+    .in('lesson_students.student_id', studentIds);
 
   if (error) { console.error('fetchOverduePastLessons error:', error); return []; }
 
@@ -86,13 +94,14 @@ async function fetchOverduePastLessons(student, payments) {
   return (data || []).filter(l => !approvedLessonIds.has(l.id));
 }
 
-function buildLessonItems(lessons, cancellations, payments, student) {
+function buildLessonItems(lessons, cancellations, payments, records) {
   const items = [];
 
   lessons.forEach(l => {
     const start = new Date(l.start_time);
     const end = new Date(l.end_time);
     const durMin = Math.round((end - start) / 60000);
+    const student = findStudentByTeacher(records, l.teacher_id);
     const cost = computeStudentCost(durMin, student);
     const lessonPayment = payments.find(p => p.lesson_id === l.id);
     const isPaid = lessonPayment && lessonPayment.status === 'approved';
@@ -106,11 +115,12 @@ function buildLessonItems(lessons, cancellations, payments, student) {
     items.push({
       id: l.id,
       type: 'lesson',
+      teacherId: l.teacher_id,
       date: start,
       startTime: `${start.getHours().toString().padStart(2,'0')}:${start.getMinutes().toString().padStart(2,'0')}`,
       endTime: `${end.getHours().toString().padStart(2,'0')}:${end.getMinutes().toString().padStart(2,'0')}`,
       duration: durMin,
-      subject: student.subject || '',
+      subject: student?.subject || '',
       teacherName: l.teacher?.full_name || '',
       teacherColor: l.teacher?.color || '#1e6fe8',
       teacherTelegram: l.teacher?.telegram || null,
@@ -126,15 +136,17 @@ function buildLessonItems(lessons, cancellations, payments, student) {
     if (!c.lesson_start_time) return;
     const start = new Date(c.lesson_start_time);
     const dur = 90;
+    const student = findStudentByTeacher(records, c.teacher_id);
     const cost = computeStudentCost(dur, student);
     items.push({
       id: 'c_' + c.id,
       type: 'cancellation',
+      teacherId: c.teacher_id,
       date: start,
       startTime: `${start.getHours().toString().padStart(2,'0')}:${start.getMinutes().toString().padStart(2,'0')}`,
       endTime: '',
       duration: dur,
-      subject: student.subject || '',
+      subject: student?.subject || '',
       teacherName: c.teacher?.full_name || '',
       teacherColor: c.teacher?.color || '#1e6fe8',
       teacherTelegram: c.teacher?.telegram || null,
@@ -149,7 +161,7 @@ function buildLessonItems(lessons, cancellations, payments, student) {
 }
 
 function computeStudentCost(durMin, student) {
-  if (typeof findPricing !== 'function') return 0;
+  if (!student || typeof findPricing !== 'function') return 0;
   const price = findPricing(durMin, student.is_individual || false, student.price_type || 'new', student.is_online || false);
   return price ? price.student_price : 0;
 }
@@ -167,8 +179,8 @@ async function renderStudentSchedule() {
   const isCurrentWeek = (studentWeekOffset === 0);
   const isPastWeek = (studentWeekOffset < 0);
 
-  const { lessons, cancellations, payments, student } = await fetchStudentLessons(ws, we);
-  if (!student) {
+  const { lessons, cancellations, payments, records } = await fetchStudentLessons(ws, we);
+  if (!records || records.length === 0) {
     document.getElementById('student-summary').innerHTML = '';
     document.getElementById('student-lessons-list').innerHTML = '<div class="online-empty">Профиль не привязан к ученику</div>';
     return;
@@ -187,13 +199,13 @@ async function renderStudentSchedule() {
     });
   }
 
-  const items = buildLessonItems(lessonsForWeek, cancellations, payments, student);
+  const items = buildLessonItems(lessonsForWeek, cancellations, payments, records);
 
   // On current week: pull overdue past unpaid lessons and prepend them as "follow-up" cards.
   let overdueItems = [];
   if (isCurrentWeek) {
-    const overdueLessons = await fetchOverduePastLessons(student, payments);
-    overdueItems = buildLessonItems(overdueLessons, [], payments, student);
+    const overdueLessons = await fetchOverduePastLessons(records, payments);
+    overdueItems = buildLessonItems(overdueLessons, [], payments, records);
     overdueItems.forEach(it => { it.isOverdue = true; });
   }
 
@@ -205,7 +217,8 @@ async function renderStudentSchedule() {
     .filter(it => (it.status === 'completed' || it.status === 'paid_cancel') && !it.isPaid && !it.paymentPending)
     .reduce((sum, it) => sum + it.cost, 0);
 
-  const attendance = await computeAttendance(student.id);
+  // Attendance summed across all teacher records
+  const attendance = await computeAttendanceForRecords(records);
 
   summaryEl.innerHTML = `
     <div class="student-stat"><span class="student-stat-num">${planned}</span><span class="student-stat-label">Запланировано</span></div>
@@ -274,22 +287,26 @@ async function renderStudentSchedule() {
       </div>
       <div class="student-card-footer">
         ${statusBadge}
-        ${showPayBtn ? `<button class="btn-pay-lesson" data-lesson-id="${it.id}" data-amount="${it.cost}">Оплатить</button>` : ''}
+        ${showPayBtn ? `<button class="btn-pay-lesson" data-lesson-id="${it.id}" data-amount="${it.cost}" data-teacher-id="${it.teacherId}">Оплатить</button>` : ''}
       </div>
     </div>`;
   });
   list.innerHTML = html;
 
   list.querySelectorAll('.btn-pay-lesson').forEach(btn => {
-    btn.addEventListener('click', () => openPaymentModal(btn.dataset.lessonId, +btn.dataset.amount));
+    btn.addEventListener('click', () => openPaymentModal(btn.dataset.lessonId, +btn.dataset.amount, btn.dataset.teacherId));
   });
 }
 
-async function computeAttendance(studentId) {
+async function computeAttendance(studentIds) {
+  // Accept either a single id (string) or an array. Normalize to array.
+  const ids = Array.isArray(studentIds) ? studentIds : [studentIds];
+  if (ids.length === 0) return 0;
+
   // Numerator: actually conducted past lessons (status='active', already happened)
   const { data: completedLessons } = await db.from('lessons')
     .select('id, lesson_students!inner(student_id)')
-    .eq('lesson_students.student_id', studentId)
+    .in('lesson_students.student_id', ids)
     .lte('start_time', new Date().toISOString())
     .eq('status', 'active');
 
@@ -298,14 +315,20 @@ async function computeAttendance(studentId) {
   // computeAndSyncCancellations creates a cancellations record for each cancelled lesson.
   const { data: pendingCancellations } = await db.from('cancellations')
     .select('id')
-    .eq('student_id', studentId)
+    .in('student_id', ids)
     .eq('status', 'pending');
 
-  const completed = (completedLessons || []).length;
+  // Unique lessons (one student may have several records, but lesson is the same entity)
+  const uniqueLessons = new Set((completedLessons || []).map(l => l.id));
+  const completed = uniqueLessons.size;
   const missed = (pendingCancellations || []).length;
   const total = completed + missed;
   if (total === 0) return 0;
   return Math.round((completed / total) * 100);
+}
+
+async function computeAttendanceForRecords(records) {
+  return computeAttendance((records || []).map(r => r.id));
 }
 
 async function renderStudentHistory() {
@@ -318,15 +341,15 @@ async function renderStudentHistory() {
   const expStart = new Date(monthStart); expStart.setDate(expStart.getDate() - 7);
   const expEnd = new Date(monthEnd); expEnd.setDate(expEnd.getDate() + 7);
 
-  const { lessons, cancellations, payments, student } = await fetchStudentLessons(expStart, expEnd);
+  const { lessons, cancellations, payments, records } = await fetchStudentLessons(expStart, expEnd);
 
   const tbody = document.getElementById('student-history-tbody');
-  if (!student) {
+  if (!records || records.length === 0) {
     tbody.innerHTML = '<tr><td colspan="10" class="history-empty">Профиль не привязан к ученику</td></tr>';
     return;
   }
 
-  const items = buildLessonItems(lessons, cancellations, payments, student)
+  const items = buildLessonItems(lessons, cancellations, payments, records)
     .filter(it => it.date >= monthStart && it.date <= monthEnd);
 
   if (items.length === 0) {
@@ -374,10 +397,12 @@ async function renderStudentHistory() {
 
 let pendingPaymentLessonId = null;
 let pendingPaymentAmount = 0;
+let pendingPaymentTeacherId = null;
 
-function openPaymentModal(lessonId, amount) {
+function openPaymentModal(lessonId, amount, teacherId) {
   pendingPaymentLessonId = lessonId;
   pendingPaymentAmount = amount;
+  pendingPaymentTeacherId = teacherId;
   document.getElementById('payment-amount').textContent = amount + ' ₽';
   document.querySelectorAll('input[name="payment-method"]').forEach(r => r.checked = false);
   document.getElementById('payment-overlay').classList.add('active');
@@ -386,6 +411,7 @@ function openPaymentModal(lessonId, amount) {
 function closePaymentModal() {
   document.getElementById('payment-overlay').classList.remove('active');
   pendingPaymentLessonId = null;
+  pendingPaymentTeacherId = null;
 }
 
 async function submitPayment() {
@@ -393,7 +419,8 @@ async function submitPayment() {
   if (!method) { showToast('Выберите способ оплаты', 'error'); return; }
   if (!pendingPaymentLessonId) return;
 
-  const student = await loadStudentRecord();
+  const records = await loadStudentRecords();
+  const student = findStudentByTeacher(records, pendingPaymentTeacherId);
   if (!student) { showToast('Ошибка', 'error'); return; }
 
   const { error } = await db.from('payments').insert({

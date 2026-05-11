@@ -231,6 +231,119 @@ input, textarea, select {
   gap: 10px;
 }
 
+.reg-teachers-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.reg-teachers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  background: var(--bg-elevated);
+}
+
+.reg-teachers-loading,
+.reg-teachers-empty {
+  text-align: center;
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.reg-teacher-item {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.reg-teacher-item.expanded {
+  border-color: var(--accent);
+}
+
+.reg-teacher-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.reg-teacher-head input[type=checkbox] {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.reg-teacher-color {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.reg-teacher-name {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.reg-teacher-arrow {
+  color: var(--text-muted);
+  font-size: 18px;
+  transform: rotate(0deg);
+  transition: transform 0.15s;
+}
+
+.reg-teacher-item.expanded .reg-teacher-arrow {
+  transform: rotate(90deg);
+}
+
+.reg-subjects-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 10px 10px 36px;
+}
+
+.reg-subject-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.reg-subject-item:hover {
+  border-color: var(--accent);
+}
+
+.reg-subject-item input[type=checkbox] {
+  margin: 0;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
 .btn-primary {
   padding: 14px;
   background: var(--accent);
@@ -3552,6 +3665,11 @@ input, textarea, select {
   max-height: 360px;
   border-radius: var(--radius-sm);
   display: block;
+  cursor: zoom-in;
+  transition: opacity 0.15s;
+}
+.reason-image-preview img:hover {
+  opacity: 0.92;
 }
 
 .reason-img-empty,
@@ -3582,6 +3700,71 @@ input, textarea, select {
   color: var(--text-muted);
   margin-top: 4px;
 }
+
+/* Lightbox — full-screen image viewer */
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  z-index: 10000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  cursor: zoom-out;
+}
+
+.lightbox-overlay.active {
+  display: flex;
+  animation: lightbox-fade-in 0.18s ease-out;
+}
+
+.lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  cursor: default;
+  display: block;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  animation: lightbox-zoom-in 0.2s ease-out;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  color: #fff;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+  z-index: 1;
+}
+
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+@keyframes lightbox-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes lightbox-zoom-in {
+  from { transform: scale(0.96); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* Make preview images obviously clickable — handled in .reason-image-preview img above */
 
 .sd-section {
   margin-bottom: 12px;

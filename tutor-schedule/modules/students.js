@@ -525,15 +525,31 @@ function confirmLinkStudent(profileId) {
 
 async function performLinkStudent(fakeStudentId, profileId, teacherId) {
   try {
-    // Does the real student record already exist for this teacher?
-    const { data: existingReal } = await db.from('students')
-      .select('id')
-      .eq('profile_id', profileId)
-      .eq('teacher_id', teacherId)
-      .maybeSingle();
+    // Load the fake record's subject for matching
+    const { data: fakeStudent } = await db.from('students')
+      .select('subject')
+      .eq('id', fakeStudentId)
+      .single();
+    const fakeSubject = fakeStudent?.subject || null;
 
-    if (existingReal) {
-      const realId = existingReal.id;
+    // For this teacher, the real profile may have several students-records (different subjects).
+    // We treat them as the SAME if the subject matches. No subject → first record.
+    const { data: candidates } = await db.from('students')
+      .select('id, subject')
+      .eq('profile_id', profileId)
+      .eq('teacher_id', teacherId);
+
+    let matching = null;
+    if (Array.isArray(candidates) && candidates.length > 0) {
+      if (fakeSubject) {
+        matching = candidates.find(c => (c.subject || '') === fakeSubject) || null;
+      } else {
+        matching = candidates[0];
+      }
+    }
+
+    if (matching) {
+      const realId = matching.id;
 
       // lesson_students PK = (lesson_id, student_id) — clean up potential collisions
       const { data: fakeLs } = await db.from('lesson_students').select('lesson_id').eq('student_id', fakeStudentId);
@@ -565,7 +581,8 @@ async function performLinkStudent(fakeStudentId, profileId, teacherId) {
       const { error: delErr } = await db.from('students').delete().eq('id', fakeStudentId);
       if (delErr) throw delErr;
     } else {
-      // Simpler path: no real record exists yet for this teacher — just attach the profile_id
+      // No matching record exists for this teacher (different subject, or no records at all) —
+      // just attach the profile_id and the fake becomes the real one.
       const { error: updErr } = await db.from('students').update({ profile_id: profileId }).eq('id', fakeStudentId);
       if (updErr) throw updErr;
     }

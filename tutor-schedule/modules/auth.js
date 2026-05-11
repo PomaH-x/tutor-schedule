@@ -71,54 +71,89 @@ async function updateRegisterForm(role) {
 }
 
 async function loadTeachersForRegistration() {
-  const sel = document.getElementById('reg-teacher-id');
-  const subjSel = document.getElementById('reg-subject');
-  sel.innerHTML = '<option value="">Выберите преподавателя</option>';
-  subjSel.innerHTML = '<option value="">Сначала выберите преподавателя</option>';
+  const list = document.getElementById('reg-teachers-list');
+  list.innerHTML = '<div class="reg-teachers-loading">Загрузка преподавателей…</div>';
 
-  const { data, error } = await db.from('profiles')
-    .select('id, full_name')
+  // Pull approved teachers + their subjects in two requests
+  const { data: teachers, error: tErr } = await db.from('profiles')
+    .select('id, full_name, color')
     .in('role', ['teacher', 'admin'])
     .eq('status', 'approved')
     .order('full_name');
 
-  if (error) console.error('Load teachers error:', error);
-
-  if (!data || data.length === 0) {
-    sel.innerHTML = '<option value="">Нет преподавателей</option>';
+  if (tErr) console.error('Load teachers error:', tErr);
+  if (!teachers || teachers.length === 0) {
+    list.innerHTML = '<div class="reg-teachers-empty">Нет преподавателей</div>';
     return;
   }
 
-  (data || []).forEach(t => {
-    const opt = document.createElement('option');
-    opt.value = t.id;
-    opt.textContent = t.full_name;
-    sel.appendChild(opt);
+  const { data: tsRows, error: sErr } = await db.from('teacher_subjects')
+    .select('teacher_id, subject:subjects(id, name)');
+
+  if (sErr) console.error('Load teacher_subjects error:', sErr);
+
+  // Group subjects by teacher
+  const subjectsByTeacher = {};
+  (tsRows || []).forEach(row => {
+    if (!row.subject) return;
+    if (!subjectsByTeacher[row.teacher_id]) subjectsByTeacher[row.teacher_id] = [];
+    subjectsByTeacher[row.teacher_id].push(row.subject);
   });
 
-  sel.onchange = async () => {
-    const tid = sel.value;
-    subjSel.innerHTML = '<option value="">Загрузка...</option>';
-    if (!tid) { subjSel.innerHTML = '<option value="">Сначала выберите преподавателя</option>'; return; }
+  list.innerHTML = teachers.map(t => {
+    const subjects = subjectsByTeacher[t.id] || [];
+    if (subjects.length === 0) return ''; // hide teachers without subjects — they can't be picked anyway
+    const color = t.color || 'var(--accent)';
+    const subjectsHTML = subjects
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(s => `<label class="reg-subject-item">
+        <input type="checkbox" data-subject-id="${s.id}" data-subject-name="${s.name}">
+        <span>${s.name}</span>
+      </label>`).join('');
+    return `<div class="reg-teacher-item" data-teacher-id="${t.id}">
+      <label class="reg-teacher-head">
+        <input type="checkbox" data-teacher-toggle>
+        <span class="reg-teacher-color" style="background:${color}"></span>
+        <span class="reg-teacher-name">${t.full_name}</span>
+        <span class="reg-teacher-arrow">›</span>
+      </label>
+      <div class="reg-subjects-list" hidden>
+        ${subjectsHTML}
+      </div>
+    </div>`;
+  }).join('');
 
-    const { data: ts } = await db.from('teacher_subjects')
-      .select('subject:subjects(id, name)')
-      .eq('teacher_id', tid);
-
-    if (!ts || ts.length === 0) {
-      subjSel.innerHTML = '<option value="">У преподавателя нет предметов</option>';
-      return;
-    }
-
-    subjSel.innerHTML = '<option value="">Выберите предмет</option>';
-    ts.forEach(row => {
-      if (!row.subject) return;
-      const opt = document.createElement('option');
-      opt.value = row.subject.name;
-      opt.textContent = row.subject.name;
-      subjSel.appendChild(opt);
+  // Toggle subjects on teacher checkbox
+  list.querySelectorAll('[data-teacher-toggle]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const item = cb.closest('.reg-teacher-item');
+      const subs = item.querySelector('.reg-subjects-list');
+      if (cb.checked) {
+        subs.hidden = false;
+        item.classList.add('expanded');
+      } else {
+        subs.hidden = true;
+        item.classList.remove('expanded');
+        // Uncheck all of this teacher's subjects when teacher is deselected
+        subs.querySelectorAll('input[type=checkbox]').forEach(b => { b.checked = false; });
+      }
     });
-  };
+  });
+}
+
+// Collect selected (teacher_id, subject_id) pairs from the registration form
+function collectSelectedTeacherSubjects() {
+  const pairs = [];
+  document.querySelectorAll('#reg-teachers-list .reg-teacher-item').forEach(item => {
+    const teacherCb = item.querySelector('[data-teacher-toggle]');
+    if (!teacherCb || !teacherCb.checked) return;
+    const teacherId = item.dataset.teacherId;
+    const subjects = item.querySelectorAll('.reg-subjects-list input[type=checkbox]:checked');
+    subjects.forEach(s => {
+      pairs.push({ teacher_id: teacherId, subject_id: s.dataset.subjectId, subject_name: s.dataset.subjectName });
+    });
+  });
+  return pairs;
 }
 
 async function handleLogin() {
@@ -172,17 +207,19 @@ async function handleRegister() {
     return;
   }
 
-  let requestedTeacherId = null;
-  let requestedSubject = null;
   let requestedGrade = null;
+  let selectedPairs = [];
 
   if (role === 'student') {
-    requestedTeacherId = document.getElementById('reg-teacher-id').value;
-    requestedSubject = document.getElementById('reg-subject').value;
     requestedGrade = document.getElementById('reg-grade').value;
+    selectedPairs = collectSelectedTeacherSubjects();
 
-    if (!requestedTeacherId || !requestedSubject || !requestedGrade) {
-      showToast('Заполните все поля', 'error');
+    if (!requestedGrade) {
+      showToast('Укажите класс', 'error');
+      return;
+    }
+    if (selectedPairs.length === 0) {
+      showToast('Выберите хотя бы одного преподавателя и предмет', 'error');
       return;
     }
   }
@@ -218,8 +255,7 @@ async function handleRegister() {
   };
 
   if (role === 'student') {
-    profileData.requested_teacher_id = requestedTeacherId;
-    profileData.requested_subject = requestedSubject;
+    // Keep requested_grade for backward compat with admin UI / older queries
     profileData.requested_grade = +requestedGrade;
   }
 
@@ -227,13 +263,30 @@ async function handleRegister() {
     .from('profiles')
     .insert(profileData);
 
-  btn.disabled = false;
-
   if (profileError) {
+    btn.disabled = false;
     showToast('Ошибка создания профиля', 'error');
     return;
   }
 
+  // Save (teacher, subject) pairs as join requests
+  if (role === 'student' && selectedPairs.length > 0) {
+    const rows = selectedPairs.map(p => ({
+      profile_id: data.user.id,
+      teacher_id: p.teacher_id,
+      subject_id: p.subject_id,
+      grade: +requestedGrade
+    }));
+    const { error: sjrErr } = await db.from('student_join_requests').insert(rows);
+    if (sjrErr) {
+      console.error('student_join_requests insert error:', sjrErr);
+      btn.disabled = false;
+      showToast('Ошибка сохранения заявки', 'error');
+      return;
+    }
+  }
+
+  btn.disabled = false;
   await onAuthSuccess(data.user);
 }
 

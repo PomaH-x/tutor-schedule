@@ -84,12 +84,6 @@
             <input type="text" id="input-name2" placeholder="" autocomplete="family-name">
             <input type="tel" id="input-reg-login" placeholder="Телефон" autocomplete="tel">
             <div id="student-reg-fields" class="student-reg-fields" style="display:none">
-              <select id="reg-teacher-id">
-                <option value="">Выберите преподавателя</option>
-              </select>
-              <select id="reg-subject">
-                <option value="">Сначала выберите преподавателя</option>
-              </select>
               <select id="reg-grade">
                 <option value="">Класс</option>
                 <option value="5">5 класс</option>
@@ -100,6 +94,10 @@
                 <option value="10">10 класс</option>
                 <option value="11">11 класс</option>
               </select>
+              <div class="reg-teachers-hint">Выберите преподавателей и их предметы</div>
+              <div id="reg-teachers-list" class="reg-teachers-list">
+                <div class="reg-teachers-loading">Загрузка преподавателей…</div>
+              </div>
             </div>
             <div class="password-field">
               <input type="password" id="input-reg-password" placeholder="Пароль" autocomplete="new-password">
@@ -693,6 +691,11 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <div id="lightbox-overlay" class="lightbox-overlay">
+      <button class="lightbox-close" id="lightbox-close" aria-label="Закрыть">×</button>
+      <img id="lightbox-img" class="lightbox-img" alt="">
     </div>
 
     <div id="teacher-subj-overlay" class="modal-overlay">

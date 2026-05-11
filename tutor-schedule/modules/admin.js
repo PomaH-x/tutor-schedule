@@ -27,10 +27,30 @@ async function loadPendingCount() {
 async function loadPendingUsers() {
   const { data } = await db
     .from('profiles')
-    .select('*, requested_teacher:profiles!requested_teacher_id(full_name, color)')
+    .select('*')
     .eq('status', 'pending')
     .order('created_at');
   pendingUsers = data || [];
+
+  // For students — pull their join requests (teacher_id, subject_id, grade)
+  const studentIds = pendingUsers.filter(u => u.role === 'student').map(u => u.id);
+  if (studentIds.length > 0) {
+    const { data: requests, error } = await db
+      .from('student_join_requests')
+      .select('profile_id, teacher_id, subject_id, grade, teacher:profiles!teacher_id(full_name, color), subject:subjects(id, name)')
+      .in('profile_id', studentIds);
+    if (error) console.error('Load join requests error:', error);
+
+    // Group by profile and by teacher within each profile
+    const byProfile = {};
+    (requests || []).forEach(r => {
+      if (!byProfile[r.profile_id]) byProfile[r.profile_id] = [];
+      byProfile[r.profile_id].push(r);
+    });
+    pendingUsers.forEach(u => {
+      if (u.role === 'student') u.joinRequests = byProfile[u.id] || [];
+    });
+  }
   renderPendingUsers();
 }
 
@@ -47,13 +67,23 @@ function renderPendingUsers() {
     const isStudent = u.role === 'student';
     let details = '';
     if (isStudent) {
-      const tColor = u.requested_teacher?.color || '#1e6fe8';
-      const tName = u.requested_teacher?.full_name || '—';
+      // Group requests by teacher for compact display
+      const byTeacher = {};
+      (u.joinRequests || []).forEach(r => {
+        const tid = r.teacher_id;
+        if (!byTeacher[tid]) byTeacher[tid] = { name: r.teacher?.full_name || '—', color: r.teacher?.color || '#1e6fe8', subjects: [] };
+        if (r.subject?.name) byTeacher[tid].subjects.push(r.subject.name);
+      });
+      const teachersHTML = Object.values(byTeacher).map(g =>
+        `<div class="pending-row">
+          <span class="pending-label"><span class="teacher-color-dot" style="background:${g.color}"></span>${g.name}:</span>
+          <span>${g.subjects.join(', ') || '—'}</span>
+        </div>`
+      ).join('');
       details = `<div class="pending-details">
         ${u.phone ? `<div class="pending-row"><span class="pending-label">Телефон:</span><span>${u.phone}</span></div>` : ''}
-        <div class="pending-row"><span class="pending-label">Преподаватель:</span><span><span class="teacher-color-dot" style="background:${tColor}"></span>${tName}</span></div>
-        ${u.requested_subject ? `<div class="pending-row"><span class="pending-label">Предмет:</span><span>${u.requested_subject}</span></div>` : ''}
         ${u.requested_grade ? `<div class="pending-row"><span class="pending-label">Класс:</span><span>${u.requested_grade}</span></div>` : ''}
+        ${teachersHTML || '<div class="pending-row"><span class="pending-label">Заявки:</span><span>—</span></div>'}
       </div>`;
     }
     return `<div class="pending-card pending-card-expanded" data-id="${u.id}">
@@ -84,24 +114,33 @@ async function approveUser(userId) {
   const user = pendingUsers.find(u => u.id === userId);
   if (!user) return;
 
-  // For students — also create a students record linked to teacher
-  if (user.role === 'student' && user.requested_teacher_id) {
-    const { error: studentErr } = await db.from('students').insert({
-      first_name: user.full_name.split(' ')[0] || user.full_name,
-      last_name: user.full_name.split(' ').slice(1).join(' ') || '',
-      subject: user.requested_subject || '',
-      grade: user.requested_grade || null,
-      teacher_id: user.requested_teacher_id,
-      profile_id: user.id,
-      is_individual: false,
-      is_online: false,
-      price_type: 'new'
-    });
-    if (studentErr) {
-      console.error('Student create error:', studentErr);
-      showToast('Ошибка создания ученика: ' + studentErr.message, 'error');
-      return;
+  // For students — create one students record per (teacher, subject) pair
+  if (user.role === 'student' && Array.isArray(user.joinRequests) && user.joinRequests.length > 0) {
+    const firstName = user.full_name.split(' ')[0] || user.full_name;
+    const lastName = user.full_name.split(' ').slice(1).join(' ') || '';
+    const rows = user.joinRequests
+      .filter(r => r.teacher_id && r.subject?.name)
+      .map(r => ({
+        first_name: firstName,
+        last_name: lastName,
+        subject: r.subject.name,
+        grade: r.grade || user.requested_grade || null,
+        teacher_id: r.teacher_id,
+        profile_id: user.id,
+        is_individual: false,
+        is_online: false,
+        price_type: 'new'
+      }));
+    if (rows.length > 0) {
+      const { error: studentErr } = await db.from('students').insert(rows);
+      if (studentErr) {
+        console.error('Student create error:', studentErr);
+        showToast('Ошибка создания учеников: ' + studentErr.message, 'error');
+        return;
+      }
     }
+    // Clean up the join requests
+    await db.from('student_join_requests').delete().eq('profile_id', userId);
   }
 
   const { error } = await db.from('profiles').update({ status: 'approved' }).eq('id', userId);
