@@ -186,16 +186,24 @@ function renderGrid() {
     tc.textContent = `${hour}:${min.toString().padStart(2, '0')}`;
     tc.style.gridRow = row; tc.style.gridColumn = '1';
     grid.appendChild(tc);
-    for (let day = 0; day < 7; day++) {
-      for (let room = 1; room <= 3; room++) {
-        const cell = document.createElement('div');
-        cell.className = 'grid-cell';
-        if (min === 0) cell.classList.add('grid-cell-hour');
-        if (room === 3) cell.classList.add('grid-cell-day-end');
-        if (slot >= TOTAL_SLOTS) cell.classList.add('grid-cell-end');
-        cell.style.gridRow = row; cell.style.gridColumn = colForDayRoom(day, room);
-        if (slot < TOTAL_SLOTS) { cell.dataset.day = day; cell.dataset.room = room; cell.dataset.slot = slot; }
-        grid.appendChild(cell);
+    if (slot >= TOTAL_SLOTS) {
+      // Last row (22:00) — single cell spanning all content columns, acts as a visual terminator
+      const endCell = document.createElement('div');
+      endCell.className = 'grid-cell grid-cell-end grid-cell-end-row';
+      endCell.style.gridRow = row;
+      endCell.style.gridColumn = '2 / 23';
+      grid.appendChild(endCell);
+    } else {
+      for (let day = 0; day < 7; day++) {
+        for (let room = 1; room <= 3; room++) {
+          const cell = document.createElement('div');
+          cell.className = 'grid-cell';
+          if (min === 0) cell.classList.add('grid-cell-hour');
+          if (room === 3) cell.classList.add('grid-cell-day-end');
+          cell.style.gridRow = row; cell.style.gridColumn = colForDayRoom(day, room);
+          cell.dataset.day = day; cell.dataset.room = room; cell.dataset.slot = slot;
+          grid.appendChild(cell);
+        }
       }
     }
   }

@@ -197,14 +197,6 @@ async function handleRegister() {
   const role = state.selectedRole;
   const phone = normalizePhone(login);
 
-  // Hard safety net: admin role MUST NOT be self-registered.
-  // Even if a user manipulates the DOM to send role='admin', we coerce it to teacher
-  // with pending status. The DB also enforces this via RLS — see migration.
-  if (role !== 'teacher' && role !== 'student') {
-    showToast('Недопустимая роль', 'error');
-    return;
-  }
-
   if (phone.length < 10) {
     showToast('Введите корректный телефон', 'error');
     return;
@@ -255,7 +247,7 @@ async function handleRegister() {
   const profileData = {
     id: data.user.id,
     role: role,
-    status: 'pending',
+    status: role === 'admin' ? 'approved' : 'pending',
     full_name: fullName,
     short_name: shortName,
     color: color,

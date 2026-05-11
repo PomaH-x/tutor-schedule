@@ -674,6 +674,11 @@ input, textarea, select {
   pointer-events: none;
 }
 
+.grid-cell-end-row {
+  border-right: none;
+  border-bottom: none;
+}
+
 .grid-cell-selected {
   background: var(--accent-soft);
 }
