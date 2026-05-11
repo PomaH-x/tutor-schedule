@@ -781,11 +781,14 @@ input, textarea, select {
 .cs-name {
   flex: 1;
   font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .cs-remove {
   background: none;
-  border: 1px solid var(--border);
+  border: 1px solid #5c6066;
   color: var(--text-muted);
   cursor: pointer;
   width: 24px;
@@ -2204,7 +2207,6 @@ input, textarea, select {
 .modal-truant-block {
   border: 1.5px solid var(--danger);
   border-radius: var(--radius-sm);
-  padding: 4px 0;
   margin-bottom: 8px;
 }
 
