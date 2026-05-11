@@ -622,8 +622,8 @@ input, textarea, select {
 }
 
 .grid-room-label-today {
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: white;
+  background: var(--accent);
 }
 
 .grid-room-label-day-end {
@@ -905,10 +905,13 @@ input, textarea, select {
 }
 
 .recurring-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 12px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 12px;
+  background: var(--accent);
+  color: white;
+  font-size: 14px;
   border-radius: var(--radius-sm);
   margin-left: 8px;
   white-space: nowrap;
