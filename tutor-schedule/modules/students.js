@@ -298,10 +298,11 @@ async function openStudentDetail(studentId) {
     .eq('id', studentId).single();
   if (!student) { showToast('Ученик не найден', 'error'); return; }
 
-  document.getElementById('student-detail-title').textContent = `${student.first_name} ${student.last_name}`;
-
   // Attendance
   const attendance = await computeStudentAttendance(studentId);
+
+  document.getElementById('student-detail-title').innerHTML =
+    `${student.first_name} ${student.last_name}<span class="sd-att-inline" title="Посещаемость">${attendance}%</span>`;
 
   // Recent lessons (last 4 weeks)
   const fourWeeksAgo = new Date(); fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
@@ -330,7 +331,6 @@ async function openStudentDetail(studentId) {
 
   let html = `
     <div class="sd-top">
-      <div class="sd-attendance"><span class="sd-att-num">${attendance}%</span><span class="sd-att-label">Посещаемость</span></div>
       <div class="sd-fields">
         ${!student.profile_id ? `<div class="sd-link-banner">
           <div class="sd-link-banner-text">Тестовая карточка — не привязана к аккаунту ученика.</div>

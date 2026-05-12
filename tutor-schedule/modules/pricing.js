@@ -462,10 +462,11 @@ function renderCancellationRow(cs, colorClass, isAdmin) {
   } else {
     btn = `<button class="btn-reason btn-reason-missing" data-cancellation-id="${cs.cancellationId}" data-editable="0" disabled title="Причина не указана">Не указана</button>`;
   }
+  const statusLabel = cs.isPaid ? 'Платная отмена' : 'Отменено';
   return `<div class="payroll-student ${colorClass}">
     <span class="ps-name">${cs.name}</span>
     <span class="ps-reason">${btn}</span>
-    <span class="ps-count">отменено</span>
+    <span class="ps-cancel-status">${statusLabel}</span>
     <span class="ps-amount">${cs.amount} ₽</span>
   </div>`;
 }
