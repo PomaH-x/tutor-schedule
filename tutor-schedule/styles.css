@@ -1244,6 +1244,7 @@ input, textarea, select {
   line-height: 1;
   vertical-align: middle;
   margin-left: 6px;
+  padding-left: 2px;
 }
 
 .profile-tab:hover {
@@ -3857,6 +3858,25 @@ input, textarea, select {
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.sd-subject-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.sd-subject-stats b {
+  color: var(--text);
+}
+
+.sd-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 8px 0;
 }
 
 .sd-table-wrap {

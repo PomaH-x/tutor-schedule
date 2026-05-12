@@ -219,7 +219,10 @@ async function deleteStudent() {
   const name = student ? `${student.first_name} ${student.last_name}` : 'ученика';
 
   closeStudentModal();
-  showConfirm(`Удалить ${name}?`, async () => {
+  showConfirm(`Удалить ${name}? Вся история и занятия будут удалены.`, async () => {
+    await db.from('lesson_students').delete().eq('student_id', id);
+    await db.from('cancellations').delete().eq('student_id', id);
+    await db.from('payments').delete().eq('student_id', id);
     const { error } = await db.from('students').delete().eq('id', id);
     if (error) { showToast('Ошибка удаления', 'error'); return; }
     showToast('Ученик удалён', 'success');
@@ -298,21 +301,12 @@ async function openStudentDetail(studentId) {
     .eq('id', studentId).single();
   if (!student) { showToast('Ученик не найден', 'error'); return; }
 
-  // Attendance
-  const attendance = await computeStudentAttendance(studentId);
-
-  document.getElementById('student-detail-title').innerHTML =
-    `${student.first_name} ${student.last_name}<span class="sd-att-inline" title="Посещаемость">${attendance}%</span>`;
-
-  // Recent lessons (last 4 weeks)
-  const fourWeeksAgo = new Date(); fourWeeksAgo.setDate(fourWeeksAgo.getDate() - 28);
+  // All lessons for this student
   const { data: lessons } = await db.from('lessons')
-    .select('id, start_time, end_time, status, room, week_start, lesson_students!inner(student_id)')
+    .select('id, start_time, end_time, status, subject, week_start, lesson_students!inner(student_id)')
     .eq('lesson_students.student_id', studentId)
-    .gte('start_time', fourWeeksAgo.toISOString())
     .in('status', ['active', 'cancelled'])
-    .order('start_time', { ascending: false })
-    .limit(20);
+    .order('start_time', { ascending: false });
 
   // Payments
   const { data: payments } = await db.from('payments')
@@ -324,10 +318,27 @@ async function openStudentDetail(studentId) {
   const paymentsByLesson = {};
   (payments || []).forEach(p => { paymentsByLesson[p.lesson_id] = p; });
 
-  // Build body
+  // Group lessons by subject
+  const lessonList = lessons || [];
+  const subjectGroups = {};
+  lessonList.forEach(l => {
+    const subj = l.subject || student.subject || 'Без предмета';
+    if (!subjectGroups[subj]) subjectGroups[subj] = [];
+    subjectGroups[subj].push(l);
+  });
+
+  // Build select options
+  const subjectOptions = subjectsList.map(s =>
+    `<option value="${s.name}" ${s.name === (student.subject || '') ? 'selected' : ''}>${s.name}</option>`
+  ).join('');
+  const gradeOptions = [5,6,7,8,9,10,11].map(g =>
+    `<option value="${g}" ${g === (student.grade || 11) ? 'selected' : ''}>${g}</option>`
+  ).join('');
+  const sourceOptions = [
+    ['','— Не указан —'],['auto','Авто'],['youla','Юла'],['recommend','Рекомендации'],['vk','ВКонтакте'],['other','Другое']
+  ].map(([v,l]) => `<option value="${v}" ${(student.source||'') === v ? 'selected' : ''}>${l}</option>`).join('');
+
   const body = document.getElementById('student-detail-body');
-  const typeLabel = student.is_online ? 'Онлайн' : (student.is_individual ? 'Индивидуальное' : 'Групповое');
-  const priceLabel = student.price_type === 'old' ? 'Старая' : 'Новая';
 
   let html = `
     <div class="sd-top">
@@ -337,8 +348,8 @@ async function openStudentDetail(studentId) {
           <button class="btn-link-account" type="button">Привязать аккаунт</button>
         </div>` : ''}
         <div class="form-row">
-          <div class="form-group"><label>Предмет</label><input type="text" id="sd-subject" value="${student.subject || ''}"></div>
-          <div class="form-group"><label>Класс</label><input type="number" id="sd-grade" value="${student.grade || ''}" min="5" max="11"></div>
+          <div class="form-group"><label>Предмет</label><select id="sd-subject">${subjectOptions}</select></div>
+          <div class="form-group"><label>Класс</label><select id="sd-grade">${gradeOptions}</select></div>
         </div>
         <div class="form-row">
           <div class="form-group"><label>Тип занятия</label>
@@ -355,38 +366,77 @@ async function openStudentDetail(studentId) {
             </select>
           </div>
         </div>
+        <div class="form-row">
+          <div class="form-group"><label>Источник</label><select id="sd-source">${sourceOptions}</select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>ФИО родителя</label><input type="text" id="sd-parent-name" value="${student.parent_name || ''}" placeholder="Иванова Мария Сергеевна"></div>
+          <div class="form-group"><label>Телефон родителя</label><input type="text" id="sd-parent-phone" value="${student.parent_phone || ''}" placeholder="+7 (999) 000-00-00"></div>
+        </div>
         <div class="form-group"><label>Примечание</label><textarea id="sd-note" rows="2">${student.notes || ''}</textarea></div>
       </div>
-    </div>
+    </div>`;
 
-    <div class="sd-section">
-      <h4>Занятия</h4>
-      <div class="sd-table-wrap">
-        <table class="sd-table">
-          <thead><tr><th>Дата</th><th>Время</th><th>Длит.</th><th>Каб.</th><th>Статус</th><th>Оплата</th></tr></thead>
-          <tbody>`;
+  function formatDur(ms) {
+    const min = Math.round(ms / 60000);
+    if (min % 60 === 0) return (min / 60) + 'ч';
+    if (min % 30 === 0) return (min / 60).toFixed(1) + 'ч';
+    return min + 'мин';
+  }
 
-  (lessons || []).forEach(l => {
-    const s = new Date(l.start_time); const e = new Date(l.end_time);
-    const dur = Math.round((e - s) / 60000);
-    const dd = s.getDate().toString().padStart(2,'0');
-    const mm = (s.getMonth()+1).toString().padStart(2,'0');
-    const dayIdx = s.getDay() === 0 ? 6 : s.getDay() - 1;
-    const day = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][dayIdx];
-    const time = `${s.getHours().toString().padStart(2,'0')}:${s.getMinutes().toString().padStart(2,'0')}`;
-    const room = l.room === 0 ? 'Онл.' : ['Л','Ц','П'][l.room - 1] || '';
-    const isActive = l.status === 'active';
-    const past = e < new Date();
-    const statusStr = l.status === 'cancelled' ? '<span class="history-status history-cancelled">Отм.</span>'
-      : past ? '<span class="history-status history-completed">✓</span>'
-      : '<span class="history-status history-planned">⏳</span>';
-    const p = paymentsByLesson[l.id];
-    const payStr = !past ? '—' : p?.status === 'approved' ? '<span class="pay-paid">✓</span>' : p?.status === 'pending' ? '<span class="pay-pending">⏳</span>' : '<span class="pay-unpaid">✕</span>';
+  function buildLessonsTable(group) {
+    const now = new Date();
+    const completed = group.filter(l => l.status === 'active' && new Date(l.end_time) < now).length;
+    const cancelled = group.filter(l => l.status === 'cancelled').length;
+    const upcoming = group.filter(l => l.status === 'active' && new Date(l.end_time) >= now).length;
+    const att = (completed + cancelled) > 0 ? Math.round(completed / (completed + cancelled) * 100) : null;
 
-    html += `<tr><td>${dd}.${mm} ${day}</td><td>${time}</td><td>${dur}</td><td>${room}</td><td>${statusStr}</td><td>${payStr}</td></tr>`;
-  });
+    let t = `<div class="sd-subject-stats">`;
+    t += `<span>Всего: <b>${group.length}</b></span>`;
+    t += `<span>Проведено: <b>${completed}</b></span>`;
+    if (cancelled > 0) t += `<span>Пропущено: <b>${cancelled}</b></span>`;
+    if (upcoming > 0) t += `<span>Предстоит: <b>${upcoming}</b></span>`;
+    if (att !== null) t += `<span>Посещаемость: <b>${att}%</b></span>`;
+    t += `</div>`;
 
-  html += `</tbody></table></div></div>`;
+    t += `<div class="sd-table-wrap"><table class="sd-table">
+      <thead><tr><th>Дата</th><th>Время</th><th>Длит.</th><th>Статус</th><th>Оплата</th></tr></thead><tbody>`;
+
+    group.forEach(l => {
+      const s = new Date(l.start_time); const e = new Date(l.end_time);
+      const dur = formatDur(e - s);
+      const dd = s.getDate().toString().padStart(2,'0');
+      const mm = (s.getMonth()+1).toString().padStart(2,'0');
+      const dayIdx = s.getDay() === 0 ? 6 : s.getDay() - 1;
+      const day = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][dayIdx];
+      const time = `${s.getHours().toString().padStart(2,'0')}:${s.getMinutes().toString().padStart(2,'0')}`;
+      const past = e < now;
+      const statusStr = l.status === 'cancelled'
+        ? '<span class="history-status history-cancelled">Отм.</span>'
+        : past ? '<span class="history-status history-completed">✓</span>'
+        : '<span class="history-status history-planned">⏳</span>';
+      const p = paymentsByLesson[l.id];
+      const payStr = !past ? '—'
+        : p?.status === 'approved' ? '<span class="pay-paid">✓</span>'
+        : p?.status === 'pending' ? '<span class="pay-pending">⏳</span>'
+        : '<span class="pay-unpaid">✕</span>';
+      t += `<tr><td>${dd}.${mm} ${day}</td><td>${time}</td><td>${dur}</td><td>${statusStr}</td><td>${payStr}</td></tr>`;
+    });
+
+    t += `</tbody></table></div>`;
+    return t;
+  }
+
+  const subjectEntries = Object.entries(subjectGroups);
+  if (subjectEntries.length === 0) {
+    html += `<div class="sd-section"><h4>Занятия</h4><div class="sd-empty">Нет занятий</div></div>`;
+  } else if (subjectEntries.length === 1) {
+    html += `<div class="sd-section"><h4>Занятия — ${subjectEntries[0][0]}</h4>${buildLessonsTable(subjectEntries[0][1])}</div>`;
+  } else {
+    subjectEntries.forEach(([subj, group]) => {
+      html += `<div class="sd-section"><h4>${subj}</h4>${buildLessonsTable(group)}</div>`;
+    });
+  }
 
   // Pending payments
   if (pendingPayments.length > 0) {
@@ -406,6 +456,15 @@ async function openStudentDetail(studentId) {
     });
     html += `</div></div>`;
   }
+
+  // Overall attendance in title
+  const now2 = new Date();
+  const allPast = lessonList.filter(l => new Date(l.end_time) < now2);
+  const overallAtt = allPast.length > 0
+    ? Math.round(allPast.filter(l => l.status === 'active').length / allPast.length * 100)
+    : 0;
+  document.getElementById('student-detail-title').innerHTML =
+    `${student.first_name} ${student.last_name}<span class="sd-att-inline" title="Посещаемость">${overallAtt}%</span>`;
 
   body.innerHTML = html;
 
@@ -442,11 +501,14 @@ async function saveStudentDetail() {
   if (!studentDetailId) return;
   const typeVal = document.getElementById('sd-type').value;
   const update = {
-    subject: document.getElementById('sd-subject').value.trim(),
+    subject: document.getElementById('sd-subject').value,
     grade: parseInt(document.getElementById('sd-grade').value) || null,
     is_individual: typeVal === 'true' || typeVal === 'online',
     is_online: typeVal === 'online',
     price_type: document.getElementById('sd-price-type').value,
+    source: document.getElementById('sd-source').value || null,
+    parent_name: document.getElementById('sd-parent-name').value.trim() || null,
+    parent_phone: document.getElementById('sd-parent-phone').value.trim() || null,
     notes: document.getElementById('sd-note').value.trim() || null
   };
   const { error } = await db.from('students').update(update).eq('id', studentDetailId);
@@ -455,7 +517,6 @@ async function saveStudentDetail() {
   closeStudentDetail();
   renderStudents(document.getElementById('student-search').value);
 }
-
 // === Link unregistered (fake) student to a real registered account ===
 
 let linkContext = null; // { fakeStudentId, teacherId, profiles: [...] }

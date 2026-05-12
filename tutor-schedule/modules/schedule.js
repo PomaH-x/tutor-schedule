@@ -548,6 +548,14 @@ function onGridMouseUp(e) {
       }
       openEditLessonModal(lesson);
     } else {
+      if (hasLocalConflict(pc.day, pc.room, pc.slot, pc.slot + 1, null, null)) {
+        showToast('Кабинет уже занят в это время', 'error');
+        return;
+      }
+      if (state.profile.role !== 'admin' && hasTeacherDiffRoomConflict(pc.day, pc.room, pc.slot, pc.slot + 1, state.user.id, null)) {
+        showToast('У вас уже есть занятие в это время', 'error');
+        return;
+      }
       openLessonModal({ day: pc.day, room: pc.room, slotFrom: pc.slot, slotTo: pc.slot + 1 });
     }
     return;
@@ -582,6 +590,17 @@ function onGridMouseUp(e) {
     const durationMin = (st - sf) * SLOT_MINUTES;
     if (!hasAnyPricingForDuration(durationMin)) {
       showToast(`Нет тарифов для ${durationMin} мин`, 'error');
+      selStart = null; selEnd = null;
+      return;
+    }
+    if (hasLocalConflict(selStart.day, selStart.room, sf, st, null, null)) {
+      showToast('Кабинет уже занят в это время', 'error');
+      selStart = null; selEnd = null;
+      return;
+    }
+    if (state.profile.role !== 'admin' && hasTeacherDiffRoomConflict(selStart.day, selStart.room, sf, st, state.user.id, null)) {
+      showToast('У вас уже есть занятие в это время', 'error');
+      selStart = null; selEnd = null;
       return;
     }
     openLessonModal({ day: selStart.day, room: selStart.room, slotFrom: sf, slotTo: st });
@@ -1294,12 +1313,14 @@ async function saveLesson() {
   const sids = Array.from(m.selectedIds);
 
   if (m.mode === 'create' || m.mode === 'rec-create') {
-    const { data, error } = await db.from('lessons').insert({ teacher_id: state.user.id, room: m.room, week_start: ws, start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active' }).select().single();
+    const lessonSubject = selectedStudents.length > 0 ? (selectedStudents[0].subject || null) : null;
+    const { data, error } = await db.from('lessons').insert({ teacher_id: state.user.id, room: m.room, week_start: ws, start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active', subject: lessonSubject }).select().single();
     if (error) { showToast('Ошибка', 'error'); btn.disabled = false; return; }
     if (sids.length > 0) await db.from('lesson_students').insert(sids.map(sid => ({ lesson_id: data.id, student_id: sid })));
     showToast('Занятие создано', 'success');
   } else {
-    const { error } = await db.from('lessons').update({ room: m.room, start_time: sTime.toISOString(), end_time: eTime.toISOString() }).eq('id', m.lessonId);
+    const lessonSubject = selectedStudents.length > 0 ? (selectedStudents[0].subject || null) : null;
+    const { error } = await db.from('lessons').update({ room: m.room, start_time: sTime.toISOString(), end_time: eTime.toISOString(), subject: lessonSubject }).eq('id', m.lessonId);
     if (error) { showToast('Ошибка', 'error'); btn.disabled = false; return; }
     await db.from('lesson_students').delete().eq('lesson_id', m.lessonId);
     if (sids.length > 0) await db.from('lesson_students').insert(sids.map(sid => ({ lesson_id: m.lessonId, student_id: sid })));
