@@ -15,13 +15,18 @@ async function loadPendingCount() {
     .from('profiles')
     .select('id', { count: 'exact', head: true })
     .eq('status', 'pending');
-  const badge = document.getElementById('badge-pending');
-  if (count > 0) {
-    badge.textContent = count;
-    badge.style.display = 'flex';
-  } else {
-    badge.style.display = 'none';
-  }
+  [
+    { el: document.getElementById('badge-pending'),     display: 'flex'        },
+    { el: document.getElementById('badge-pending-tab'), display: 'inline-flex' }
+  ].forEach(({ el, display }) => {
+    if (!el) return;
+    if (count > 0) {
+      el.textContent = count;
+      el.style.display = display;
+    } else {
+      el.style.display = 'none';
+    }
+  });
 }
 
 async function loadPendingUsers() {
@@ -263,12 +268,20 @@ async function selectColor(color) {
 
 function deleteTeacher(teacherId, name) {
   showConfirm(`Удалить ${name}? Все занятия и ученики будут удалены.`, async () => {
-    await db.from('lesson_students').delete().in('lesson_id',
-      (await db.from('lessons').select('id').eq('teacher_id', teacherId)).data?.map(l => l.id) || []
-    );
+    const lessonIds = (await db.from('lessons').select('id').eq('teacher_id', teacherId)).data?.map(l => l.id) || [];
+    if (lessonIds.length > 0) {
+      await db.from('lesson_students').delete().in('lesson_id', lessonIds);
+    }
     await db.from('lessons').delete().eq('teacher_id', teacherId);
+    await db.from('recurring_lessons').delete().eq('teacher_id', teacherId);
     await db.from('students').delete().eq('teacher_id', teacherId);
     await db.from('profiles').delete().eq('id', teacherId);
+
+    // Immediately update state so grid reflects deletion without reload
+    state.lessons = state.lessons.filter(l => l.teacher_id !== teacherId);
+    if (typeof renderLessons === 'function') renderLessons();
+    if (typeof loadRecurringLessons === 'function') await loadRecurringLessons();
+
     showToast('Преподаватель удалён', 'success');
     await loadTeachers();
   });
