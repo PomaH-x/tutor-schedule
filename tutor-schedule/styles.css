@@ -1223,7 +1223,7 @@ input, textarea, select {
   flex: 1;
   padding: 8px 16px;
   background: none;
-  border: none;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
   font-family: var(--font);
@@ -1235,6 +1235,7 @@ input, textarea, select {
 
 .profile-tab:hover {
   color: var(--text);
+  border-color: var(--accent);
 }
 
 .profile-tab.active {
@@ -1683,7 +1684,6 @@ input, textarea, select {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  gap: 8px;
 }
 
 .truant-actions {
@@ -1758,12 +1758,7 @@ input, textarea, select {
   justify-content: space-between;
   padding: 10px 14px;
   cursor: pointer;
-  transition: background 0.15s;
   gap: 8px;
-}
-
-.truant-header:hover {
-  background: var(--bg-elevated);
 }
 
 .truant-expand-icon {
@@ -1968,6 +1963,12 @@ input, textarea, select {
   padding: 14px;
 }
 
+#payroll-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .payroll-teacher-header {
   display: flex;
   align-items: center;
@@ -2055,28 +2056,44 @@ input, textarea, select {
 .payroll-student-cancelled {
   background: rgba(220, 53, 69, 0.12);
   color: var(--danger);
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .payroll-student-cancelled .ps-name,
-.payroll-student-cancelled .ps-count,
+.payroll-student-cancelled .ps-cancel-status,
 .payroll-student-cancelled .ps-amount {
   color: var(--danger);
 }
 
 .payroll-student-paid {
   background: rgba(245, 197, 24, 0.12);
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .payroll-student-paid .ps-name,
-.payroll-student-paid .ps-count,
+.payroll-student-paid .ps-cancel-status,
 .payroll-student-paid .ps-amount {
   color: #f5c518;
 }
 
 [data-theme="light"] .payroll-student-paid .ps-name,
-[data-theme="light"] .payroll-student-paid .ps-count,
+[data-theme="light"] .payroll-student-paid .ps-cancel-status,
 [data-theme="light"] .payroll-student-paid .ps-amount {
   color: #8b5a00;
+}
+
+.payroll-student-cancelled .ps-reason,
+.payroll-student-paid .ps-reason {
+  margin-right: auto;
+}
+
+.ps-cancel-status {
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .payroll-cancel-count {
@@ -2516,6 +2533,9 @@ input, textarea, select {
 .students-group-body {
   overflow: hidden;
   transition: max-height 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
 
 .students-group-body.collapsed {
@@ -3020,9 +3040,6 @@ input, textarea, select {
   border-radius: var(--radius);
   padding: 14px 16px;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 320px;
   flex-shrink: 0;
   transition: all 0.3s;
 }
@@ -3417,6 +3434,12 @@ input, textarea, select {
   width: 140px;
 }
 
+.profile-telegram button {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .profile-telegram input:focus {
   border-color: var(--accent);
   outline: none;
@@ -3433,7 +3456,20 @@ input, textarea, select {
 
 /* Student detail modal */
 .modal-wide {
-  max-width: 680px;
+  max-width: 550px;
+}
+
+.sd-att-inline {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+  padding: 2px 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  vertical-align: middle;
 }
 
 .sd-top {
@@ -3652,12 +3688,13 @@ input, textarea, select {
 }
 
 .btn-reason-empty {
-  color: var(--text-muted);
-  border-color: var(--border);
-}
-.btn-reason-empty:hover {
   color: var(--accent);
   border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.btn-reason-empty:hover {
+  background: var(--accent);
+  color: white;
 }
 
 .btn-reason-filled {
@@ -3674,13 +3711,6 @@ input, textarea, select {
   border-color: var(--danger);
   background: var(--danger-soft);
   cursor: default;
-}
-
-.payroll-student .ps-reason {
-  display: inline-flex;
-  align-items: center;
-  margin-left: auto;
-  margin-right: 12px;
 }
 
 /* Reason modal */
