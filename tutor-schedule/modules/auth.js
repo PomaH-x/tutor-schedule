@@ -247,7 +247,7 @@ async function handleRegister() {
   const profileData = {
     id: data.user.id,
     role: role,
-    status: role === 'admin' ? 'approved' : 'pending',
+    status: 'pending',
     full_name: fullName,
     short_name: shortName,
     color: color,

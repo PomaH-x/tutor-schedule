@@ -52,62 +52,63 @@ function renderOnlineLessons() {
     const end = new Date(l.end_time);
     const dayIdx = start.getDay() === 0 ? 6 : start.getDay() - 1;
     const dayName = DAYS_ONLINE[dayIdx];
-    const dayShort = DAYS_ONLINE_SHORT[dayIdx];
     const dd = start.getDate().toString().padStart(2, '0');
     const mm = (start.getMonth() + 1).toString().padStart(2, '0');
     const timeStart = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
     const timeEnd = `${end.getHours().toString().padStart(2, '0')}:${end.getMinutes().toString().padStart(2, '0')}`;
     const durMin = Math.round((end - start) / 60000);
+    const durLabel = formatDurationHours(durMin);
     const students = l.lesson_students || [];
-    const color = l.teacher?.color || '#1e6fe8';
 
-    html += `<div class="online-card" data-lesson-id="${l.id}" style="border-left: 3px solid ${color}">
+    html += `<div class="online-card" data-lesson-id="${l.id}">
       <div class="online-card-header">
         <span class="online-card-day">${dayName}, ${dd}.${mm}</span>
-        <span class="online-card-time">${timeStart} – ${timeEnd}</span>
-        <span class="online-card-dur">${durMin} мин</span>
+        <span class="online-card-dur">${durLabel}</span>
       </div>
+      <div class="online-card-time">${timeStart} – ${timeEnd}</div>
       <div class="online-card-students">`;
     students.forEach(ls => {
       const s = ls.student;
       if (!s) return;
       html += `<div class="online-card-student">
-        <span class="online-student-name">${s.first_name} ${s.last_name}</span>
-        <span class="online-student-subject">${s.subject || ''}</span>
-        <button class="online-cancel-btn" data-lesson-id="${l.id}" data-student-id="${ls.student_id}" data-name="${s.first_name} ${s.last_name}" title="Отменить ученика">✕</button>
+        <div class="online-student-info">
+          <span class="online-student-name">${s.first_name} ${s.last_name}</span>
+          ${s.subject ? `<span class="online-student-subject">${s.subject}</span>` : ''}
+        </div>
       </div>`;
     });
     html += `</div>
       <div class="online-card-actions">
-        <button class="btn-sm btn-danger" data-delete="${l.id}" title="Расформировать">Расформировать</button>
+        <button class="online-btn-cancel" data-cancel="${l.id}">Отменить</button>
+        <button class="online-btn-disband" data-delete="${l.id}">Расформировать</button>
       </div>
     </div>`;
   });
 
   container.innerHTML = html;
 
-  container.querySelectorAll('.online-cancel-btn').forEach(btn => {
+  container.querySelectorAll('[data-cancel]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const lid = btn.dataset.lessonId;
-      const sid = btn.dataset.studentId;
-      const name = btn.dataset.name;
+      const lid = btn.dataset.cancel;
       const lesson = onlineLessons.find(l => l.id === lid);
-      showCancelConfirm(`Отменить ${name}?`, async (isPaid) => {
-        await db.from('lesson_students').delete().eq('lesson_id', lid).eq('student_id', sid);
-        const ws = lesson?.week_start || formatDate(getOnlineWeekStart());
-        const startTime = lesson?.start_time || null;
-        const startDay = startTime ? (new Date(startTime).getDay() === 0 ? 6 : new Date(startTime).getDay() - 1) : null;
-        const { error: cancelErr } = await db.from('cancellations').insert({
-          student_id: sid, teacher_id: lesson?.teacher_id || state.user.id,
-          week_start: ws, status: 'pending',
-          lesson_start_time: startTime, lesson_day: startDay, is_paid: isPaid
-        });
+      if (!lesson) return;
+      const studentIds = (lesson.lesson_students || []).map(ls => ls.student_id);
+      if (studentIds.length === 0) return;
+      const ws = lesson.week_start || formatDate(getOnlineWeekStart());
+      const startTime = lesson.start_time || null;
+      const startDay = startTime ? (new Date(startTime).getDay() === 0 ? 6 : new Date(startTime).getDay() - 1) : null;
+      showCancelConfirm('Отменить занятие?', async (isPaid) => {
+        await db.from('lesson_students').delete().eq('lesson_id', lid);
+        const { error: cancelErr } = await db.from('cancellations').insert(
+          studentIds.map(sid => ({
+            student_id: sid, teacher_id: lesson.teacher_id || state.user.id,
+            week_start: ws, status: 'pending',
+            lesson_start_time: startTime, lesson_day: startDay, is_paid: isPaid
+          }))
+        );
         if (cancelErr) console.error('Cancel insert error:', cancelErr);
-        const { data: remaining } = await db.from('lesson_students').select('student_id').eq('lesson_id', lid);
-        if (!remaining || remaining.length === 0) {
-          await db.from('lessons').delete().eq('id', lid);
-        }
-        showToast(isPaid ? 'Ученик отменён (платно)' : 'Ученик отменён', 'success');
+        await db.from('lessons').delete().eq('id', lid);
+        showToast(isPaid ? 'Занятие отменено (платно)' : 'Занятие отменено', 'success');
         await loadOnlineLessons();
       });
     });
@@ -124,6 +125,20 @@ function renderOnlineLessons() {
       }, 'Расформировать');
     });
   });
+}
+
+function formatDurationHours(min) {
+  if (min < 60) return `${min} мин`;
+  const h = min / 60;
+  const isWhole = h === Math.floor(h);
+  const display = isWhole ? `${h}` : h.toFixed(1).replace('.', ',');
+  if (!isWhole) return `${display} часа`;
+  const n = h % 100;
+  const last = n % 10;
+  if (n >= 11 && n <= 14) return `${display} часов`;
+  if (last === 1) return `${display} час`;
+  if (last >= 2 && last <= 4) return `${display} часа`;
+  return `${display} часов`;
 }
 
 function openOnlineCreateModal() {

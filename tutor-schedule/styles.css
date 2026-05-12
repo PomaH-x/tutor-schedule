@@ -1102,10 +1102,12 @@ input, textarea, select {
 
 .lesson-student-row:hover {
   background: var(--accent-soft);
+  border-radius: 8px;
 }
 
 .lesson-student-row.checked {
   background: var(--accent-soft);
+  border-radius: 8px;
 }
 
 .lesson-student-name {
@@ -2865,17 +2867,19 @@ input, textarea, select {
 }
 
 .online-card-time {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--accent);
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: 0.3px;
 }
 
 .online-card-dur {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--text-muted);
-  padding: 2px 6px;
+  padding: 2px 8px;
   background: var(--bg-elevated);
   border-radius: 10px;
+  margin-left: auto;
 }
 
 .online-card-students {
@@ -2888,53 +2892,76 @@ input, textarea, select {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 8px 10px;
   background: var(--bg-elevated);
   border-radius: var(--radius-sm);
 }
 
-.online-student-name {
-  font-weight: 500;
-  font-size: 13px;
+.online-student-info {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.online-student-name {
+  font-weight: 500;
+  font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .online-student-subject {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.online-cancel-btn {
-  background: none;
-  border: 1px solid var(--danger);
-  color: var(--danger);
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-}
-
-.online-cancel-btn:hover {
-  background: var(--danger);
-  color: white;
 }
 
 .online-card-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.online-btn-cancel {
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--text-muted);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.online-btn-cancel:hover {
+  border-color: var(--text);
+  color: var(--text);
+}
+
+.online-btn-disband {
+  padding: 5px 12px;
+  background: var(--danger-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.online-btn-disband:hover {
+  background: var(--danger);
+  color: white;
 }
 
 @media (max-width: 640px) {
