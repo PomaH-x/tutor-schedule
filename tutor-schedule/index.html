@@ -368,15 +368,15 @@
           </div>
           <div class="form-group">
             <label>Цена занятия</label>
-            <input type="number" id="pricing-student-price" placeholder="1500">
+            <input type="number" id="pricing-student-price" placeholder="1500" min="0">
           </div>
           <div class="form-group">
             <label>Комиссия центра</label>
-            <input type="number" id="pricing-commission" placeholder="500">
+            <input type="number" id="pricing-commission" placeholder="500" min="0">
           </div>
           <div class="form-group">
             <label>Прибыль преподавателя</label>
-            <input type="number" id="pricing-teacher-profit" placeholder="1000" disabled>
+            <input type="number" id="pricing-teacher-profit" placeholder="1000" min="0" disabled>
           </div>
         </div>
         <div class="modal-footer">
@@ -779,6 +779,7 @@
   <script src="modules/recurring.js"></script>
   <script src="modules/cancellations.js"></script>
   <script src="modules/online.js"></script>
+  <script src="modules/realtime.js"></script>
   <script src="modules/student.js"></script>
   <script src="modules/pricing.js"></script>
   <script src="modules/admin.js"></script>

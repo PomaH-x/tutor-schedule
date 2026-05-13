@@ -19,6 +19,13 @@ let allTeacherStudents = [];
 let studentWeekStatus = {};
 let studentCancellations = {};
 let dragState = null;
+
+function clearDragState() {
+  if (dragState && dragState.lockKey && typeof releaseLock === 'function') {
+    releaseLock(dragState.lockKey);
+  }
+  dragState = null;
+}
 let dragMouseStart = null;
 let dragStarted = false;
 let studentDragState = null;
@@ -317,6 +324,7 @@ function renderLessons() {
       grid.appendChild(card);
     });
   });
+  if (typeof applyLockVisuals === 'function') applyLockVisuals();
 }
 
 // ===== GRID INTERACTIONS =====
@@ -391,10 +399,13 @@ function onGridMouseDown(e) {
     const card = dragHandle.closest('.lesson-card');
     const lesson = state.lessons.find(l => l.id === card?.dataset.lessonId);
     if (!lesson) return;
+    // Edit lock: blocked if someone else holds it
+    if (typeof checkLockedAndToast === 'function' && checkLockedAndToast('lesson:' + lesson.id)) return;
+    if (typeof acquireLock === 'function') acquireLock('lesson:' + lesson.id);
     const st = new Date(lesson.start_time); const et = new Date(lesson.end_time);
     const ss = (st.getHours() * 60 + st.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
     const es = (et.getHours() * 60 + et.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
-    dragState = { lesson, slotLength: es - ss, startSlot: ss };
+    dragState = { lesson, slotLength: es - ss, startSlot: ss, lockKey: 'lesson:' + lesson.id };
     dragMouseStart = { x: e.clientX, y: e.clientY };
     dragStarted = false;
     return;
@@ -548,14 +559,16 @@ function onGridMouseUp(e) {
       }
       openEditLessonModal(lesson);
     } else {
-      const ownTeacherId = state.profile.role === 'admin' ? null : state.user.id;
-      if (hasLocalConflict(pc.day, pc.room, pc.slot, pc.slot + 1, null, ownTeacherId)) {
-        showToast('Кабинет уже занят в это время', 'error');
-        return;
-      }
-      if (state.profile.role !== 'admin' && hasTeacherDiffRoomConflict(pc.day, pc.room, pc.slot, pc.slot + 1, state.user.id, null)) {
-        showToast('У вас уже есть занятие в это время', 'error');
-        return;
+      // Admin can place over anyone; teacher — only over their own (state.user.id passed as exclusion)
+      if (state.profile.role !== 'admin') {
+        if (hasLocalConflict(pc.day, pc.room, pc.slot, pc.slot + 1, null, state.user.id)) {
+          showToast('Кабинет уже занят в это время', 'error');
+          return;
+        }
+        if (hasTeacherDiffRoomConflict(pc.day, pc.room, pc.slot, pc.slot + 1, state.user.id, null)) {
+          showToast('У вас уже есть занятие в это время', 'error');
+          return;
+        }
       }
       openLessonModal({ day: pc.day, room: pc.room, slotFrom: pc.slot, slotTo: pc.slot + 1 });
     }
@@ -564,7 +577,7 @@ function onGridMouseUp(e) {
 
   // Drag lesson
   if (dragState) {
-    if (!dragStarted) { dragState = null; dragMouseStart = null; return; }
+    if (!dragStarted) { clearDragState(); dragMouseStart = null; return; }
     document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
     const nwTab = getNextWeekTab();
     if (nwTab) {
@@ -572,14 +585,14 @@ function onGridMouseUp(e) {
       if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
         startNextWeekTransfer(dragState.lesson);
         document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
-        dragState = null; dragMouseStart = null; dragStarted = false; return;
+        clearDragState(); dragMouseStart = null; dragStarted = false; return;
       }
     }
     clearDragHighlight();
     document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
     const cell = e.target.closest('.grid-cell');
     if (cell) finishDrag(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-    dragState = null; dragMouseStart = null; dragStarted = false;
+    clearDragState(); dragMouseStart = null; dragStarted = false;
     return;
   }
 
@@ -594,16 +607,18 @@ function onGridMouseUp(e) {
       selStart = null; selEnd = null;
       return;
     }
-    const ownTeacherId = state.profile.role === 'admin' ? null : state.user.id;
-    if (hasLocalConflict(selStart.day, selStart.room, sf, st, null, ownTeacherId)) {
-      showToast('Кабинет уже занят в это время', 'error');
-      selStart = null; selEnd = null;
-      return;
-    }
-    if (state.profile.role !== 'admin' && hasTeacherDiffRoomConflict(selStart.day, selStart.room, sf, st, state.user.id, null)) {
-      showToast('У вас уже есть занятие в это время', 'error');
-      selStart = null; selEnd = null;
-      return;
+    // Admin can place over anyone; teacher — only over their own
+    if (state.profile.role !== 'admin') {
+      if (hasLocalConflict(selStart.day, selStart.room, sf, st, null, state.user.id)) {
+        showToast('Кабинет уже занят в это время', 'error');
+        selStart = null; selEnd = null;
+        return;
+      }
+      if (hasTeacherDiffRoomConflict(selStart.day, selStart.room, sf, st, state.user.id, null)) {
+        showToast('У вас уже есть занятие в это время', 'error');
+        selStart = null; selEnd = null;
+        return;
+      }
     }
     openLessonModal({ day: selStart.day, room: selStart.room, slotFrom: sf, slotTo: st });
   }
@@ -747,9 +762,12 @@ async function placeTransferredStudentOnLesson(targetLessonId) {
 // ===== STUDENT DND =====
 function startStudentDrag(studentData, lessonId, teacherId, lessonSlotLength) {
   closeLessonModal();
+  // Keep lock on source lesson while we move a student out of it
+  const lockKey = 'lesson:' + lessonId;
+  if (typeof acquireLock === 'function') acquireLock(lockKey);
   studentDragState = {
     studentId: studentData.id, studentName: `${studentData.first_name} ${studentData.last_name}`,
-    lessonId, teacherId, slotLength: lessonSlotLength
+    lessonId, teacherId, slotLength: lessonSlotLength, lockKey
   };
   const banner = document.getElementById('student-drag-banner');
   banner.textContent = `${studentData.first_name} ${studentData.last_name}`;
@@ -816,6 +834,9 @@ async function cleanEmptyLesson(lessonId) {
 }
 
 function cancelStudentDrag() {
+  if (studentDragState && studentDragState.lockKey && typeof releaseLock === 'function') {
+    releaseLock(studentDragState.lockKey);
+  }
   studentDragState = null;
   document.getElementById('student-drag-banner').style.display = 'none';
   document.body.style.cursor = '';
@@ -1071,7 +1092,12 @@ function openLessonModal(sel) {
   });
 }
 
-function openEditLessonModal(lesson) {
+async function openEditLessonModal(lesson) {
+  // Edit lock: refuse if someone else is editing this lesson
+  const key = 'lesson:' + lesson.id;
+  if (typeof checkLockedAndToast === 'function' && checkLockedAndToast(key)) return;
+  if (typeof acquireLock === 'function') await acquireLock(key);
+
   const start = new Date(lesson.start_time); const end = new Date(lesson.end_time);
   const dates = getWeekDates(state.currentWeekStart);
   const di = dates.findIndex(d => d.getFullYear() === start.getFullYear() && d.getMonth() === start.getMonth() && d.getDate() === start.getDate());
@@ -1188,6 +1214,11 @@ function renderCurrentStudents() {
 
 function closeLessonModal() {
   document.getElementById('lesson-overlay').classList.remove('active');
+  // Release any lesson edit lock
+  if (state.lessonModal && state.lessonModal.lessonId && typeof releaseLock === 'function') {
+    const prefix = state.lessonModal.mode === 'rec-edit' ? 'rec:' : 'lesson:';
+    releaseLock(prefix + state.lessonModal.lessonId);
+  }
   state.lessonModal = null; allTeacherStudents = [];
 }
 
@@ -1468,7 +1499,7 @@ function initSchedule() {
         startNextWeekTransfer(dragState.lesson);
         document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
         document.getElementById('schedule-grid')?.classList.remove('grid-dragging');
-        dragState = null; dragMouseStart = null; dragStarted = false;
+        clearDragState(); dragMouseStart = null; dragStarted = false;
         return;
       }
       switchToWeekOffset(offset);
@@ -1558,7 +1589,7 @@ function initSchedule() {
         if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
           startNextWeekTransfer(dragState.lesson);
           document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
-          dragState = null; dragMouseStart = null; dragStarted = false; return;
+          clearDragState(); dragMouseStart = null; dragStarted = false; return;
         }
       }
       clearDragHighlight();
@@ -1566,7 +1597,7 @@ function initSchedule() {
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const cell = el?.closest?.('.grid-cell');
       if (cell) finishDrag(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-      dragState = null; dragMouseStart = null; dragStarted = false;
+      clearDragState(); dragMouseStart = null; dragStarted = false;
     }
     if (studentDragState) {
       clearDragHighlight();

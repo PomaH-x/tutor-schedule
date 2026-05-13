@@ -323,6 +323,7 @@ async function onAuthSuccess(user) {
   loadPricing();
   computeAndSyncCancellations();
   syncRecurringToWeeks();
+  if (typeof initRealtime === 'function') initRealtime();
 }
 
 async function handleLogout() {

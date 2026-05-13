@@ -965,6 +965,37 @@ input, textarea, select {
   transition: border-color 0.15s;
 }
 
+/* Realtime edit-lock: someone else is currently editing this lesson */
+.lesson-card.lesson-locked {
+  outline: 2px solid var(--lock-color, #1e6fe8);
+  outline-offset: -2px;
+  animation: lockPulse 1.4s ease-in-out infinite;
+}
+
+.lesson-card.lesson-locked::after {
+  content: '✎ ' attr(data-locked-by);
+  position: absolute;
+  bottom: 1px;
+  right: 2px;
+  font-size: 8px;
+  font-weight: 700;
+  background: var(--lock-color, #1e6fe8);
+  color: white;
+  padding: 1px 4px;
+  border-radius: 3px;
+  z-index: 10;
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@keyframes lockPulse {
+  0%, 100% { outline-color: var(--lock-color, #1e6fe8); }
+  50%      { outline-color: transparent; }
+}
+
 .lesson-card:hover {
   border-width: 2px;
   border-color: #f5c518 !important;
@@ -2745,6 +2776,13 @@ input, textarea, select {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+}
+
+.form-group select,
+.form-group input {
+  min-width: 0;
+  width: 100%;
 }
 
 .form-group label {

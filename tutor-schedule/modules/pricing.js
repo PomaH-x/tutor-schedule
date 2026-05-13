@@ -117,6 +117,7 @@ async function savePricing() {
 
   if (!duration || duration < 30) { showToast('Укажите длительность', 'error'); return; }
   if (isNaN(studentPrice) || isNaN(teacherProfit) || isNaN(commission)) { showToast('Заполните все суммы', 'error'); return; }
+  if (studentPrice < 0 || teacherProfit < 0 || commission < 0) { showToast('Суммы не могут быть отрицательными', 'error'); return; }
 
   const record = {
     duration_minutes: duration, is_individual: isIndividual, is_online: isOnline, price_type: priceType,

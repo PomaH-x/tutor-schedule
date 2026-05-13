@@ -4,6 +4,13 @@ let recSelecting = false;
 let recSelStart = null;
 let recSelEnd = null;
 let recDragState = null;
+
+function clearRecDragState() {
+  if (recDragState && recDragState.lockKey && typeof releaseLock === 'function') {
+    releaseLock(recDragState.lockKey);
+  }
+  recDragState = null;
+}
 let recDragMouseStart = null;
 let recDragStarted = false;
 let recPendingClick = null;
@@ -160,6 +167,7 @@ function renderRecurringLessons() {
       grid.appendChild(card);
     });
   });
+  if (typeof applyLockVisuals === 'function') applyLockVisuals();
 }
 
 // ===== RECURRING GRID EVENTS =====
@@ -216,8 +224,10 @@ function onRecGridMouseDown(e) {
     const card = dragHandle.closest('.lesson-card');
     const lesson = recurringLessons.find(l => l.id === card.dataset.lessonId);
     if (!lesson) return;
+    if (typeof checkLockedAndToast === 'function' && checkLockedAndToast('rec:' + lesson.id)) return;
+    if (typeof acquireLock === 'function') acquireLock('rec:' + lesson.id);
     const { ss, es } = recLessonSlots(lesson);
-    recDragState = { lesson, slotLength: es - ss };
+    recDragState = { lesson, slotLength: es - ss, lockKey: 'rec:' + lesson.id };
     recDragMouseStart = { x: e.clientX, y: e.clientY };
     recDragStarted = false;
     return;
@@ -304,7 +314,7 @@ function onRecGridMouseMove(e) {
   }
 }
 
-function onRecGridMouseUp(e) {
+async function onRecGridMouseUp(e) {
   // Student drag (started from a lesson modal, modal was closed, banner shown)
   if (studentDragState) {
     const card = e.target.closest('.lesson-card');
@@ -344,13 +354,13 @@ function onRecGridMouseUp(e) {
   }
 
   if (recDragState) {
-    if (!recDragStarted) { recDragState = null; recDragMouseStart = null; return; }
+    if (!recDragStarted) { clearRecDragState(); recDragMouseStart = null; return; }
     clearRecDragHighlight();
     document.getElementById('recurring-grid')?.classList.remove('grid-dragging');
     document.querySelector('.lesson-card-dragging')?.classList.remove('lesson-card-dragging');
     const cell = e.target.closest('.grid-cell');
-    if (cell) finishRecDrag(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-    recDragState = null; recDragMouseStart = null; recDragStarted = false;
+    if (cell) await finishRecDrag(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+    clearRecDragState(); recDragMouseStart = null; recDragStarted = false;
     return;
   }
 
@@ -694,7 +704,11 @@ function openRecurringCreateModal(sel) {
   });
 }
 
-function openRecurringEditModal(lesson) {
+async function openRecurringEditModal(lesson) {
+  const key = 'rec:' + lesson.id;
+  if (typeof checkLockedAndToast === 'function' && checkLockedAndToast(key)) return;
+  if (typeof acquireLock === 'function') await acquireLock(key);
+
   const { ss, es } = recLessonSlots(lesson);
   document.getElementById('lesson-modal-title').textContent = `${DAYS_FULL[lesson.day_of_week]} · ${ROOM_FULL[lesson.room - 1]} · ${slotToTime(ss)}–${slotToTime(es)}`;
   const canEdit = state.profile.role === 'admin' || lesson.teacher_id === state.user.id;
