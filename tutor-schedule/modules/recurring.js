@@ -11,11 +11,9 @@ let recDurationLabel = null;
 let recTooltip = null;
 
 async function loadRecurringLessons() {
-  const tid = state.profile.role === 'admin' ? undefined : state.user.id;
-  let q = db.from('recurring_lessons')
+  // Everyone (admin + teacher) sees ALL recurring lessons — needed for conflict prevention
+  const { data, error } = await db.from('recurring_lessons')
     .select('*, teacher:profiles!teacher_id(short_name, color, full_name), recurring_lesson_students(student_id, student:students(first_name, last_name, subject))');
-  if (tid) q = q.eq('teacher_id', tid);
-  const { data, error } = await q;
   if (error) { showToast('Ошибка загрузки', 'error'); return; }
   recurringLessons = data || [];
   renderRecurringLessons();
@@ -239,6 +237,24 @@ function onRecGridMouseDown(e) {
 function onRecGridMouseMove(e) {
   const grid = document.getElementById('recurring-grid');
 
+  // Student drag — highlight target cells with conflict awareness
+  if (studentDragState) {
+    clearRecDragHighlight();
+    const cell = e.target.closest('.grid-cell');
+    if (cell) {
+      const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
+      const end = ts + studentDragState.slotLength;
+      if (end <= TOTAL_SLOTS) {
+        const conflict = hasRecConflict(td, tr, ts, end, null, studentDragState.teacherId);
+        for (let s = ts; s < end; s++) {
+          const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
+          if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
+        }
+      }
+    }
+    return;
+  }
+
   if (recPendingClick) {
     const dx = e.clientX - recPendingClick.x; const dy = e.clientY - recPendingClick.y;
     if (Math.sqrt(dx * dx + dy * dy) >= DRAG_THRESHOLD) {
@@ -289,12 +305,39 @@ function onRecGridMouseMove(e) {
 }
 
 function onRecGridMouseUp(e) {
+  // Student drag (started from a lesson modal, modal was closed, banner shown)
+  if (studentDragState) {
+    const card = e.target.closest('.lesson-card');
+    if (card) {
+      placeStudentOnRecurringLesson(card.dataset.lessonId);
+      return;
+    }
+    const cell = e.target.closest('.grid-cell');
+    if (cell) {
+      placeStudentOnRecurringCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+      return;
+    }
+    cancelStudentDrag();
+    return;
+  }
+
   if (recPendingClick) {
     const pc = recPendingClick; recPendingClick = null;
     if (pc.lessonId) {
       const lesson = recurringLessons.find(l => l.id === pc.lessonId);
       if (lesson) openRecurringEditModal(lesson);
     } else {
+      const ownTid = state.profile.role === 'admin' ? null : state.user.id;
+      // Conflict in same room (other teacher) — block, room is taken
+      if (hasRecRoomConflict(pc.day, pc.room, pc.slot, pc.slot + 1, null, ownTid)) {
+        showToast('Кабинет уже занят в это время', 'error');
+        return;
+      }
+      // Teacher already has a lesson at this time in another room
+      if (ownTid && hasRecTeacherDiffRoomConflict(pc.day, pc.room, pc.slot, pc.slot + 1, ownTid, null)) {
+        showToast('У вас уже есть занятие в это время', 'error');
+        return;
+      }
       openRecurringCreateModal({ day: pc.day, room: pc.room, slotFrom: pc.slot, slotTo: pc.slot + 1 });
     }
     return;
@@ -316,6 +359,15 @@ function onRecGridMouseUp(e) {
     if (!recSelStart) return;
     const sf = Math.min(recSelStart.slot, recSelEnd.slot);
     const st = Math.max(recSelStart.slot, recSelEnd.slot) + 1;
+    const ownTid = state.profile.role === 'admin' ? null : state.user.id;
+    if (hasRecRoomConflict(recSelStart.day, recSelStart.room, sf, st, null, ownTid)) {
+      showToast('Кабинет уже занят в это время', 'error');
+      return;
+    }
+    if (ownTid && hasRecTeacherDiffRoomConflict(recSelStart.day, recSelStart.room, sf, st, ownTid, null)) {
+      showToast('У вас уже есть занятие в это время', 'error');
+      return;
+    }
     openRecurringCreateModal({ day: recSelStart.day, room: recSelStart.room, slotFrom: sf, slotTo: st });
   }
 }
@@ -422,20 +474,129 @@ function clearRecSelection() {
 }
 function clearRecDragHighlight() { document.querySelectorAll('#recurring-grid .grid-cell-drop-ok, #recurring-grid .grid-cell-conflict').forEach(c => c.classList.remove('grid-cell-drop-ok', 'grid-cell-conflict')); }
 
-function hasRecConflict(day, room, slotFrom, slotTo, excludeId, teacherId) {
+// Room conflict: another teacher's lesson overlaps in the same room.
+// If `excludeTeacherId` is provided, lessons belonging to that teacher are NOT counted as room conflicts
+// (it's their own lesson - they can move it, drag handles teacher conflict separately).
+function hasRecRoomConflict(day, room, slotFrom, slotTo, excludeId, excludeTeacherId) {
   const startMin = START_HOUR * 60 + slotFrom * SLOT_MINUTES;
   const endMin = START_HOUR * 60 + slotTo * SLOT_MINUTES;
   return recurringLessons.some(l => {
     if (l.id === excludeId) return false;
     if (l.day_of_week !== day) return false;
+    if (l.room !== room) return false;
+    if (excludeTeacherId && l.teacher_id === excludeTeacherId) return false;
     const sp = l.start_time.split(':'); const ep = l.end_time.split(':');
     const lS = +sp[0] * 60 + +sp[1]; const lE = +ep[0] * 60 + +ep[1];
-    if (startMin >= lE || endMin <= lS) return false;
-    if (l.room === room && teacherId && l.teacher_id === teacherId) return false;
-    if (l.room === room && l.teacher_id !== teacherId) return true;
-    if (l.room !== room && l.teacher_id === teacherId) return true;
-    return false;
+    return !(startMin >= lE || endMin <= lS);
   });
+}
+
+// Teacher conflict: same teacher has another lesson at this time in a different room.
+function hasRecTeacherDiffRoomConflict(day, room, slotFrom, slotTo, teacherId, excludeId) {
+  const startMin = START_HOUR * 60 + slotFrom * SLOT_MINUTES;
+  const endMin = START_HOUR * 60 + slotTo * SLOT_MINUTES;
+  return recurringLessons.some(l => {
+    if (l.id === excludeId) return false;
+    if (l.day_of_week !== day) return false;
+    if (l.teacher_id !== teacherId) return false;
+    if (l.room === room) return false;
+    const sp = l.start_time.split(':'); const ep = l.end_time.split(':');
+    const lS = +sp[0] * 60 + +sp[1]; const lE = +ep[0] * 60 + +ep[1];
+    return !(startMin >= lE || endMin <= lS);
+  });
+}
+
+// Legacy compatibility wrapper (drag uses this) — combines both checks.
+function hasRecConflict(day, room, slotFrom, slotTo, excludeId, teacherId) {
+  if (hasRecRoomConflict(day, room, slotFrom, slotTo, excludeId, teacherId)) return 'room';
+  if (hasRecTeacherDiffRoomConflict(day, room, slotFrom, slotTo, teacherId, excludeId)) return 'teacher';
+  return false;
+}
+
+// ===== STUDENT DRAG-AND-DROP IN RECURRING =====
+
+// Find recurring lesson by source: where the dragged student currently lives in recurring template
+async function findSourceRecurringLessonId(studentId, teacherId) {
+  const candidates = recurringLessons.filter(l =>
+    l.teacher_id === teacherId &&
+    (l.recurring_lesson_students || []).some(rs => rs.student_id === studentId)
+  );
+  return candidates[0]?.id || null;
+}
+
+async function placeStudentOnRecurringCell(day, room, slot) {
+  const s = studentDragState; if (!s) return;
+  const end = slot + s.slotLength;
+  if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); cancelStudentDrag(); return; }
+
+  const conflict = hasRecConflict(day, room, slot, end, null, s.teacherId);
+  if (conflict === 'room') { showToast('Кабинет уже занят в это время', 'error'); cancelStudentDrag(); return; }
+  if (conflict === 'teacher') { showToast('У вас уже есть занятие в это время', 'error'); cancelStudentDrag(); return; }
+
+  const sourceRecId = await findSourceRecurringLessonId(s.studentId, s.teacherId);
+
+  // Create new recurring lesson at target slot
+  const { data: newRec, error } = await db.from('recurring_lessons').insert({
+    teacher_id: s.teacherId, room, day_of_week: day,
+    start_time: recSlotToTimeStr(slot), end_time: recSlotToTimeStr(end)
+  }).select().single();
+  if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
+
+  await db.from('recurring_lesson_students').insert({ recurring_lesson_id: newRec.id, student_id: s.studentId });
+
+  // Remove student from source recurring lesson, delete it if empty
+  if (sourceRecId) {
+    await db.from('recurring_lesson_students').delete().eq('recurring_lesson_id', sourceRecId).eq('student_id', s.studentId);
+    const { data: remaining } = await db.from('recurring_lesson_students').select('student_id').eq('recurring_lesson_id', sourceRecId);
+    if (!remaining || remaining.length === 0) {
+      await db.from('recurring_lessons').delete().eq('id', sourceRecId);
+    }
+  }
+
+  cancelStudentDrag();
+  showToast('Ученик перенесён', 'success');
+  await loadRecurringLessons();
+  syncRecurringToWeeks();
+}
+
+async function placeStudentOnRecurringLesson(targetLessonId) {
+  const s = studentDragState; if (!s) return;
+  const tl = recurringLessons.find(l => l.id === targetLessonId);
+  if (!tl) { cancelStudentDrag(); return; }
+  if (tl.teacher_id !== s.teacherId) { showToast('Можно добавить только к своему преподавателю', 'error'); cancelStudentDrag(); return; }
+
+  const sourceRecId = await findSourceRecurringLessonId(s.studentId, s.teacherId);
+  if (sourceRecId === targetLessonId) { cancelStudentDrag(); return; }
+
+  const targetStudents = tl.recurring_lesson_students || [];
+  if (targetStudents.some(rs => rs.student_id === s.studentId)) {
+    showToast('Ученик уже в этом занятии', 'error'); cancelStudentDrag(); return;
+  }
+  if (targetStudents.length >= getMaxGroup(tl.teacher_id)) {
+    showToast(`Максимум ${getMaxGroup(tl.teacher_id)} учеников`, 'error'); cancelStudentDrag(); return;
+  }
+
+  // Check individual flag
+  const { data: studentInfo } = await db.from('students').select('is_individual').eq('id', s.studentId).single();
+  const isInd = studentInfo?.is_individual;
+  const targetHasIndividual = targetStudents.some(rs => rs.student?.is_individual);
+  if (isInd && targetStudents.length > 0) { showToast('Индивидуальное занятие — только один ученик', 'error'); cancelStudentDrag(); return; }
+  if (!isInd && targetHasIndividual) { showToast('В занятии уже индивидуальный ученик', 'error'); cancelStudentDrag(); return; }
+
+  await db.from('recurring_lesson_students').insert({ recurring_lesson_id: targetLessonId, student_id: s.studentId });
+
+  if (sourceRecId) {
+    await db.from('recurring_lesson_students').delete().eq('recurring_lesson_id', sourceRecId).eq('student_id', s.studentId);
+    const { data: remaining } = await db.from('recurring_lesson_students').select('student_id').eq('recurring_lesson_id', sourceRecId);
+    if (!remaining || remaining.length === 0) {
+      await db.from('recurring_lessons').delete().eq('id', sourceRecId);
+    }
+  }
+
+  cancelStudentDrag();
+  showToast('Ученик добавлен к занятию', 'success');
+  await loadRecurringLessons();
+  syncRecurringToWeeks();
 }
 
 function recSlotToTimeStr(slot) {
@@ -461,14 +622,18 @@ async function syncRecurringToWeeks(teacherFilter) {
     const ws = formatDate(weekStart);
     const dates = getWeekDates(weekStart);
 
-    let eq = db.from('lessons').select('id, teacher_id, start_time, room').eq('week_start', ws).eq('status', 'active');
+    // Look at ALL statuses (active, cancelled, transferred) so we don't recreate over a manual cancel/transfer
+    let eq = db.from('lessons').select('id, teacher_id, start_time, room, status, lesson_students(student_id)').eq('week_start', ws);
     if (filterTid) eq = eq.eq('teacher_id', filterTid);
     const { data: existing } = await eq;
 
-    const existingKeys = new Set((existing || []).map(l => {
+    // Map key → lesson (for student-merge)
+    const existingByKey = {};
+    (existing || []).forEach(l => {
       const s = new Date(l.start_time);
-      return `${l.teacher_id}-${s.getDay()}-${l.room}-${s.getHours()}:${s.getMinutes()}`;
-    }));
+      const key = `${l.teacher_id}-${s.getDay()}-${l.room}-${s.getHours()}:${s.getMinutes()}`;
+      existingByKey[key] = l;
+    });
 
     for (const rl of recurring) {
       const dayDate = dates[rl.day_of_week];
@@ -476,8 +641,23 @@ async function syncRecurringToWeeks(teacherFilter) {
       const sp = rl.start_time.split(':');
       const ep = rl.end_time.split(':');
       const key = `${rl.teacher_id}-${dayDate.getDay()}-${rl.room}-${+sp[0]}:${+sp[1]}`;
-      if (existingKeys.has(key)) continue;
 
+      const ex = existingByKey[key];
+      if (ex) {
+        // Lesson already exists. Only merge new students if it's active.
+        if (ex.status === 'active' && rl.recurring_lesson_students?.length > 0) {
+          const existingSids = new Set((ex.lesson_students || []).map(ls => ls.student_id));
+          const newSids = rl.recurring_lesson_students
+            .map(rs => rs.student_id)
+            .filter(sid => !existingSids.has(sid));
+          if (newSids.length > 0) {
+            await db.from('lesson_students').insert(newSids.map(sid => ({ lesson_id: ex.id, student_id: sid })));
+          }
+        }
+        continue;
+      }
+
+      // No lesson at this slot — create new one
       const sTime = new Date(dayDate); sTime.setHours(+sp[0], +sp[1], 0, 0);
       const eTime = new Date(dayDate); eTime.setHours(+ep[0], +ep[1], 0, 0);
 
@@ -580,15 +760,15 @@ async function finishRecDrag(targetDay, targetRoom, targetSlot) {
   const lesson = recDragState.lesson;
   const end = targetSlot + recDragState.slotLength;
   if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); return; }
-  if (hasRecConflict(targetDay, targetRoom, targetSlot, end, lesson.id, lesson.teacher_id)) {
-    showToast('Конфликт', 'error'); return;
-  }
+  const conflict = hasRecConflict(targetDay, targetRoom, targetSlot, end, lesson.id, lesson.teacher_id);
+  if (conflict === 'room') { showToast('Кабинет уже занят в это время', 'error'); return; }
+  if (conflict === 'teacher') { showToast('У вас уже есть занятие в это время', 'error'); return; }
   const { error } = await db.from('recurring_lessons').update({
     room: targetRoom, day_of_week: targetDay,
     start_time: recSlotToTimeStr(targetSlot), end_time: recSlotToTimeStr(end)
   }).eq('id', lesson.id);
   if (error) { showToast('Ошибка', 'error'); return; }
-  showToast('Перенесено', 'success');
+  showToast('Занятие перенесено', 'success');
   await loadRecurringLessons();
   syncRecurringToWeeks();
 }
@@ -629,14 +809,16 @@ async function syncRecurringToWeeksManual(teacherFilter) {
     const ws = formatDate(weekStart);
     const dates = getWeekDates(weekStart);
 
-    let eq = db.from('lessons').select('id, teacher_id, start_time, room').eq('week_start', ws).eq('status', 'active');
+    let eq = db.from('lessons').select('id, teacher_id, start_time, room, status, lesson_students(student_id)').eq('week_start', ws);
     if (filterTid) eq = eq.eq('teacher_id', filterTid);
     const { data: existing } = await eq;
 
-    const existingKeys = new Set((existing || []).map(l => {
+    const existingByKey = {};
+    (existing || []).forEach(l => {
       const s = new Date(l.start_time);
-      return `${l.teacher_id}-${s.getDay()}-${l.room}-${s.getHours()}:${s.getMinutes()}`;
-    }));
+      const key = `${l.teacher_id}-${s.getDay()}-${l.room}-${s.getHours()}:${s.getMinutes()}`;
+      existingByKey[key] = l;
+    });
 
     for (const rl of recurring) {
       const dayDate = dates[rl.day_of_week];
@@ -644,7 +826,20 @@ async function syncRecurringToWeeksManual(teacherFilter) {
       const sp = rl.start_time.split(':');
       const ep = rl.end_time.split(':');
       const key = `${rl.teacher_id}-${dayDate.getDay()}-${rl.room}-${+sp[0]}:${+sp[1]}`;
-      if (existingKeys.has(key)) continue;
+
+      const ex = existingByKey[key];
+      if (ex) {
+        if (ex.status === 'active' && rl.recurring_lesson_students?.length > 0) {
+          const existingSids = new Set((ex.lesson_students || []).map(ls => ls.student_id));
+          const newSids = rl.recurring_lesson_students
+            .map(rs => rs.student_id)
+            .filter(sid => !existingSids.has(sid));
+          if (newSids.length > 0) {
+            await db.from('lesson_students').insert(newSids.map(sid => ({ lesson_id: ex.id, student_id: sid })));
+          }
+        }
+        continue;
+      }
 
       const sTime = new Date(dayDate); sTime.setHours(+sp[0], +sp[1], 0, 0);
       const eTime = new Date(dayDate); eTime.setHours(+ep[0], +ep[1], 0, 0);
