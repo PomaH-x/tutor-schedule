@@ -169,7 +169,7 @@ async function loadPayroll() {
 
   // Also fetch pending cancellations for this week
   let qc = db.from('cancellations')
-    .select('id, student_id, teacher_id, lesson_start_time, is_paid, reason_text, reason_image_url, student:students(first_name, last_name, is_individual, is_online, price_type)')
+    .select('id, student_id, teacher_id, lesson_start_time, is_paid, reason_text, reason_image_url, student:students(first_name, last_name, is_individual, is_online, price_type), teacher:profiles!teacher_id(full_name, color, role)')
     .eq('week_start', ws).eq('status', 'pending');
   if (!isAdmin) qc = qc.eq('teacher_id', state.user.id);
 
@@ -230,11 +230,15 @@ function renderPayroll(lessons, cancellations, isAdmin) {
   cancellations.forEach(c => {
     const tId = c.teacher_id;
     if (!payrollTeacherData[tId]) {
-      const cancelledLesson = lessons.find(l => l.teacher_id === tId);
+      // Try to find teacher info from any related lesson (active or cancelled)
+      const anyLesson = lessons.find(l => l.teacher_id === tId);
+      // Fallback to state.lessons (cached across the session) if payroll fetch didn't include any
+      const stateLesson = !anyLesson ? (state.lessons || []).find(l => l.teacher_id === tId) : null;
+      const teacherInfo = anyLesson?.teacher || stateLesson?.teacher || c.teacher;
       payrollTeacherData[tId] = {
-        name: cancelledLesson?.teacher?.full_name || '',
-        color: cancelledLesson?.teacher?.color || '#1e6fe8',
-        role: cancelledLesson?.teacher?.role,
+        name: teacherInfo?.full_name || 'Преподаватель',
+        color: teacherInfo?.color || '#1e6fe8',
+        role: teacherInfo?.role,
         revenue: 0, profit: 0, commission: 0,
         cancelCount: 0,
         students: {}, cancelledStudents: []

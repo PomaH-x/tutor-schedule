@@ -277,6 +277,22 @@ function initStudents() {
   document.getElementById('btn-close-student-detail').addEventListener('click', closeStudentDetail);
   document.getElementById('btn-cancel-student-detail').addEventListener('click', closeStudentDetail);
   document.getElementById('btn-save-student-detail').addEventListener('click', saveStudentDetail);
+  document.getElementById('btn-delete-student-detail').addEventListener('click', () => {
+    if (!studentDetailId) return;
+    const student = state.students.find(s => s.id === studentDetailId);
+    const name = student ? `${student.first_name} ${student.last_name}` : 'ученика';
+    const id = studentDetailId;
+    closeStudentDetail();
+    showConfirm(`Удалить ${name}? Вся история и занятия будут удалены.`, async () => {
+      await db.from('lesson_students').delete().eq('student_id', id);
+      await db.from('cancellations').delete().eq('student_id', id);
+      await db.from('payments').delete().eq('student_id', id);
+      const { error } = await db.from('students').delete().eq('id', id);
+      if (error) { showToast('Ошибка удаления', 'error'); return; }
+      showToast('Ученик удалён', 'success');
+      await loadStudents();
+    });
+  });
   document.getElementById('student-detail-overlay').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeStudentDetail();
   });
@@ -457,14 +473,8 @@ async function openStudentDetail(studentId) {
     html += `</div></div>`;
   }
 
-  // Overall attendance in title
-  const now2 = new Date();
-  const allPast = lessonList.filter(l => new Date(l.end_time) < now2);
-  const overallAtt = allPast.length > 0
-    ? Math.round(allPast.filter(l => l.status === 'active').length / allPast.length * 100)
-    : 0;
   document.getElementById('student-detail-title').innerHTML =
-    `${student.first_name} ${student.last_name}<span class="sd-att-inline" title="Посещаемость">${overallAtt}%</span>`;
+    `${student.first_name} ${student.last_name}`;
 
   body.innerHTML = html;
 

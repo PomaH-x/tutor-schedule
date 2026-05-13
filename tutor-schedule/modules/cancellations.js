@@ -118,7 +118,6 @@ async function loadTruants() {
   let q = db.from('cancellations')
     .select('*, student:students(first_name, last_name), recurring_lesson:recurring_lessons(start_time, end_time, day_of_week), teacher:profiles!teacher_id(full_name)')
     .eq('status', 'pending')
-    .eq('is_paid', false)
     .gte('week_start', formatDate(threeWeeksAgo));
   if (!isAdmin) q = q.eq('teacher_id', state.user.id);
   q = q.order('week_start', { ascending: false });
@@ -142,6 +141,21 @@ function getCancelLabel(c) {
   if (c.week_start === currentWs) return dayName + ' ' + time;
   const d = new Date(c.week_start + 'T00:00:00');
   return d.getDate().toString().padStart(2,'0') + '.' + (d.getMonth()+1).toString().padStart(2,'0') + '.' + String(d.getFullYear()).slice(2) + ' ' + dayName + ' ' + time;
+}
+
+function getCancelDuration(c) {
+  // Recurring: compute from recurring lesson start/end
+  if (c.recurring_lesson) {
+    var sp = c.recurring_lesson.start_time.split(':');
+    var ep = c.recurring_lesson.end_time.split(':');
+    return (+ep[0] * 60 + +ep[1]) - (+sp[0] * 60 + +sp[1]);
+  }
+  // Concrete lesson: compute from stored start/end
+  if (c.lesson_start_time && c.lesson_end_time) {
+    return Math.round((new Date(c.lesson_end_time) - new Date(c.lesson_start_time)) / 60000);
+  }
+  // Fallback (old records without end_time)
+  return 90;
 }
 
 function renderTruants(cancellations) {
@@ -181,6 +195,10 @@ function renderTruants(cancellations) {
     return;
   }
 
+  function paidBadge(c) {
+    return c.is_paid ? '<span class="truant-paid-badge" title="Платная отмена">₽</span>' : '';
+  }
+
   var html = '';
   var currentTeacher = null;
   truants.forEach(function(t) {
@@ -190,58 +208,92 @@ function renderTruants(cancellations) {
     }
     var name = t.student.first_name + ' ' + t.student.last_name;
     var count = t.cancels.length;
-    var dur = 90;
-    if (t.cancels[0].recurring_lesson) {
-      var sp = t.cancels[0].recurring_lesson.start_time.split(':');
-      var ep = t.cancels[0].recurring_lesson.end_time.split(':');
-      dur = (+ep[0] * 60 + +ep[1]) - (+sp[0] * 60 + +sp[1]);
-    }
 
     if (count === 1) {
-      var label = getCancelLabel(t.cancels[0]);
-      html += '<div class="truant-card"><div class="truant-info"><span class="truant-name">' + name + '</span><span class="truant-date-badge">' + label + '</span></div><div class="truant-actions"><button class="btn-remove-truant-single" data-cid="' + t.cancels[0].id + '" data-name="' + name + '" title="Убрать">Убрать</button><button class="btn-place-truant" data-student-id="' + t.studentId + '" data-duration="' + dur + '" data-name="' + name + '">Разместить</button></div></div>';
+      var c = t.cancels[0];
+      var label = getCancelLabel(c);
+      var dur = getCancelDuration(c);
+      html += '<div class="truant-card">' +
+        '<div class="truant-info">' +
+          '<span class="truant-name">' + name + '</span>' +
+          '<span class="truant-date-badge">' + label + '</span>' +
+          paidBadge(c) +
+        '</div>' +
+        '<div class="truant-actions">' +
+          '<button class="btn-remove-truant-single" data-cid="' + c.id + '" data-name="' + name + '" title="Убрать">Убрать</button>' +
+          '<button class="btn-place-truant" data-student-id="' + t.studentId + '" data-teacher-id="' + t.teacherId + '" data-cid="' + c.id + '" data-duration="' + dur + '" data-name="' + name + '">Разместить</button>' +
+        '</div>' +
+      '</div>';
     } else {
-      html += '<div class="truant-card truant-card-expandable"><div class="truant-header" data-toggle="' + t.studentId + '"><div class="truant-info"><span class="truant-name">' + name + '</span><span class="truant-count-badge">' + count + ' неотработ.</span></div><span class="truant-expand-icon">▸</span></div><div class="truant-details" id="truant-details-' + t.studentId + '">';
+      html += '<div class="truant-card truant-card-expandable">' +
+        '<div class="truant-header" data-toggle="' + t.studentId + '">' +
+          '<div class="truant-info">' +
+            '<span class="truant-name">' + name + '</span>' +
+            '<span class="truant-count-badge">' + count + ' неотработ.</span>' +
+          '</div>' +
+          '<span class="truant-expand-icon">▸</span>' +
+        '</div>' +
+        '<div class="truant-details" id="truant-details-' + t.studentId + '">';
       t.cancels.forEach(function(c) {
         var clabel = getCancelLabel(c);
-        html += '<div class="truant-detail-row"><span class="truant-date-badge">' + clabel + '</span><div class="truant-actions"><button class="btn-remove-truant-single" data-cid="' + c.id + '" data-name="' + name + '" title="Убрать">Убрать</button><button class="btn-place-truant" data-student-id="' + t.studentId + '" data-duration="' + dur + '" data-name="' + name + '">Разместить</button></div></div>';
+        var dur = getCancelDuration(c);
+        html += '<div class="truant-detail-row">' +
+          '<span class="truant-date-badge">' + clabel + '</span>' +
+          paidBadge(c) +
+          '<div class="truant-actions">' +
+            '<button class="btn-remove-truant-single" data-cid="' + c.id + '" data-name="' + name + '" title="Убрать">Убрать</button>' +
+            '<button class="btn-place-truant" data-student-id="' + t.studentId + '" data-teacher-id="' + t.teacherId + '" data-cid="' + c.id + '" data-duration="' + dur + '" data-name="' + name + '">Разместить</button>' +
+          '</div>' +
+        '</div>';
       });
       html += '</div></div>';
     }
   });
   listEl.innerHTML = html;
 
-  listEl.querySelectorAll('.truant-header[data-toggle]').forEach(function(header) {
-    header.addEventListener('click', function() {
-      var details = document.getElementById('truant-details-' + header.dataset.toggle);
-      var icon = header.querySelector('.truant-expand-icon');
-      var isOpen = details.classList.toggle('open');
-      icon.textContent = isOpen ? '▾' : '▸';
+  // Event delegation - one listener handles all buttons including those added later
+  if (!listEl.dataset.truantsBound) {
+    listEl.dataset.truantsBound = '1';
+    listEl.addEventListener('click', function(e) {
+      var placeBtn = e.target.closest('.btn-place-truant');
+      if (placeBtn) {
+        e.stopPropagation();
+        startTruantPlacing(placeBtn.dataset.studentId, placeBtn.dataset.name, +placeBtn.dataset.duration, placeBtn.dataset.cid, placeBtn.dataset.teacherId);
+        return;
+      }
+      var removeBtn = e.target.closest('.btn-remove-truant-single');
+      if (removeBtn) {
+        e.stopPropagation();
+        var cid = removeBtn.dataset.cid;
+        var cname = removeBtn.dataset.name;
+        showConfirm('Убрать отмену для ' + cname + '?', async function() {
+          await db.from('cancellations').delete().eq('id', cid);
+          showToast('Отмена убрана', 'success');
+          await loadTruants();
+          if (typeof loadPayroll === 'function' && document.getElementById('screen-profile')?.classList.contains('active')) loadPayroll();
+        }, 'Убрать');
+        return;
+      }
+      var header = e.target.closest('.truant-header[data-toggle]');
+      if (header) {
+        var details = document.getElementById('truant-details-' + header.dataset.toggle);
+        var icon = header.querySelector('.truant-expand-icon');
+        var isOpen = details.classList.toggle('open');
+        icon.textContent = isOpen ? '▾' : '▸';
+      }
     });
-  });
-
-  listEl.querySelectorAll('.btn-place-truant').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      startTruantPlacing(btn.dataset.studentId, btn.dataset.name, +btn.dataset.duration);
-    });
-  });
-
-  listEl.querySelectorAll('.btn-remove-truant-single').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      var cid = btn.dataset.cid;
-      var cname = btn.dataset.name;
-      showConfirm('Убрать отмену для ' + cname + '?', async function() {
-        await db.from('cancellations').delete().eq('id', cid);
-        showToast('Отмена убрана', 'success');
-        await loadTruants();
-      }, 'Убрать');
-    });
-  });
+  }
 }
 
-function startTruantPlacing(studentId, name, duration) {
+function startTruantPlacing(studentId, name, duration, cancellationId, teacherId) {
   var slotLength = Math.ceil(duration / SLOT_MINUTES);
-  state.placingTruant = { studentId: studentId, name: name, slotLength: slotLength, teacherId: state.user.id };
+  state.placingTruant = {
+    studentId: studentId,
+    name: name,
+    slotLength: slotLength,
+    teacherId: teacherId || state.user.id,
+    cancellationId: cancellationId || null
+  };
   showScreen('screen-schedule');
   showPlacingBanner();
   renderGrid();
@@ -266,9 +318,13 @@ async function placeTruantOnCell(day, room, slot) {
   if (result.error) { showToast('Ошибка', 'error'); return; }
   await db.from('lesson_students').insert({ lesson_id: result.data.id, student_id: t.studentId });
 
-  // Close one pending cancellation for this student
-  var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').eq('is_paid', false).order('week_start').limit(1);
-  if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
+  // Close the specific cancellation that was being placed (fallback: oldest pending)
+  if (t.cancellationId) {
+    await db.from('cancellations').delete().eq('id', t.cancellationId);
+  } else {
+    var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
+    if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
+  }
 
   state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Ученик размещён для отработки', 'success');
@@ -296,9 +352,13 @@ async function placeTruantOnLesson(targetLessonId) {
 
   await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: t.studentId });
 
-  // Close one pending cancellation for this student
-  var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').eq('is_paid', false).order('week_start').limit(1);
-  if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
+  // Close the specific cancellation that was being placed (fallback: oldest pending)
+  if (t.cancellationId) {
+    await db.from('cancellations').delete().eq('id', t.cancellationId);
+  } else {
+    var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
+    if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
+  }
 
   state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Ученик добавлен к занятию', 'success');

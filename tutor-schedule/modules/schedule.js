@@ -548,7 +548,8 @@ function onGridMouseUp(e) {
       }
       openEditLessonModal(lesson);
     } else {
-      if (hasLocalConflict(pc.day, pc.room, pc.slot, pc.slot + 1, null, null)) {
+      const ownTeacherId = state.profile.role === 'admin' ? null : state.user.id;
+      if (hasLocalConflict(pc.day, pc.room, pc.slot, pc.slot + 1, null, ownTeacherId)) {
         showToast('Кабинет уже занят в это время', 'error');
         return;
       }
@@ -593,7 +594,8 @@ function onGridMouseUp(e) {
       selStart = null; selEnd = null;
       return;
     }
-    if (hasLocalConflict(selStart.day, selStart.room, sf, st, null, null)) {
+    const ownTeacherId = state.profile.role === 'admin' ? null : state.user.id;
+    if (hasLocalConflict(selStart.day, selStart.room, sf, st, null, ownTeacherId)) {
       showToast('Кабинет уже занят в это время', 'error');
       selStart = null; selEnd = null;
       return;
@@ -721,7 +723,7 @@ async function placeTransferredStudent(day, room, slot) {
   const origWs = p.originalWeekStart || formatDate(getMonday(new Date()));
   await db.from('cancellations').insert({
     student_id: p.studentId, teacher_id: p.teacherId, week_start: origWs, status: 'transferred',
-    lesson_start_time: origLesson?.start_time, lesson_day: origLesson ? new Date(origLesson.start_time).getDay() : null
+    lesson_start_time: origLesson?.start_time, lesson_end_time: origLesson?.end_time, lesson_day: origLesson ? new Date(origLesson.start_time).getDay() : null
   });
   await cleanEmptyLesson(p.lessonId);
   state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
@@ -991,8 +993,13 @@ async function loadLessons() {
   renderLessons();
   const currentMonday = getMonday(new Date());
   if (formatDate(state.currentWeekStart) === formatDate(currentMonday)) {
-    if (typeof computeAndSyncCancellations === 'function') computeAndSyncCancellations();
+    if (typeof computeAndSyncCancellations === 'function') {
+      await computeAndSyncCancellations();
+    }
   }
+  // Keep dependent views in sync (truants list, payroll) without page reload
+  if (typeof loadTruants === 'function') loadTruants();
+  if (typeof loadPayroll === 'function' && document.getElementById('screen-profile')?.classList.contains('active')) loadPayroll();
 }
 
 function buildModalTitle(di, room, sf, st) { return `${DAYS_FULL[di]} · ${ROOM_FULL[room - 1]} · ${slotToTime(sf)}–${slotToTime(st)}`; }
@@ -1111,12 +1118,13 @@ function renderCurrentStudents() {
         const teacherId = m.teacherId;
         const lesson = state.lessons.find(l => l.id === lessonId);
         const lessonStartTime = lesson?.start_time;
+        const lessonEndTime = lesson?.end_time;
         const lessonWeekStart = lesson?.week_start;
         const lessonDay = m.day;
         showCancelConfirm(`Отменить ${s?.first_name || ''} ${s?.last_name || ''}?`, async (isPaid) => {
           await db.from('lesson_students').delete().eq('lesson_id', lessonId).eq('student_id', sid);
           const ws = lessonWeekStart || formatDate(getMonday(new Date()));
-          await db.from('cancellations').insert({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_day: lessonDay, is_paid: isPaid });
+          await db.from('cancellations').insert({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_end_time: lessonEndTime, lesson_day: lessonDay, is_paid: isPaid });
           m.selectedIds.delete(sid);
           const isEmpty = m.selectedIds.size === 0;
           await cleanEmptyLesson(lessonId);
@@ -1366,6 +1374,7 @@ async function cancelLesson() {
   const lessonDay = m.day;
   const lesson = state.lessons.find(l => l.id === lid);
   const lessonStartTime = lesson?.start_time;
+  const lessonEndTime = lesson?.end_time;
   const lessonWeekStart = lesson?.week_start;
   closeLessonModal();
   showConfirm('Отменить занятие? Все ученики будут отменены.', async () => {
@@ -1373,7 +1382,7 @@ async function cancelLesson() {
     const ws = lessonWeekStart || formatDate(getMonday(new Date()));
     if (studentIds.length > 0) {
       await db.from('cancellations').insert(
-        studentIds.map(sid => ({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_day: lessonDay }))
+        studentIds.map(sid => ({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_end_time: lessonEndTime, lesson_day: lessonDay }))
       );
     }
     showToast('Занятие отменено', 'success');
