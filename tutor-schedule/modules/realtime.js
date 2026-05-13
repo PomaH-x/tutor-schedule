@@ -11,13 +11,9 @@
 // DELETE с дебаунсом перевызываются loadLessons/loadRecurringLessons,
 // чтобы все клиенты видели актуальную картину без рефреша страницы.
 //
-// Ключи presence:
-//   "lesson:<uuid>"      — занятие в текущем расписании
-//   "rec:<uuid>"         — занятие в постоянном расписании
-//
-// ВАЖНО: для работы data sync таблицы должны быть в publication:
-//   ALTER PUBLICATION supabase_realtime ADD TABLE lessons, lesson_students,
-//     recurring_lessons, recurring_lesson_students, cancellations;
+// Устойчивость: при потере соединения (CLOSED, CHANNEL_ERROR, TIMED_OUT)
+// локи очищаются (нет актуальной информации = пользователь не блокируется),
+// канал переподключается автоматически через 3 секунды.
 // =====================================================================
 
 let presenceChannel = null;
@@ -25,6 +21,7 @@ let dataChannel = null;
 let lockedKeys = new Map(); // key -> { userId, name, color }
 let myLockedKeys = new Set();
 let presenceReady = false;
+let reconnectTimer = null;
 
 // Debounce timers — coalesce bursts of events into one refresh
 let lessonsRefreshTimer = null;
@@ -41,7 +38,6 @@ function scheduleLessonsRefresh() {
 function scheduleRecurringRefresh() {
   if (recurringRefreshTimer) clearTimeout(recurringRefreshTimer);
   recurringRefreshTimer = setTimeout(() => {
-    // Only refresh if recurring screen is currently active — otherwise stale data is fine
     const recScreen = document.getElementById('screen-recurring');
     if (recScreen && recScreen.classList.contains('active') && typeof loadRecurringLessons === 'function') {
       loadRecurringLessons();
@@ -56,10 +52,33 @@ function scheduleTruantsRefresh() {
   }, 250);
 }
 
+function handleConnectionLoss() {
+  // Connection lost: clear locks (we have no current info, so we shouldn't block the user)
+  lockedKeys.clear();
+  presenceReady = false;
+  applyLockVisuals();
+
+  // Schedule a reconnect attempt
+  if (reconnectTimer) return; // already scheduled
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    console.warn('[realtime] reconnecting…');
+    try {
+      if (presenceChannel) {
+        await presenceChannel.unsubscribe();
+        presenceChannel = null;
+      }
+      if (dataChannel) {
+        await dataChannel.unsubscribe();
+        dataChannel = null;
+      }
+    } catch (_) {}
+    initRealtime();
+  }, 3000);
+}
+
 async function initRealtime() {
   if (presenceChannel || !state.user || !state.profile) return;
-
-  console.log('[realtime] init for user', state.user.id, state.profile?.short_name);
 
   presenceChannel = db.channel('schedule-locks', {
     config: { presence: { key: state.user.id } }
@@ -67,50 +86,40 @@ async function initRealtime() {
 
   presenceChannel
     .on('presence', { event: 'sync' }, () => {
-      const s = presenceChannel.presenceState();
-      console.log('[realtime] sync, presences:', s);
-      rebuildLockMap();
-      console.log('[realtime] my view of locks:', Array.from(lockedKeys.entries()));
-      applyLockVisuals();
-    })
-    .on('presence', { event: 'join' }, ({ key, newPresences }) => {
-      console.log('[realtime] join', key, newPresences);
       rebuildLockMap();
       applyLockVisuals();
     })
-    .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
-      console.log('[realtime] leave', key, leftPresences);
+    .on('presence', { event: 'join' }, () => {
+      rebuildLockMap();
+      applyLockVisuals();
+    })
+    .on('presence', { event: 'leave' }, () => {
       rebuildLockMap();
       applyLockVisuals();
     });
 
   presenceChannel.subscribe(async (status) => {
-    console.log('[realtime] subscribe status:', status);
     if (status === 'SUBSCRIBED') {
       presenceReady = true;
       await trackMyState();
     } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-      console.warn('[realtime] connection problem:', status);
+      console.warn('[realtime] presence connection lost:', status);
+      handleConnectionLoss();
     }
   });
 
   // === Data sync: live updates from other clients ===
-  // Listen to postgres_changes on all tables that affect what users see on the schedule.
-  // Each event triggers a debounced refresh of the relevant view.
   if (!dataChannel) {
     dataChannel = db.channel('data-sync')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lessons' }, (payload) => {
-        console.log('[realtime] lessons change:', payload.eventType);
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lessons' }, () => {
         scheduleLessonsRefresh();
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lesson_students' }, (payload) => {
-        console.log('[realtime] lesson_students change:', payload.eventType);
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lesson_students' }, () => {
         scheduleLessonsRefresh();
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'recurring_lessons' }, (payload) => {
-        console.log('[realtime] recurring change:', payload.eventType);
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'recurring_lessons' }, () => {
         scheduleRecurringRefresh();
-        scheduleLessonsRefresh(); // recurring changes may sync to lessons too
+        scheduleLessonsRefresh();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'recurring_lesson_students' }, () => {
         scheduleRecurringRefresh();
@@ -119,7 +128,10 @@ async function initRealtime() {
         scheduleTruantsRefresh();
       })
       .subscribe((status) => {
-        console.log('[realtime] data-sync status:', status);
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          console.warn('[realtime] data-sync connection lost:', status);
+          // data-sync recovery rides along with presence reconnect via handleConnectionLoss
+        }
       });
   }
 
@@ -136,14 +148,13 @@ function rebuildLockMap() {
   lockedKeys.clear();
   const stateMap = presenceChannel.presenceState();
   for (const userKey in stateMap) {
-    const presences = stateMap[userKey]; // array of presence entries
+    const presences = stateMap[userKey];
     if (!presences || presences.length === 0) continue;
-    // Each track() call creates a new presence ref; only the LAST one in the array
-    // represents the user's current intent. Older entries are stale tracks.
+    // Each track() creates a new presence ref; only the LAST one represents
+    // current intent. Older entries are stale.
     const p = presences[presences.length - 1];
     if (!p || !Array.isArray(p.editing)) continue;
-    // Skip my own locks — I don't lock myself out
-    if (p.user_id === state.user.id) continue;
+    if (p.user_id === state.user.id) continue; // skip my own locks
     p.editing.forEach(key => {
       lockedKeys.set(key, { userId: p.user_id, name: p.name || 'Кто-то', color: p.color || '#1e6fe8' });
     });
@@ -153,22 +164,20 @@ function rebuildLockMap() {
 async function trackMyState() {
   if (!presenceChannel || !presenceReady) return;
   try {
-    const payload = {
+    await presenceChannel.track({
       user_id: state.user.id,
       name: state.profile?.short_name || state.profile?.full_name || 'Преподаватель',
       color: state.profile?.color || '#1e6fe8',
       editing: Array.from(myLockedKeys)
-    };
-    console.log('[realtime] track', payload);
-    await presenceChannel.track(payload);
+    });
   } catch (e) {
-    console.warn('[realtime] track failed:', e);
+    console.warn('[realtime] track failed:', e.message);
   }
 }
 
 async function acquireLock(key) {
   if (!key) return true;
-  // If someone else is already editing this, refuse
+  if (!presenceReady) return true; // offline → don't block the user
   const existing = lockedKeys.get(key);
   if (existing) return false;
   myLockedKeys.add(key);
@@ -180,13 +189,13 @@ async function releaseLock(key) {
   if (!key) return;
   if (!myLockedKeys.has(key)) return;
   myLockedKeys.delete(key);
-  await trackMyState();
+  if (presenceReady) await trackMyState();
 }
 
 async function releaseAllMyLocks() {
   if (myLockedKeys.size === 0) return;
   myLockedKeys.clear();
-  await trackMyState();
+  if (presenceReady) await trackMyState();
 }
 
 function getLockInfo(key) {
@@ -195,7 +204,6 @@ function getLockInfo(key) {
 
 // Render-time helper: apply visual styles to all visible cards based on locks
 function applyLockVisuals() {
-  // Both grids
   document.querySelectorAll('.lesson-card[data-lesson-id]').forEach(card => {
     const isRecGrid = card.closest('#recurring-grid');
     const id = card.dataset.lessonId;
@@ -213,8 +221,11 @@ function applyLockVisuals() {
   });
 }
 
-// Convenience: check & toast in one call. Returns true if locked (caller should abort).
+// Convenience: check & toast. Returns true if locked (caller should abort).
+// When offline (presenceReady=false), we don't enforce locks — better to let
+// the user keep working with conflicts handled the old way than to freeze them.
 function checkLockedAndToast(key) {
+  if (!presenceReady) return false;
   const lock = getLockInfo(key);
   if (lock) {
     showToast(`Сейчас редактирует ${lock.name}`, 'error');
@@ -222,3 +233,5 @@ function checkLockedAndToast(key) {
   }
   return false;
 }
+
+

@@ -119,17 +119,23 @@ async function checkConflictServer(day, room, slotFrom, slotTo, excludeId, teach
   const st = new Date(date); st.setHours(START_HOUR + Math.floor(slotFrom * SLOT_MINUTES / 60), (slotFrom * SLOT_MINUTES) % 60, 0, 0);
   const et = new Date(date); et.setHours(START_HOUR + Math.floor(slotTo * SLOT_MINUTES / 60), (slotTo * SLOT_MINUTES) % 60, 0, 0);
 
-  // Check room conflict (different teacher same room)
-  let q = db.from('lessons').select('id, teacher_id').eq('week_start', ws).eq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
-  if (excludeId) q = q.neq('id', excludeId);
-  const { data: rd } = await q;
-  if ((rd || []).some(l => l.teacher_id !== teacherId)) return 'room';
+  const isAdmin = state.profile?.role === 'admin';
 
-  // Check teacher in two rooms simultaneously
-  let q2 = db.from('lessons').select('id').eq('week_start', ws).eq('teacher_id', teacherId).neq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
-  if (excludeId) q2 = q2.neq('id', excludeId);
-  const { data: td } = await q2;
-  if (td && td.length > 0) return 'teacher';
+  // Check room conflict (different teacher same room) — admin can overlap anyone
+  if (!isAdmin) {
+    let q = db.from('lessons').select('id, teacher_id').eq('week_start', ws).eq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
+    if (excludeId) q = q.neq('id', excludeId);
+    const { data: rd } = await q;
+    if ((rd || []).some(l => l.teacher_id !== teacherId)) return 'room';
+  }
+
+  // Check teacher in two rooms simultaneously — admin too is exempt (they set tid explicitly)
+  if (!isAdmin) {
+    let q2 = db.from('lessons').select('id').eq('week_start', ws).eq('teacher_id', teacherId).neq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
+    if (excludeId) q2 = q2.neq('id', excludeId);
+    const { data: td } = await q2;
+    if (td && td.length > 0) return 'teacher';
+  }
 
   // Check student count and individual mixing among overlapping lessons in same room
   let q3 = db.from('lessons').select('id, lesson_students(student_id, student:students(is_individual))').eq('week_start', ws).eq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
