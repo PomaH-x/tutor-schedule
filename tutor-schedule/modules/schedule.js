@@ -991,15 +991,26 @@ async function loadLessons() {
   if (emptyIds.length > 0) db.from('lessons').delete().in('id', emptyIds);
   if (!recurringByStudent) await loadRecurringByStudent();
   renderLessons();
+
+  // Run side-effects in parallel, do not block the caller (e.g. cancellation flow)
   const currentMonday = getMonday(new Date());
-  if (formatDate(state.currentWeekStart) === formatDate(currentMonday)) {
-    if (typeof computeAndSyncCancellations === 'function') {
-      await computeAndSyncCancellations();
-    }
+  const isCurrentWeek = formatDate(state.currentWeekStart) === formatDate(currentMonday);
+  const profileVisible = document.getElementById('screen-profile')?.classList.contains('active');
+
+  // Fire-and-forget: heavy recurring↔actual sync runs in background.
+  // It won't delay the UI; once it finishes it will resync via realtime / next loadLessons call.
+  if (isCurrentWeek && typeof computeAndSyncCancellations === 'function') {
+    computeAndSyncCancellations().then(() => {
+      // After recompute, refresh truants only (payroll already loaded below)
+      if (typeof loadTruants === 'function') loadTruants();
+    });
   }
-  // Keep dependent views in sync (truants list, payroll) without page reload
-  if (typeof loadTruants === 'function') loadTruants();
-  if (typeof loadPayroll === 'function' && document.getElementById('screen-profile')?.classList.contains('active')) loadPayroll();
+
+  // Dependent views in parallel — no chaining, no awaits before render returns
+  const refreshes = [];
+  if (typeof loadTruants === 'function') refreshes.push(loadTruants());
+  if (profileVisible && typeof loadPayroll === 'function') refreshes.push(loadPayroll());
+  Promise.all(refreshes); // not awaited — UI does not wait for these
 }
 
 function buildModalTitle(di, room, sf, st) { return `${DAYS_FULL[di]} · ${ROOM_FULL[room - 1]} · ${slotToTime(sf)}–${slotToTime(st)}`; }
@@ -1122,18 +1133,40 @@ function renderCurrentStudents() {
         const lessonWeekStart = lesson?.week_start;
         const lessonDay = m.day;
         showCancelConfirm(`Отменить ${s?.first_name || ''} ${s?.last_name || ''}?`, async (isPaid) => {
-          await db.from('lesson_students').delete().eq('lesson_id', lessonId).eq('student_id', sid);
-          const ws = lessonWeekStart || formatDate(getMonday(new Date()));
-          await db.from('cancellations').insert({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_end_time: lessonEndTime, lesson_day: lessonDay, is_paid: isPaid });
+          // 1. Optimistic UI update — show change instantly
+          const lessonRef = state.lessons.find(l => l.id === lessonId);
+          let removedLs = null;
+          if (lessonRef && Array.isArray(lessonRef.lesson_students)) {
+            const idx = lessonRef.lesson_students.findIndex(ls => ls.student_id === sid);
+            if (idx !== -1) { removedLs = lessonRef.lesson_students[idx]; lessonRef.lesson_students.splice(idx, 1); }
+          }
           m.selectedIds.delete(sid);
           const isEmpty = m.selectedIds.size === 0;
-          await cleanEmptyLesson(lessonId);
-          await loadLessons();
-          if (isEmpty) { closeLessonModal(); showToast(isPaid ? 'Ученик отменён (платно), занятие удалено' : 'Ученик отменён, занятие удалено', 'success'); return; }
-          await loadTeacherStudentsForModal(teacherId);
-          renderCurrentStudents();
-          renderLessonStudentsList(document.getElementById('lesson-student-search').value.trim());
-          showToast(isPaid ? 'Ученик отменён (платно)' : 'Ученик отменён', 'success');
+          if (isEmpty && lessonRef) state.lessons = state.lessons.filter(l => l.id !== lessonId);
+          renderLessons();
+          if (isEmpty) closeLessonModal();
+          else { renderCurrentStudents(); renderLessonStudentsList(document.getElementById('lesson-student-search').value.trim()); }
+          showToast(isPaid
+            ? (isEmpty ? 'Ученик отменён (платно), занятие удалено' : 'Ученик отменён (платно)')
+            : (isEmpty ? 'Ученик отменён, занятие удалено' : 'Ученик отменён'), 'success');
+
+          // 2. Persist to DB — parallel writes, rollback on error
+          const ws = lessonWeekStart || formatDate(getMonday(new Date()));
+          try {
+            const results = await Promise.all([
+              db.from('lesson_students').delete().eq('lesson_id', lessonId).eq('student_id', sid),
+              db.from('cancellations').insert({ student_id: sid, teacher_id: teacherId, week_start: ws, status: 'pending', lesson_start_time: lessonStartTime, lesson_end_time: lessonEndTime, lesson_day: lessonDay, is_paid: isPaid })
+            ]);
+            const failed = results.find(r => r && r.error);
+            if (failed) throw failed.error;
+            if (isEmpty) cleanEmptyLesson(lessonId); // fire-and-forget
+            // Background refresh of dependent views (truants, payroll)
+            loadLessons();
+          } catch (err) {
+            showToast('Ошибка отмены, обновляю', 'error');
+            if (lessonRef && removedLs && !isEmpty) lessonRef.lesson_students.push(removedLs);
+            await loadLessons();
+          }
         });
       });
     });
