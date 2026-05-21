@@ -4002,4 +4002,50 @@ input, textarea, select {
     justify-content: center;
   }
   .sd-att-num { font-size: 24px; }
+  .btn-online-type { display: none !important;}
 }
+
+/* ===== PWA UPDATE BANNER ===== */
+#pwa-update-banner {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--accent);
+  color: white;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  animation: slideUpBanner 0.3s ease;
+}
+@keyframes slideUpBanner {
+  from { transform: translate(-50%, 20px); opacity: 0; }
+  to   { transform: translate(-50%, 0); opacity: 1; }
+}
+#pwa-update-btn {
+  background: white;
+  color: var(--accent);
+  border: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+#pwa-update-dismiss {
+  background: transparent;
+  color: white;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  opacity: 0.8;
+}
+#pwa-update-dismiss:hover { opacity: 1; }

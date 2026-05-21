@@ -125,3 +125,54 @@ function initTheme() {
     s.addEventListener('change', () => syncAll(s.checked ? 'dark' : 'light'));
   });
 }
+
+// ===== PWA: Service Worker registration + update prompt =====
+// On every deploy, service-worker.js bumps CACHE_NAME, the browser detects
+// a new SW version. We listen for "installed" while another SW controls
+// the page and show a toast offering the user to refresh.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/service-worker.js').then(reg => {
+      // Check for updates whenever the tab becomes visible again
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) reg.update();
+      });
+
+      reg.addEventListener('updatefound', () => {
+        const newSW = reg.installing;
+        if (!newSW) return;
+        newSW.addEventListener('statechange', () => {
+          if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+            // A new SW is waiting. Prompt the user.
+            promptForUpdate(newSW);
+          }
+        });
+      });
+    }).catch(err => console.warn('SW registration failed:', err));
+
+    // When the active SW changes, reload the page so the new version takes effect
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading) return;
+      reloading = true;
+      window.location.reload();
+    });
+  });
+}
+
+function promptForUpdate(newWorker) {
+  // Minimal sticky banner — independent of toast system to survive any re-render.
+  if (document.getElementById('pwa-update-banner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'pwa-update-banner';
+  banner.innerHTML = `
+    <span>Доступна новая версия приложения</span>
+    <button id="pwa-update-btn">Обновить</button>
+    <button id="pwa-update-dismiss" aria-label="Закрыть">×</button>
+  `;
+  document.body.appendChild(banner);
+  document.getElementById('pwa-update-btn').onclick = () => {
+    newWorker.postMessage({ type: 'SKIP_WAITING' });
+  };
+  document.getElementById('pwa-update-dismiss').onclick = () => banner.remove();
+}

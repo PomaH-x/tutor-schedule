@@ -1,16 +1,40 @@
 {
   "name": "Расписание репетиторского центра",
   "short_name": "Расписание",
-  "description": "Управление расписанием занятий",
+  "description": "Совместное управление расписанием занятий, учениками и платежами в репетиторском центре",
+  "lang": "ru",
+  "dir": "ltr",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#0d1117",
   "theme_color": "#1e6fe8",
+  "categories": ["education", "productivity", "business"],
   "icons": [
     {
       "src": "assets/icon.svg",
       "sizes": "any",
-      "type": "image/svg+xml"
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
