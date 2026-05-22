@@ -188,9 +188,16 @@ async function saveStudent() {
 let confirmCallback = null;
 let cancelConfirmCallback = null;
 
-function showConfirm(text, callback, btnLabel) {
+function showConfirm(text, callback, btnLabel, btnVariant) {
   document.getElementById('confirm-text').textContent = text;
-  document.getElementById('btn-confirm-ok').textContent = btnLabel || 'Удалить';
+  const okBtn = document.getElementById('btn-confirm-ok');
+  okBtn.textContent = btnLabel || 'Удалить';
+  // Reset variant classes, then apply the requested one (default: danger)
+  okBtn.classList.remove('btn-danger', 'btn-primary', 'btn-success');
+  const variantClass = btnVariant === 'success' ? 'btn-success'
+                     : btnVariant === 'primary' ? 'btn-primary'
+                     : 'btn-danger';
+  okBtn.classList.add(variantClass);
   confirmCallback = callback;
   document.getElementById('confirm-overlay').classList.add('active');
 }

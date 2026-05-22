@@ -284,9 +284,12 @@ function changeRole(userId, name, newRole) {
     }
   }
 
-  const message = newRole === 'admin'
+  const isPromote = newRole === 'admin';
+  const message = isPromote
     ? `Повысить ${name} до администратора? Этот пользователь получит полный доступ ко всем данным и настройкам центра.`
     : `Понизить ${name} до преподавателя? Этот пользователь потеряет административный доступ.`;
+  const btnLabel = isPromote ? 'Повысить' : 'Понизить';
+  const btnVariant = isPromote ? 'success' : 'danger';
 
   showConfirm(message, async () => {
     const { error } = await db.from('profiles').update({ role: newRole }).eq('id', userId);
@@ -294,9 +297,9 @@ function changeRole(userId, name, newRole) {
       showToast('Ошибка: ' + error.message, 'error');
       return;
     }
-    showToast(newRole === 'admin' ? 'Назначен администратором' : 'Понижен до преподавателя', 'success');
+    showToast(isPromote ? 'Назначен администратором' : 'Понижен до преподавателя', 'success');
     await loadTeachers();
-  });
+  }, btnLabel, btnVariant);
 }
 
 function openColorPicker(teacherId) {

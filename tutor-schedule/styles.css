@@ -5,6 +5,7 @@
   --danger: #dc3545;
   --danger-soft: rgba(220, 53, 69, 0.12);
   --success: #28a745;
+  --success-soft: rgba(40, 167, 69, 0.12);
   --radius: 10px;
   --radius-sm: 6px;
   --font: 'Manrope', system-ui, sans-serif;
@@ -2867,6 +2868,23 @@ input, textarea, select {
 
 .btn-danger:hover {
   background: var(--danger);
+  color: white;
+}
+
+.btn-success {
+  padding: 10px 18px;
+  background: var(--success-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--success);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-success:hover {
+  background: var(--success);
   color: white;
 }
 
