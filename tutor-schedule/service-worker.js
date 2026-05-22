@@ -1,37 +1,41 @@
 // Bump CACHE_NAME on every deploy so clients refetch assets.
-const CACHE_NAME = 'tutor-schedule-v21';
+const CACHE_NAME = 'tutor-schedule-v22';
+
+// Compute base path dynamically so the SW works under any URL,
+// including GitHub Pages subpaths like /tutor-schedule/tutor-schedule/.
+// self.registration.scope is e.g. "https://pomah-x.github.io/tutor-schedule/tutor-schedule/"
+const BASE = new URL(self.registration.scope).pathname;
 
 const ASSETS = [
-  '/',
-  '/index.html',
-  '/styles.css',
-  '/app.js',
-  '/manifest.json',
-  '/modules/config.js',
-  '/modules/state.js',
-  '/modules/auth.js',
-  '/modules/toast.js',
-  '/modules/schedule.js',
-  '/modules/students.js',
-  '/modules/recurring.js',
-  '/modules/cancellations.js',
-  '/modules/online.js',
-  '/modules/realtime.js',
-  '/modules/student.js',
-  '/modules/pricing.js',
-  '/modules/admin.js',
-  '/assets/icon.svg',
-  '/assets/icon-192.png',
-  '/assets/icon-512.png',
-  '/assets/icon-maskable-512.png',
-  '/assets/apple-touch-icon.png'
-];
+  '',
+  'index.html',
+  'styles.css',
+  'app.js',
+  'manifest.json',
+  'modules/config.js',
+  'modules/state.js',
+  'modules/auth.js',
+  'modules/toast.js',
+  'modules/schedule.js',
+  'modules/students.js',
+  'modules/recurring.js',
+  'modules/cancellations.js',
+  'modules/online.js',
+  'modules/realtime.js',
+  'modules/student.js',
+  'modules/pricing.js',
+  'modules/admin.js',
+  'assets/icon.svg',
+  'assets/icon-192.png',
+  'assets/icon-512.png',
+  'assets/icon-maskable-512.png',
+  'assets/apple-touch-icon.png'
+].map(path => BASE + path);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS))
   );
-  // Don't call skipWaiting() automatically — let the app prompt the user to update.
 });
 
 self.addEventListener('activate', (event) => {
@@ -54,7 +58,7 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
 
-  // Network-only for backend / realtime / cross-origin scripts (e.g. Supabase CDN).
+  // Network-only for backend / realtime / cross-origin.
   if (
     url.hostname.includes('supabase') ||
     url.hostname.includes('cdn.jsdelivr.net') ||
@@ -64,16 +68,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Network-first for index.html so users always get the latest shell when online.
-  // Falls back to cache when offline.
-  if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
+  // Network-first for navigation requests (HTML) so the shell stays fresh.
+  // Falls back to cached index.html when offline.
+  if (event.request.mode === 'navigate' || url.pathname.endsWith('/index.html') || url.pathname === BASE) {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match('/index.html'))
+      fetch(event.request).catch(() => caches.match(BASE + 'index.html'))
     );
     return;
   }
 
-  // Cache-first for everything else (static assets, modules).
+  // Cache-first for static assets / modules.
   event.respondWith(
     caches.match(event.request).then(cached => cached || fetch(event.request))
   );

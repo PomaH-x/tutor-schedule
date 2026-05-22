@@ -132,7 +132,7 @@ function initTheme() {
 // the page and show a toast offering the user to refresh.
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/service-worker.js').then(reg => {
+    navigator.serviceWorker.register('./service-worker.js').then(reg => {
       // Check for updates whenever the tab becomes visible again
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) reg.update();
