@@ -187,7 +187,33 @@ function renderTeachers() {
 
   const roleLabel = { teacher: 'Преподаватель', admin: 'Админ' };
 
-  list.innerHTML = teachersList.map(t => `
+  const adminCount = teachersList.filter(t => t.role === 'admin').length;
+
+  list.innerHTML = teachersList.map(t => {
+    const isSelf = t.id === state.user.id;
+    const isAdmin = t.role === 'admin';
+
+    // Promote/demote button:
+    //  - Hide for self (you can't promote/demote yourself)
+    //  - Hide demote when this is the last remaining admin (otherwise nobody can administer)
+    let roleBtn = '';
+    if (!isSelf) {
+      if (isAdmin && adminCount > 1) {
+        roleBtn = `<button class="btn-role-down" data-id="${t.id}" data-name="${t.full_name}" title="Понизить до преподавателя">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/>
+          </svg>
+        </button>`;
+      } else if (!isAdmin) {
+        roleBtn = `<button class="btn-role-up" data-id="${t.id}" data-name="${t.full_name}" title="Повысить до администратора">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+          </svg>
+        </button>`;
+      }
+    }
+
+    return `
     <div class="teacher-card" data-id="${t.id}">
       <div class="teacher-color" style="background:${t.color || '#1e6fe8'}" data-id="${t.id}" title="Сменить цвет">
         <span class="teacher-color-edit">✎</span>
@@ -204,9 +230,11 @@ function renderTeachers() {
         <label>Макс:</label>
         <input type="number" class="input-group-size" data-id="${t.id}" value="${t.max_group_size || 4}" min="1" max="20">
       </div>
-      ${t.id !== state.user.id ? `<button class="btn-delete-teacher" data-id="${t.id}" data-name="${t.full_name}" title="Удалить">×</button>` : ''}
+      ${roleBtn}
+      ${!isSelf ? `<button class="btn-delete-teacher" data-id="${t.id}" data-name="${t.full_name}" title="Удалить">×</button>` : ''}
     </div>
-  `).join('');
+  `;
+  }).join('');
 
   list.querySelectorAll('.teacher-color').forEach(el => {
     el.addEventListener('click', () => openColorPicker(el.dataset.id));
@@ -230,6 +258,44 @@ function renderTeachers() {
 
   list.querySelectorAll('.btn-delete-teacher').forEach(btn => {
     btn.addEventListener('click', () => deleteTeacher(btn.dataset.id, btn.dataset.name));
+  });
+
+  list.querySelectorAll('.btn-role-up').forEach(btn => {
+    btn.addEventListener('click', () => changeRole(btn.dataset.id, btn.dataset.name, 'admin'));
+  });
+
+  list.querySelectorAll('.btn-role-down').forEach(btn => {
+    btn.addEventListener('click', () => changeRole(btn.dataset.id, btn.dataset.name, 'teacher'));
+  });
+}
+
+function changeRole(userId, name, newRole) {
+  // Safety re-check on the latest state (in case table was re-rendered)
+  if (userId === state.user.id) {
+    showToast('Нельзя изменить свою собственную роль', 'error');
+    return;
+  }
+
+  if (newRole === 'teacher') {
+    const adminCount = teachersList.filter(t => t.role === 'admin').length;
+    if (adminCount <= 1) {
+      showToast('Нельзя понизить последнего администратора', 'error');
+      return;
+    }
+  }
+
+  const message = newRole === 'admin'
+    ? `Повысить ${name} до администратора? Этот пользователь получит полный доступ ко всем данным и настройкам центра.`
+    : `Понизить ${name} до преподавателя? Этот пользователь потеряет административный доступ.`;
+
+  showConfirm(message, async () => {
+    const { error } = await db.from('profiles').update({ role: newRole }).eq('id', userId);
+    if (error) {
+      showToast('Ошибка: ' + error.message, 'error');
+      return;
+    }
+    showToast(newRole === 'admin' ? 'Назначен администратором' : 'Понижен до преподавателя', 'success');
+    await loadTeachers();
   });
 }
 

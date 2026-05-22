@@ -1463,6 +1463,37 @@ input, textarea, select {
   color: var(--danger);
 }
 
+.btn-role-up, .btn-role-down {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  padding: 6px;
+  line-height: 0;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-role-up {
+  color: var(--success, #2ea043);
+}
+
+.btn-role-up:hover {
+  background: rgba(46, 160, 67, 0.12);
+  border-color: var(--success, #2ea043);
+}
+
+.btn-role-down {
+  color: var(--danger);
+}
+
+.btn-role-down:hover {
+  background: rgba(248, 81, 73, 0.12);
+  border-color: var(--danger);
+}
+
 .teacher-group-size {
   display: flex;
   align-items: center;
@@ -4002,7 +4033,6 @@ input, textarea, select {
     justify-content: center;
   }
   .sd-att-num { font-size: 24px; }
-  .btn-online-type {display: none !important;}
 }
 
 /* ===== PWA UPDATE BANNER ===== */
