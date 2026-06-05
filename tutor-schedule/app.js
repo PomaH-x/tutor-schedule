@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initPricingAndPayroll();
   initOnline();
   initStudent();
+  initSubscriptions();
 
   document.getElementById('btn-save-telegram')?.addEventListener('click', async () => {
     const tg = document.getElementById('profile-telegram-input').value.trim().replace(/^@/, '');

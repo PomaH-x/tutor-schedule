@@ -228,8 +228,53 @@ async function renderStudentSchedule() {
   `;
 
   const list = document.getElementById('student-lessons-list');
+
+  // Subscription widgets for each active subscription
+  const studentIds = records.map(r => r.id);
+  let subsHtml = '';
+  if (studentIds.length > 0) {
+    await recomputeSubscriptionsForStudents(studentIds);
+    const { data: activeSubs } = await db.from('subscriptions')
+      .select('*, pricing:pricing_id(duration_minutes, is_individual, format), student:students(teacher:profiles!teacher_id(full_name, color))')
+      .in('student_id', studentIds)
+      .eq('status', 'active')
+      .order('end_date');
+    if ((activeSubs || []).length > 0) {
+      subsHtml = '<div class="student-subs">' + (activeSubs || []).map(sub => {
+        const total = sub.total_lessons;
+        const used = sub.used_lessons || 0;
+        const remaining = Math.max(0, total - used);
+        const pct = Math.min(100, Math.round((used / total) * 100));
+        const tName = sub.student?.teacher?.full_name || '';
+        const tColor = sub.student?.teacher?.color || 'var(--accent)';
+        const transfersTotal = sub.total_transfers;
+        const transfersUsed = sub.transfers_used || 0;
+        const transfersLeft = Math.max(0, transfersTotal - transfersUsed);
+        const transfersWarning = transfersLeft === 0;
+        const fmt = (d) => {
+          const dt = new Date(d);
+          return `${dt.getDate().toString().padStart(2,'0')}.${(dt.getMonth()+1).toString().padStart(2,'0')}`;
+        };
+        return `<div class="student-sub-widget" style="border-left:3px solid ${tColor}">
+          <div class="student-sub-head">
+            <span class="sub-badge sub-badge-active">Абонемент</span>
+            <span class="student-sub-title">${total} занятий · ${remaining} осталось</span>
+            <span class="student-sub-teacher">${tName}</span>
+          </div>
+          <div class="sub-progress-wrap">
+            <div class="sub-progress-bar"><div class="sub-progress-fill" style="width:${pct}%"></div></div>
+            <div class="sub-progress-label">${used} из ${total} · до ${fmt(sub.end_date)}</div>
+          </div>
+          <div class="sub-panel-meta">
+            <span class="${transfersWarning ? 'sub-meta-warn' : ''}">Переносов: ${transfersUsed} / ${transfersTotal}</span>
+          </div>
+        </div>`;
+      }).join('') + '</div>';
+    }
+  }
+
   if (items.length === 0 && overdueItems.length === 0) {
-    list.innerHTML = '<div class="online-empty">Нет занятий на этой неделе</div>';
+    list.innerHTML = subsHtml + '<div class="online-empty">Нет занятий на этой неделе</div>';
     return;
   }
 
@@ -239,7 +284,7 @@ async function renderStudentSchedule() {
   const regularSorted = [...items].sort((a, b) => a.date - b.date);
   const sorted = [...overdueSorted, ...regularSorted];
 
-  let html = '';
+  let html = subsHtml;
   sorted.forEach(it => {
     const dayIdx = it.date.getDay() === 0 ? 6 : it.date.getDay() - 1;
     const dayName = STUDENT_DAYS_FULL[dayIdx];

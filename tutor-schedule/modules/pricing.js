@@ -15,13 +15,25 @@ function formatTierLabel(duration, isIndividual) {
   return isIndividual ? `${hStr} (Инд.)` : hStr;
 }
 
-function findPricing(duration, isIndividual, priceType, isOnline) {
+function findPricing(duration, isIndividual, priceType, isOnline, format) {
+  format = format || 'single';
   if (isOnline) {
-    const online = pricingList.find(p => p.is_online === true && p.duration_minutes === duration && p.price_type === priceType);
+    const online = pricingList.find(p => p.is_online === true && p.duration_minutes === duration && p.price_type === priceType && (p.format || 'single') === format);
     if (online) return online;
-    return pricingList.find(p => p.is_individual === true && p.duration_minutes === duration && p.price_type === priceType);
+    return pricingList.find(p => p.is_individual === true && p.duration_minutes === duration && p.price_type === priceType && (p.format || 'single') === format);
   }
-  return pricingList.find(p => !p.is_online && p.duration_minutes === duration && p.is_individual === isIndividual && p.price_type === priceType);
+  return pricingList.find(p => !p.is_online && p.duration_minutes === duration && p.is_individual === isIndividual && p.price_type === priceType && (p.format || 'single') === format);
+}
+
+// Returns all subscription pricing options (sub4/sub8) for a student's profile.
+// Used in the activation form.
+function listSubscriptionOptions(durationMinutes, isIndividual, priceType, isOnline) {
+  return pricingList.filter(p =>
+    p.duration_minutes === durationMinutes &&
+    p.price_type === priceType &&
+    (isOnline ? p.is_online === true : (!p.is_online && p.is_individual === isIndividual)) &&
+    (p.format === 'sub4' || p.format === 'sub8')
+  );
 }
 
 function hasAnyPricingForDuration(duration) {
@@ -43,43 +55,72 @@ function renderPricingAdmin(pricing) {
     return;
   }
 
-  // Group: group first, then individual; within each, by price type
-  const grouped = { group_old: [], group_new: [], ind_old: [], ind_new: [], online_old: [], online_new: [] };
-  pricing.forEach(p => {
-    if (p.is_online) {
-      grouped[`online_${p.price_type}`].push(p);
-    } else {
-      const key = `${p.is_individual ? 'ind' : 'group'}_${p.price_type}`;
-      if (grouped[key]) grouped[key].push(p);
-    }
-  });
+  // Two top-level groups by format: single (Разовые) and subscription (Абонементы)
+  const singles = pricing.filter(p => (p.format || 'single') === 'single');
+  const subs = pricing.filter(p => p.format === 'sub4' || p.format === 'sub8');
 
-  const sections = [
+  const groupBy = (rows) => {
+    const g = { group_new: [], group_old: [], ind_new: [], ind_old: [], online_new: [], online_old: [] };
+    rows.forEach(p => {
+      const t = p.is_online ? 'online' : (p.is_individual ? 'ind' : 'group');
+      const key = `${t}_${p.price_type}`;
+      if (g[key]) g[key].push(p);
+    });
+    return g;
+  };
+
+  const sectionTitles = [
     { key: 'group_new', title: 'Групповые · Новые цены' },
     { key: 'group_old', title: 'Групповые · Старые цены' },
-    { key: 'ind_new', title: 'Индивидуальные · Новые цены' },
-    { key: 'ind_old', title: 'Индивидуальные · Старые цены' },
+    { key: 'ind_new',   title: 'Индивидуальные · Новые цены' },
+    { key: 'ind_old',   title: 'Индивидуальные · Старые цены' },
     { key: 'online_new', title: 'Онлайн · Новые цены' },
     { key: 'online_old', title: 'Онлайн · Старые цены' }
   ];
 
-  let html = '';
-  sections.forEach(sec => {
-    if (grouped[sec.key].length === 0) return;
-    html += `<div class="pricing-section-title">${sec.title}</div>`;
-    grouped[sec.key].sort((a, b) => a.duration_minutes - b.duration_minutes);
-    grouped[sec.key].forEach(p => {
-      html += `<div class="pricing-card" data-id="${p.id}">
-        <span class="pricing-duration">${formatTierLabel(p.duration_minutes, p.is_individual)}</span>
-        <span class="pricing-values">
-          <span class="pv-item">Занятие: <b>${p.student_price}₽</b></span>
-          <span class="pv-item">Преп.: <b>${p.teacher_profit}₽</b></span>
-          <span class="pv-item">Центр: <b>${p.commission}₽</b></span>
-        </span>
-        <button class="btn-edit-pricing" data-id="${p.id}" title="Редактировать">✎</button>
-      </div>`;
+  const formatCard = (p, isSub) => {
+    const lessons = p.format === 'sub4' ? 4 : (p.format === 'sub8' ? 8 : null);
+    const durLabel = formatTierLabel(p.duration_minutes, p.is_individual);
+    const title = isSub ? `${durLabel} · ${lessons} занятий` : durLabel;
+    return `<div class="pricing-card" data-id="${p.id}">
+      <span class="pricing-duration">${title}</span>
+      <span class="pricing-values">
+        <span class="pv-item">${isSub ? 'Абонемент' : 'Занятие'}: <b>${p.student_price}₽</b></span>
+        <span class="pv-item">Преп.: <b>${p.teacher_profit}₽</b></span>
+        <span class="pv-item">Центр: <b>${p.commission}₽</b></span>
+      </span>
+      <button class="btn-edit-pricing" data-id="${p.id}" title="Редактировать">✎</button>
+    </div>`;
+  };
+
+  const renderGroupedSection = (rows, isSub) => {
+    if (rows.length === 0) return '';
+    const grouped = groupBy(rows);
+    let html = '';
+    sectionTitles.forEach(sec => {
+      if (grouped[sec.key].length === 0) return;
+      html += `<div class="pricing-section-title">${sec.title}</div>`;
+      grouped[sec.key].sort((a, b) => {
+        // sort by duration, then sub4 before sub8
+        if (a.duration_minutes !== b.duration_minutes) return a.duration_minutes - b.duration_minutes;
+        const fa = a.format || 'single';
+        const fb = b.format || 'single';
+        return fa.localeCompare(fb);
+      });
+      grouped[sec.key].forEach(p => { html += formatCard(p, isSub); });
     });
-  });
+    return html;
+  };
+
+  let html = '';
+  if (singles.length > 0) {
+    html += `<div class="pricing-group-header">Разовые занятия</div>`;
+    html += renderGroupedSection(singles, false);
+  }
+  if (subs.length > 0) {
+    html += `<div class="pricing-group-header">Абонементы</div>`;
+    html += renderGroupedSection(subs, true);
+  }
   list.innerHTML = html;
 
   list.querySelectorAll('.btn-edit-pricing').forEach(btn => {
@@ -93,6 +134,10 @@ function openPricingModal(pricing = null) {
   document.getElementById('pricing-duration').value = pricing?.duration_minutes || 90;
   document.getElementById('pricing-is-individual').value = pricing?.is_online ? 'online' : String(pricing?.is_individual || false);
   document.getElementById('pricing-price-type').value = pricing?.price_type || 'new';
+  const fmtSel = document.getElementById('pricing-format');
+  if (fmtSel) fmtSel.value = pricing?.format || 'single';
+  const lbl = document.getElementById('pricing-student-price-label');
+  if (lbl) lbl.textContent = (pricing?.format && pricing.format !== 'single') ? 'Цена абонемента' : 'Цена занятия';
   document.getElementById('pricing-student-price').value = pricing?.student_price || '';
   document.getElementById('pricing-teacher-profit').value = pricing?.teacher_profit || '';
   document.getElementById('pricing-commission').value = pricing?.commission || '';
@@ -111,6 +156,7 @@ async function savePricing() {
   const isIndividual = typeVal === 'true' || typeVal === 'online';
   const isOnline = typeVal === 'online';
   const priceType = document.getElementById('pricing-price-type').value;
+  const format = document.getElementById('pricing-format')?.value || 'single';
   const studentPrice = parseInt(document.getElementById('pricing-student-price').value);
   const teacherProfit = parseInt(document.getElementById('pricing-teacher-profit').value);
   const commission = parseInt(document.getElementById('pricing-commission').value);
@@ -121,6 +167,7 @@ async function savePricing() {
 
   const record = {
     duration_minutes: duration, is_individual: isIndividual, is_online: isOnline, price_type: priceType,
+    format: format,
     student_price: studentPrice, teacher_profit: teacherProfit, commission
   };
 
@@ -161,32 +208,90 @@ async function loadPayroll() {
   const target = new Date(now);
   target.setDate(target.getDate() + currentPayrollOffset * 7);
   const ws = formatDate(target);
+  const we = new Date(target); we.setDate(we.getDate() + 7);
+  const wsIso = target.toISOString();
+  const weIso = we.toISOString();
   const isAdmin = state.profile.role === 'admin';
 
   let q = db.from('lessons')
-    .select('id, teacher_id, start_time, end_time, status, teacher:profiles!teacher_id(full_name, color, role), lesson_students(student_id, student:students(first_name, last_name, is_individual, is_online, price_type))')
+    .select('id, teacher_id, start_time, end_time, status, teacher:profiles!teacher_id(full_name, color, role), lesson_students(student_id, subscription_id, student:students(first_name, last_name, is_individual, is_online, price_type))')
     .eq('week_start', ws).in('status', ['active', 'cancelled']);
   if (!isAdmin) q = q.eq('teacher_id', state.user.id);
 
-  // Also fetch pending cancellations for this week
+  // Pending cancellations this week. Includes lesson_end_time so we know lesson duration without joining lessons.
   let qc = db.from('cancellations')
-    .select('id, student_id, teacher_id, lesson_start_time, is_paid, reason_text, reason_image_url, student:students(first_name, last_name, is_individual, is_online, price_type), teacher:profiles!teacher_id(full_name, color, role)')
+    .select('id, student_id, teacher_id, lesson_start_time, lesson_end_time, is_paid, valid_reason, reason_text, reason_image_url, student:students(first_name, last_name, is_individual, is_online, price_type), teacher:profiles!teacher_id(full_name, color, role)')
     .eq('week_start', ws).eq('status', 'pending');
   if (!isAdmin) qc = qc.eq('teacher_id', state.user.id);
 
-  const [{ data: lessons }, { data: cancellations }] = await Promise.all([q, qc]);
-  renderPayroll(lessons || [], cancellations || [], isAdmin);
+  // Subscriptions SOLD on this week (by created_at — matches teacher's actual cash receipt date)
+  let qs = db.from('subscriptions')
+    .select('id, teacher_id, student_id, total_lessons, paid_amount, teacher_share, center_share, created_at, student:students(first_name, last_name), pricing:pricing_id(duration_minutes, format, is_individual, is_online)')
+    .gte('created_at', wsIso).lt('created_at', weIso);
+  if (!isAdmin) qs = qs.eq('teacher_id', state.user.id);
+
+  // Subscriptions REFUNDED on this week (by refunded_at) — they need to roll back center share
+  let qr = db.from('subscriptions')
+    .select('id, teacher_id, student_id, total_lessons, paid_amount, teacher_share, center_share, refund_amount, refunded_at, created_at, student:students(first_name, last_name), pricing:pricing_id(duration_minutes, format, is_individual, is_online)')
+    .eq('status', 'refunded')
+    .gte('refunded_at', wsIso).lt('refunded_at', weIso);
+  if (!isAdmin) qr = qr.eq('teacher_id', state.user.id);
+
+  const [{ data: lessons }, { data: cancellations }, { data: soldSubs }, { data: refundedSubs }] = await Promise.all([q, qc, qs, qr]);
+
+  // Collect subscription IDs referenced by lesson_students, fetch them separately.
+  // We don't use a nested join above because it can silently return null due to RLS or
+  // unresolved FKs, breaking the spread-profit calculation.
+  const subIds = new Set();
+  (lessons || []).forEach(l => (l.lesson_students || []).forEach(ls => {
+    if (ls.subscription_id) subIds.add(ls.subscription_id);
+  }));
+  let subsById = {};
+  if (subIds.size > 0) {
+    const { data: subs } = await db.from('subscriptions')
+      .select('id, total_lessons, paid_amount, teacher_share, center_share, pricing:pricing_id(duration_minutes, format)')
+      .in('id', Array.from(subIds));
+    (subs || []).forEach(s => { subsById[s.id] = s; });
+  }
+
+  renderPayroll(lessons || [], cancellations || [], soldSubs || [], refundedSubs || [], subsById, isAdmin);
 }
 
 let payrollTeacherData = {};
 
-function renderPayroll(lessons, cancellations, isAdmin) {
+function ensureTeacherBucket(tId, lesson, cancellation, sub, soldList) {
+  if (payrollTeacherData[tId]) return payrollTeacherData[tId];
+  // Try to figure out teacher info from any source
+  const tInfo = lesson?.teacher || cancellation?.teacher || null;
+  payrollTeacherData[tId] = {
+    name: tInfo?.full_name || 'Преподаватель',
+    color: tInfo?.color || '#1e6fe8',
+    role: tInfo?.role,
+    // One-off (single) figures
+    oneOffRevenue: 0, oneOffProfit: 0, oneOffCommission: 0,
+    // Subscription figures (spread per lesson; commission is full-on-sale separately)
+    subProfit: 0,           // spread profit from attended subscription lessons
+    subRevenue: 0,          // spread paid_amount equivalent
+    soldSubsCommission: 0,  // FULL commission for subscriptions sold this week
+    soldSubsRevenue: 0,     // FULL paid_amount of sold subscriptions
+    soldSubsTeacherShare: 0,
+    // Aggregations for UI rows
+    students: {},           // one-off conducted lessons by student
+    subStudents: {},        // subscription-attended lessons aggregated by student
+    cancelledStudents: [],  // one-off cancellations rows (red/yellow)
+    soldSubs: [],           // list of sold subscriptions this week
+    cancelCount: 0
+  };
+  return payrollTeacherData[tId];
+}
+
+function renderPayroll(lessons, cancellations, soldSubs, refundedSubs, subsById, isAdmin) {
   const container = document.getElementById('payroll-content');
   if (!container) return;
 
   payrollTeacherData = {};
 
-  // Process active lessons
+  // ===== 1. Active lessons (conducted) — split into one-off vs subscription =====
   lessons.forEach(lesson => {
     if (lesson.status !== 'active') return;
     const tId = lesson.teacher_id;
@@ -194,105 +299,188 @@ function renderPayroll(lessons, cancellations, isAdmin) {
     const start = new Date(lesson.start_time);
     const end = new Date(lesson.end_time);
     const durationMin = Math.round((end - start) / 60000);
+    const td = ensureTeacherBucket(tId, lesson);
+    td.role = teacherRole;
+    const isTeacherAdmin = teacherRole === 'admin';
 
-    if (!payrollTeacherData[tId]) {
-      payrollTeacherData[tId] = {
-        name: lesson.teacher?.full_name || '',
-        color: lesson.teacher?.color || '#1e6fe8',
-        role: teacherRole,
-        revenue: 0, profit: 0, commission: 0,
-        cancelCount: 0,
-        students: {}, cancelledStudents: []
-      };
-    }
     (lesson.lesson_students || []).forEach(ls => {
       const s = ls.student; if (!s) return;
-      const price = findPricing(durationMin, s.is_individual || false, s.price_type || 'new', s.is_online || false);
-      if (!price) return;
-
-      const isTeacherAdmin = teacherRole === 'admin';
-      const effectiveProfit = isTeacherAdmin ? price.student_price : price.teacher_profit;
-      const effectiveCommission = isTeacherAdmin ? 0 : price.commission;
-
-      payrollTeacherData[tId].revenue += price.student_price;
-      payrollTeacherData[tId].profit += effectiveProfit;
-      payrollTeacherData[tId].commission += effectiveCommission;
-
       const sKey = ls.student_id;
-      if (!payrollTeacherData[tId].students[sKey]) {
-        payrollTeacherData[tId].students[sKey] = { name: `${s.first_name} ${s.last_name}`, amount: 0, count: 0 };
+      const sub = ls.subscription_id ? subsById[ls.subscription_id] : null;
+
+      if (sub) {
+        // Subscription lesson — spread profit across all lessons of the subscription
+        const total = sub.total_lessons || 8;
+        const perProfit = Math.round((isTeacherAdmin ? sub.paid_amount : sub.teacher_share) / total);
+        const perRevenue = Math.round(sub.paid_amount / total);
+        td.subProfit += perProfit;
+        td.subRevenue += perRevenue;
+        const fmt = sub.pricing?.format === 'sub4' ? 4 : 8;
+        if (!td.subStudents[sKey]) {
+          td.subStudents[sKey] = {
+            name: `${s.first_name} ${s.last_name}`,
+            amount: 0,
+            count: 0,
+            subType: fmt,
+            duration: sub.pricing?.duration_minutes
+          };
+        }
+        td.subStudents[sKey].amount += perProfit;
+        td.subStudents[sKey].count++;
+      } else {
+        // One-off lesson — full single-tariff
+        const price = findPricing(durationMin, s.is_individual || false, s.price_type || 'new', s.is_online || false);
+        if (!price) return;
+        const effectiveProfit = isTeacherAdmin ? price.student_price : price.teacher_profit;
+        const effectiveCommission = isTeacherAdmin ? 0 : price.commission;
+        td.oneOffRevenue += price.student_price;
+        td.oneOffProfit += effectiveProfit;
+        td.oneOffCommission += effectiveCommission;
+        if (!td.students[sKey]) {
+          td.students[sKey] = { name: `${s.first_name} ${s.last_name}`, amount: 0, count: 0 };
+        }
+        td.students[sKey].amount += price.student_price;
+        td.students[sKey].count++;
       }
-      payrollTeacherData[tId].students[sKey].amount += price.student_price;
-      payrollTeacherData[tId].students[sKey].count++;
     });
   });
 
-  // Process cancellations — add cancelled students (red/yellow rows) + counter
+  // ===== 2. Cancellations =====
   cancellations.forEach(c => {
     const tId = c.teacher_id;
-    if (!payrollTeacherData[tId]) {
-      // Try to find teacher info from any related lesson (active or cancelled)
-      const anyLesson = lessons.find(l => l.teacher_id === tId);
-      // Fallback to state.lessons (cached across the session) if payroll fetch didn't include any
-      const stateLesson = !anyLesson ? (state.lessons || []).find(l => l.teacher_id === tId) : null;
-      const teacherInfo = anyLesson?.teacher || stateLesson?.teacher || c.teacher;
-      payrollTeacherData[tId] = {
-        name: teacherInfo?.full_name || 'Преподаватель',
-        color: teacherInfo?.color || '#1e6fe8',
-        role: teacherInfo?.role,
-        revenue: 0, profit: 0, commission: 0,
-        cancelCount: 0,
-        students: {}, cancelledStudents: []
-      };
-    }
-    payrollTeacherData[tId].cancelCount++;
+    const td = ensureTeacherBucket(tId, null, c);
+    td.cancelCount++;
+    const s = c.student; if (!s) return;
 
-    const s = c.student;
-    if (!s) return;
-    let amount = 0;
+    // Lesson duration straight from cancellation (no need to find the paired lesson)
+    let cancelledLessonDur = null;
+    if (c.lesson_start_time && c.lesson_end_time) {
+      cancelledLessonDur = Math.round((new Date(c.lesson_end_time) - new Date(c.lesson_start_time)) / 60000);
+    }
+    // Was the cancelled lesson linked to a subscription? Look at the paired (status='cancelled') lesson.
+    let cancelledLessonSubId = null;
     if (c.lesson_start_time) {
       const paired = lessons.find(l => l.teacher_id === tId && l.status === 'cancelled' && l.start_time === c.lesson_start_time);
       if (paired) {
-        const durMin = Math.round((new Date(paired.end_time) - new Date(paired.start_time)) / 60000);
-        const price = findPricing(durMin, s.is_individual || false, s.price_type || 'new', s.is_online || false);
-        if (price) amount = price.student_price;
+        const ourLink = (paired.lesson_students || []).find(ls => ls.student_id === c.student_id);
+        cancelledLessonSubId = ourLink?.subscription_id || null;
       }
     }
-    if (amount === 0) {
-      const match = pricingList.find(p => p.is_individual === (s.is_individual || false) && p.price_type === (s.price_type || 'new'));
-      if (match) amount = match.student_price;
-    }
 
-    // If paid cancellation — add to revenue/profit/commission as a regular lesson
-    if (c.is_paid && amount > 0) {
-      const isTeacherAdmin = payrollTeacherData[tId].role === 'admin';
-      // Try to find tariff again for proper profit/commission
-      const dur = c.lesson_start_time ? (() => {
-        const paired = lessons.find(l => l.teacher_id === tId && l.status === 'cancelled' && l.start_time === c.lesson_start_time);
-        if (paired) return Math.round((new Date(paired.end_time) - new Date(paired.start_time)) / 60000);
-        return null;
-      })() : null;
-      let priceObj = null;
-      if (dur) priceObj = findPricing(dur, s.is_individual || false, s.price_type || 'new', s.is_online || false);
-      if (!priceObj) priceObj = pricingList.find(p => p.is_individual === (s.is_individual || false) && p.price_type === (s.price_type || 'new'));
+    let amount = 0;
+    if (cancelledLessonSubId && subsById[cancelledLessonSubId]) {
+      // Subscription-linked cancellation: amount shown is "per-lesson" spread, just for display
+      const sub = subsById[cancelledLessonSubId];
+      const total = sub.total_lessons || 8;
+      amount = Math.round((td.role === 'admin' ? sub.paid_amount : sub.teacher_share) / total);
+    } else if (cancelledLessonDur) {
+      // One-off cancellation: precise tariff lookup by duration + student params
+      const priceObj = findPricing(cancelledLessonDur, s.is_individual || false, s.price_type || 'new', s.is_online || false);
       if (priceObj) {
-        const eff = isTeacherAdmin ? priceObj.student_price : priceObj.teacher_profit;
-        const com = isTeacherAdmin ? 0 : priceObj.commission;
-        payrollTeacherData[tId].revenue += priceObj.student_price;
-        payrollTeacherData[tId].profit += eff;
-        payrollTeacherData[tId].commission += com;
+        amount = priceObj.student_price;
+        // If paid AND not subscription-linked → counts as one-off income for the week
+        if (c.is_paid && !c.valid_reason) {
+          const isTeacherAdmin = td.role === 'admin';
+          const eff = isTeacherAdmin ? priceObj.student_price : priceObj.teacher_profit;
+          const com = isTeacherAdmin ? 0 : priceObj.commission;
+          td.oneOffRevenue += priceObj.student_price;
+          td.oneOffProfit += eff;
+          td.oneOffCommission += com;
+        }
       }
     }
+    // Note: if duration is unknown (e.g. lesson record was deleted and cancellation has no end_time),
+    // we leave amount=0 rather than guessing — better than showing a random number.
 
-    payrollTeacherData[tId].cancelledStudents.push({
+    td.cancelledStudents.push({
       cancellationId: c.id,
       teacherId: c.teacher_id,
       name: `${s.first_name} ${s.last_name}`,
       amount,
       isPaid: !!c.is_paid,
-      hasReason: !!(c.reason_text || c.reason_image_url)
+      validReason: !!c.valid_reason,
+      hasReason: !!(c.reason_text || c.reason_image_url),
+      fromSubscription: !!cancelledLessonSubId
     });
   });
+
+  // ===== 3. Subscriptions sold this week =====
+  // Full commission goes to center on the week of sale.
+  // Teacher's share is "earned" through attendance (spread), but the actual cash was received now.
+  soldSubs.forEach(sub => {
+    const td = ensureTeacherBucket(sub.teacher_id);
+    const lessons = sub.total_lessons || 8;
+    const fmt = sub.pricing?.format === 'sub4' ? 4 : 8;
+    td.soldSubsRevenue += sub.paid_amount;
+    td.soldSubsCommission += sub.center_share;
+    td.soldSubsTeacherShare += sub.teacher_share;
+    td.soldSubs.push({
+      subscriptionId: sub.id,
+      studentName: sub.student ? `${sub.student.first_name} ${sub.student.last_name}` : '—',
+      subType: fmt,
+      duration: sub.pricing?.duration_minutes,
+      paidAmount: sub.paid_amount,
+      centerShare: sub.center_share,
+      teacherShare: sub.teacher_share
+    });
+  });
+
+  // ===== 4. Subscriptions refunded this week =====
+  // We need to "roll back" the over-collected center share that was counted on the sale week.
+  // After refund, sub's paid_amount/teacher_share/center_share are already the new (lower) values
+  // — the difference between the originals and these is what's being returned.
+  //
+  // refund_amount is the total returned to the student.
+  // We don't have the original center_share stored separately, but we can derive it from
+  // (refund_amount * old_center_share_ratio). Instead — for the payroll display we just show
+  // the refund operation and subtract the relevant portion from this week's commission.
+  //
+  // The exact original split is reconstructable if we know the original pricing (sub still
+  // points to its pricing_id) and original total_lessons. But after refund, paid_amount/center_share
+  // already point to the NEW (reduced) values. The difference between "what was originally
+  // collected at sale" and "what remains as legitimate" is the refund.
+  //
+  // To compute the center_share delta we'd need the original. To avoid storing both, we adopt
+  // a simpler rule that's still honest: at refund we display `refund_amount` total returned
+  // and split it proportionally between teacher and center using the pricing's single-tariff
+  // ratios. Most accurate alternative would require storing originals; we keep it simple here.
+  refundedSubs.forEach(sub => {
+    const td = ensureTeacherBucket(sub.teacher_id);
+    const fmt = sub.pricing?.format === 'sub4' ? 4 : 8;
+    const refundAmount = sub.refund_amount || 0;
+    // Find single-tariff ratio for this format to split refund into teacher/center deltas
+    const dur = sub.pricing?.duration_minutes;
+    const isInd = sub.pricing?.is_individual ?? false;
+    const isOnline = sub.pricing?.is_online ?? false;
+    const sp = findPricing(dur, isInd, 'new', isOnline, 'single');
+    let centerPart = 0, teacherPart = refundAmount;
+    if (sp && sp.student_price > 0) {
+      centerPart = Math.round(refundAmount * (sp.commission / sp.student_price));
+      teacherPart = refundAmount - centerPart;
+    }
+    td.refundsCommission = (td.refundsCommission || 0) - centerPart; // negative, reduces this week's commission
+    td.refundsTotal = (td.refundsTotal || 0) + refundAmount;
+    td.refundsList = td.refundsList || [];
+    td.refundsList.push({
+      subscriptionId: sub.id,
+      studentName: sub.student ? `${sub.student.first_name} ${sub.student.last_name}` : '—',
+      subType: fmt,
+      duration: dur,
+      refundAmount,
+      teacherPart,
+      centerPart
+    });
+  });
+
+  // ===== Aggregate totals on each teacher bucket =====
+  Object.values(payrollTeacherData).forEach(td => {
+    td.profit = td.oneOffProfit + td.subProfit;             // what teacher "earned" this week (display)
+    td.commission = td.oneOffCommission + td.soldSubsCommission + (td.refundsCommission || 0); // owed to center this week (refunds reduce)
+    td.revenue = td.oneOffRevenue + td.soldSubsRevenue;     // physical cash that flowed in
+  });
+
+  renderPayrollHTML(isAdmin);
+}
 
 function cancelDeclension(n) {
   const abs = Math.abs(n) % 100;
@@ -303,6 +491,8 @@ function cancelDeclension(n) {
   return `${n} отмен`;
 }
 
+function renderPayrollHTML(isAdmin) {
+  const container = document.getElementById('payroll-content');
   const teachers = Object.entries(payrollTeacherData);
   teachers.sort((a, b) => {
     if (a[0] === state.user.id) return -1;
@@ -330,7 +520,6 @@ function cancelDeclension(n) {
   }
 
   teachers.forEach(([tId, data]) => {
-    const students = Object.values(data.students).sort((a, b) => b.amount - a.amount);
     const cancelBadge = data.cancelCount > 0 ? `<span class="payroll-cancel-count">${cancelDeclension(data.cancelCount)}</span>` : '';
     if (isAdmin) {
       html += `<div class="payroll-teacher" data-teacher-id="${tId}">
@@ -348,20 +537,87 @@ function cancelDeclension(n) {
       <div class="payroll-stat"><span class="payroll-label">Прибыль</span><span class="payroll-num payroll-num-profit">${data.profit} ₽</span></div>
       <div class="payroll-stat"><span class="payroll-label">Комиссия</span><span class="payroll-num">${data.commission} ₽</span></div>
     </div>`;
+
+    // Breakdown row: one-off vs subscriptions
+    if (data.subProfit > 0 || data.soldSubs.length > 0) {
+      html += `<div class="payroll-breakdown">
+        <div class="payroll-breakdown-item"><span>С разовых: <b>${data.oneOffProfit} ₽</b></span></div>
+        <div class="payroll-breakdown-item"><span>С абонементов: <b>${data.subProfit} ₽</b></span></div>
+      </div>`;
+    }
+
+    const oneOffStudents = Object.values(data.students).sort((a, b) => b.amount - a.amount);
+    const subStudents = Object.values(data.subStudents).sort((a, b) => b.amount - a.amount);
+
     html += `<div class="payroll-students">`;
-    // 1. Unpaid cancellations on top (red)
-    data.cancelledStudents.filter(cs => !cs.isPaid).forEach(cs => {
+    // 1. Unpaid cancellations on top (red) — only one-off (subscription-linked unpaid go below as part of sub section)
+    data.cancelledStudents.filter(cs => !cs.isPaid && !cs.fromSubscription).forEach(cs => {
       html += renderCancellationRow(cs, 'payroll-student-cancelled', isAdmin);
     });
-    // 2. Conducted lessons in the middle (blue), sorted by amount descending
-    students.forEach(s => {
+    // 2. One-off conducted lessons
+    oneOffStudents.forEach(s => {
       html += `<div class="payroll-student"><span class="ps-name">${s.name}</span><span class="ps-count">${s.count} зан.</span><span class="ps-amount">${s.amount} ₽</span></div>`;
     });
-    // 3. Paid cancellations at the bottom (yellow)
-    data.cancelledStudents.filter(cs => cs.isPaid).forEach(cs => {
+    // 3. Paid one-off cancellations (yellow)
+    data.cancelledStudents.filter(cs => cs.isPaid && !cs.fromSubscription).forEach(cs => {
       html += renderCancellationRow(cs, 'payroll-student-paid', isAdmin);
     });
-    html += `</div></div>`;
+    html += `</div>`;
+
+    // ===== Subscription-attended lessons section =====
+    if (subStudents.length > 0 || data.cancelledStudents.some(cs => cs.fromSubscription)) {
+      html += `<div class="payroll-sub-section">
+        <div class="payroll-sub-title">По абонементам · заработок размазан по проведённым</div>
+        <div class="payroll-students">`;
+      subStudents.forEach(s => {
+        const durStr = s.duration ? ` · ${s.duration === 90 ? '1,5 ч' : s.duration === 120 ? '2 ч' : s.duration === 180 ? '3 ч' : (s.duration + ' мин')}` : '';
+        html += `<div class="payroll-student payroll-student-sub">
+          <span class="ps-name">${s.name} <span class="ps-sub-meta">· Абон ${s.subType}${durStr}</span></span>
+          <span class="ps-count">${s.count} зан.</span>
+          <span class="ps-amount">${s.amount} ₽</span>
+        </div>`;
+      });
+      // Subscription-linked cancellations (red unpaid + yellow paid) — they still consume the slot
+      data.cancelledStudents.filter(cs => cs.fromSubscription).forEach(cs => {
+        const cls = cs.isPaid ? 'payroll-student-paid' : 'payroll-student-cancelled';
+        html += renderCancellationRow(cs, cls, isAdmin);
+      });
+      html += `</div></div>`;
+    }
+
+    // ===== Sold subscriptions section =====
+    if (data.soldSubs.length > 0) {
+      html += `<div class="payroll-sub-section">
+        <div class="payroll-sub-title">Проданные абонементы на этой неделе · комиссия идёт центру целиком</div>
+        <div class="payroll-students">`;
+      data.soldSubs.forEach(ss => {
+        const durStr = ss.duration ? ` · ${ss.duration === 90 ? '1,5 ч' : ss.duration === 120 ? '2 ч' : ss.duration === 180 ? '3 ч' : (ss.duration + ' мин')}` : '';
+        html += `<div class="payroll-student payroll-student-sold">
+          <span class="ps-name">${ss.studentName} <span class="ps-sub-meta">· Абон ${ss.subType}${durStr}</span></span>
+          <span class="ps-count">${ss.paidAmount} ₽</span>
+          <span class="ps-amount">центру ${ss.centerShare} ₽</span>
+        </div>`;
+      });
+      html += `</div></div>`;
+    }
+
+    // ===== Refunds section =====
+    if (data.refundsList && data.refundsList.length > 0) {
+      html += `<div class="payroll-sub-section">
+        <div class="payroll-sub-title">Возвраты по абонементам на этой неделе · комиссия центру уменьшается</div>
+        <div class="payroll-students">`;
+      data.refundsList.forEach(rs => {
+        const durStr = rs.duration ? ` · ${rs.duration === 90 ? '1,5 ч' : rs.duration === 120 ? '2 ч' : rs.duration === 180 ? '3 ч' : (rs.duration + ' мин')}` : '';
+        html += `<div class="payroll-student payroll-student-refund">
+          <span class="ps-name">${rs.studentName} <span class="ps-sub-meta">· Абон ${rs.subType}${durStr}</span></span>
+          <span class="ps-count">возврат ${rs.refundAmount} ₽</span>
+          <span class="ps-amount">центру −${rs.centerPart} ₽</span>
+        </div>`;
+      });
+      html += `</div></div>`;
+    }
+
+    html += `</div>`;
   });
 
   container.innerHTML = html;
@@ -459,9 +715,11 @@ function initPricingAndPayroll() {
 
 function renderCancellationRow(cs, colorClass, isAdmin) {
   const editable = !isAdmin || cs.teacherId === state.user.id;
+  const hasFilledReason = cs.hasReason || cs.validReason;
   let btn;
-  if (cs.hasReason) {
-    btn = `<button class="btn-reason btn-reason-filled" data-cancellation-id="${cs.cancellationId}" data-editable="${editable ? 1 : 0}" title="${editable ? 'Изменить причину' : 'Посмотреть причину'}">Причина</button>`;
+  if (hasFilledReason) {
+    const label = cs.validReason && !cs.hasReason ? 'Ув. причина' : 'Причина';
+    btn = `<button class="btn-reason btn-reason-filled" data-cancellation-id="${cs.cancellationId}" data-editable="${editable ? 1 : 0}" title="${editable ? 'Изменить причину' : 'Посмотреть причину'}">${label}</button>`;
   } else if (editable) {
     btn = `<button class="btn-reason btn-reason-empty" data-cancellation-id="${cs.cancellationId}" data-editable="1" title="Указать причину">Указать причину</button>`;
   } else {
@@ -480,7 +738,7 @@ let reasonCtx = null; // { id, editable, existingImagePath, pendingFile, removeE
 
 async function openReasonModal(cancellationId, editable) {
   const { data: c, error } = await db.from('cancellations')
-    .select('id, teacher_id, reason_text, reason_image_url, student:students(first_name, last_name)')
+    .select('id, teacher_id, student_id, reason_text, reason_image_url, valid_reason, student:students(first_name, last_name)')
     .eq('id', cancellationId).single();
   if (error || !c) { showToast('Не удалось загрузить отмену', 'error'); return; }
 
@@ -488,17 +746,22 @@ async function openReasonModal(cancellationId, editable) {
     id: c.id,
     editable,
     teacherId: c.teacher_id,
+    studentId: c.student_id,
     existingImagePath: c.reason_image_url || null,
     pendingFile: null,
-    removeExistingImage: false
+    removeExistingImage: false,
+    initialValidReason: !!c.valid_reason
   };
 
   document.getElementById('reason-modal-title').textContent =
-    `${editable ? 'Причина отмены' : 'Причина отмены'}: ${c.student?.first_name || ''} ${c.student?.last_name || ''}`.trim();
+    `Причина отмены: ${c.student?.first_name || ''} ${c.student?.last_name || ''}`.trim();
 
   const textarea = document.getElementById('reason-text');
   textarea.value = c.reason_text || '';
   textarea.disabled = !editable;
+
+  const validCb = document.getElementById('reason-valid');
+  if (validCb) { validCb.checked = !!c.valid_reason; validCb.disabled = !editable; }
 
   // Image preview
   await refreshReasonImagePreview();
@@ -597,9 +860,11 @@ async function saveReason() {
   if (!reasonCtx || !reasonCtx.editable) return;
   const text = document.getElementById('reason-text').value.trim();
   const willHaveImage = !!reasonCtx.pendingFile || (reasonCtx.existingImagePath && !reasonCtx.removeExistingImage);
+  const validReason = document.getElementById('reason-valid')?.checked || false;
 
-  if (!text && !willHaveImage) {
-    showToast('Нужно указать текст или прикрепить скриншот', 'error');
+  // When marking as "valid reason" — text/screenshot are optional (справка идёт оффлайн)
+  if (!validReason && !text && !willHaveImage) {
+    showToast('Нужно указать текст, прикрепить скриншот или отметить уважительную причину', 'error');
     return;
   }
 
@@ -627,12 +892,36 @@ async function saveReason() {
       imagePathToSave = null;
     }
 
-    const { error: dbErr } = await db.from('cancellations').update({
+    // Build update. When valid_reason=true — force is_paid=false (not charged, not consumed).
+    const update = {
       reason_text: text || null,
       reason_image_url: imagePathToSave,
-      reason_updated_at: new Date().toISOString()
-    }).eq('id', reasonCtx.id);
+      reason_updated_at: new Date().toISOString(),
+      valid_reason: validReason
+    };
+    if (validReason) update.is_paid = false;
+
+    const { error: dbErr } = await db.from('cancellations').update(update).eq('id', reasonCtx.id);
     if (dbErr) throw dbErr;
+
+    // When transitioning false → true: extend the student's active subscription by 7 days
+    if (validReason && !reasonCtx.initialValidReason && reasonCtx.studentId) {
+      const { data: activeSub } = await db.from('subscriptions')
+        .select('id, end_date')
+        .eq('student_id', reasonCtx.studentId)
+        .eq('status', 'active')
+        .maybeSingle();
+      if (activeSub) {
+        const newEnd = new Date(activeSub.end_date);
+        newEnd.setDate(newEnd.getDate() + 7);
+        const newEndStr = `${newEnd.getFullYear()}-${(newEnd.getMonth()+1).toString().padStart(2,'0')}-${newEnd.getDate().toString().padStart(2,'0')}`;
+        await db.from('subscriptions').update({ end_date: newEndStr }).eq('id', activeSub.id);
+        showToast('Срок абонемента продлён на 7 дней', 'success');
+      }
+    }
+
+    // Recompute subscription usage for this student (used_lessons changes when valid_reason toggles)
+    if (reasonCtx.studentId) await recomputeSubscriptionsByStudent(reasonCtx.studentId);
 
     showToast('Причина сохранена', 'success');
     closeReasonModal();

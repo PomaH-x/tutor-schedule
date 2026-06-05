@@ -677,9 +677,11 @@ async function syncRecurringToWeeks(teacherFilter) {
       }).select().single();
 
       if (!error && newLesson && rl.recurring_lesson_students?.length > 0) {
+        const sids = rl.recurring_lesson_students.map(rs => rs.student_id);
         await db.from('lesson_students').insert(
-          rl.recurring_lesson_students.map(rs => ({ lesson_id: newLesson.id, student_id: rs.student_id }))
+          sids.map(sid => ({ lesson_id: newLesson.id, student_id: sid }))
         );
+        for (const sid of sids) await attachActiveSubscriptionIfAny(newLesson.id, sid, rl.teacher_id);
       }
     }
   }
@@ -864,9 +866,11 @@ async function syncRecurringToWeeksManual(teacherFilter) {
       }).select().single();
 
       if (!error && newLesson && rl.recurring_lesson_students?.length > 0) {
+        const sids = rl.recurring_lesson_students.map(rs => rs.student_id);
         await db.from('lesson_students').insert(
-          rl.recurring_lesson_students.map(rs => ({ lesson_id: newLesson.id, student_id: rs.student_id }))
+          sids.map(sid => ({ lesson_id: newLesson.id, student_id: sid }))
         );
+        for (const sid of sids) await attachActiveSubscriptionIfAny(newLesson.id, sid, rl.teacher_id);
       }
     }
   }

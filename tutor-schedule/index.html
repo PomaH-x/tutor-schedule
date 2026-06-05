@@ -373,7 +373,15 @@
             </select>
           </div>
           <div class="form-group">
-            <label>Цена занятия</label>
+            <label>Формат</label>
+            <select id="pricing-format">
+              <option value="single">Разовое занятие</option>
+              <option value="sub4">Абонемент на 4 занятия</option>
+              <option value="sub8">Абонемент на 8 занятий</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label><span id="pricing-student-price-label">Цена занятия</span></label>
             <input type="number" id="pricing-student-price" placeholder="1500" min="0">
           </div>
           <div class="form-group">
@@ -660,6 +668,76 @@
       </div>
     </div>
 
+    <div id="subscription-refund-overlay" class="modal-overlay">
+      <div class="modal modal-sm" style="max-width:520px">
+        <div class="modal-header">
+          <h3>Закрыть абонемент с возвратом</h3>
+          <button class="btn-modal-close" id="btn-close-sub-refund">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="sub-refund-summary" class="sub-refund-summary"></div>
+          <div class="form-group">
+            <label>Засчитано пройденных занятий</label>
+            <input type="number" id="sub-refund-used" min="0" step="1">
+            <div class="form-hint">По умолчанию подставлено количество фактически использованных слотов (проведённые + платные отмены). Можно скорректировать по договорённости с учеником.</div>
+          </div>
+          <div id="sub-refund-calc" class="sub-refund-calc"></div>
+        </div>
+        <div class="modal-footer">
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-cancel-sub-refund">Отмена</button>
+            <button class="btn-primary" id="btn-confirm-sub-refund">Закрыть и оформить возврат</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="subscription-activation-overlay" class="modal-overlay">
+      <div class="modal modal-sm" style="max-width:480px">
+        <div class="modal-header">
+          <h3>Активация абонемента</h3>
+          <button class="btn-modal-close" id="btn-close-sub-act">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="sub-act-student-row">
+            <span class="sub-act-label">Ученик:</span>
+            <span id="sub-act-student" class="sub-act-student-name"></span>
+          </div>
+          <div class="sub-act-info-grid">
+            <div><span class="sub-act-label">Предмет:</span> <span id="sub-act-subject" class="sub-act-info-val">—</span></div>
+            <div><span class="sub-act-label">Тип занятия:</span> <span id="sub-act-type" class="sub-act-info-val">—</span></div>
+          </div>
+          <div class="form-group">
+            <label>Длительность и тип абонемента</label>
+            <div id="sub-act-options" class="sub-act-options"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Дата начала</label>
+              <input type="date" id="sub-act-start">
+            </div>
+            <div class="form-group" id="sub-act-duration-block">
+              <label>Срок действия</label>
+              <div class="sub-act-duration">
+                <label><input type="radio" name="sub-act-duration" value="30" checked> 30 дней</label>
+                <label><input type="radio" name="sub-act-duration" value="60"> 60 дней</label>
+              </div>
+            </div>
+          </div>
+          <div class="sub-act-hint">
+            Активируйте только после получения оплаты. Все будущие занятия ученика
+            в этот период автоматически списываются с абонемента.
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-cancel-sub-act">Отмена</button>
+            <button class="btn-primary" id="btn-sub-act-confirm">Активировать</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="reason-overlay" class="modal-overlay">
       <div class="modal modal-sm" style="max-width:400px">
         <div class="modal-header">
@@ -667,6 +745,13 @@
           <button class="btn-modal-close" id="btn-close-reason">×</button>
         </div>
         <div class="modal-body">
+          <label class="reason-valid-row">
+            <input type="checkbox" id="reason-valid">
+            <span class="reason-valid-text">
+              <span class="reason-valid-title">Уважительная причина</span>
+              <span class="reason-valid-hint">Болезнь, справка, праздник и т.д. Отмена не списывается с абонемента, ученик не попадает в список прогульщиков. При наличии активного абонемента — срок продлевается на 7 дней.</span>
+            </span>
+          </label>
           <div class="form-group">
             <label>Описание</label>
             <textarea id="reason-text" rows="4" placeholder="Что случилось? (необязательно, если есть скриншот)"></textarea>
@@ -788,6 +873,7 @@
   <script src="modules/realtime.js"></script>
   <script src="modules/student.js"></script>
   <script src="modules/pricing.js"></script>
+  <script src="modules/subscriptions.js"></script>
   <script src="modules/admin.js"></script>
   <script src="app.js"></script>
 </body>

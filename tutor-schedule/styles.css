@@ -2207,6 +2207,20 @@ input, textarea, select {
   margin-top: 8px;
 }
 
+.pricing-group-header {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin-top: 18px;
+  margin-bottom: 4px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--accent);
+}
+
+.pricing-group-header:first-child {
+  margin-top: 0;
+}
+
 .pricing-section-title {
   font-size: 12px;
   font-weight: 600;
@@ -4097,3 +4111,597 @@ input, textarea, select {
   opacity: 0.8;
 }
 #pwa-update-dismiss:hover { opacity: 1; }
+
+/* ===== SUBSCRIPTIONS ===== */
+
+/* Empty state in student card */
+.sub-panel-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.sub-empty-text {
+  font-size: 13px;
+  color: var(--text-muted);
+  flex: 1;
+}
+
+/* Active subscription panel */
+.sub-panel-active {
+  padding: 12px 14px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sub-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sub-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.sub-badge-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.sub-panel-type {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.sub-panel-amount {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.sub-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sub-progress-bar {
+  height: 6px;
+  background: var(--bg-elevated);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.sub-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.sub-progress-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.sub-panel-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.sub-meta-warn {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* Activation modal */
+.sub-act-student-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sub-act-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sub-act-student-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sub-act-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sub-act-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.sub-act-option:hover {
+  border-color: var(--accent);
+}
+
+.sub-act-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.sub-act-option input[type=radio] {
+  margin: 3px 0 0 0;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.sub-act-option-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.sub-act-option-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.sub-act-option-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.sub-act-option-meta b {
+  color: var(--text);
+}
+
+.sub-act-duration {
+  display: flex;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.sub-act-duration label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sub-act-duration input[type=radio] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.sub-act-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  line-height: 1.4;
+  padding: 8px 10px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+}
+
+/* Student personal cabinet — subscription widget */
+.student-sub-widget {
+  padding: 12px 14px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.student-sub-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.student-sub-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.student-sub-teacher {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.student-subs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.sub-act-info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.sub-act-info-val {
+  font-weight: 600;
+  color: var(--text);
+  margin-left: 4px;
+}
+
+/* Subscription badge in lesson modal student list */
+.lesson-sub-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  margin-left: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+/* Delete subscription button inside active panel */
+.sub-panel-delete {
+  margin-left: 6px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.sub-panel-delete:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* Delete-lesson-row button in student-card history table */
+.sd-table-actions {
+  width: 28px;
+  text-align: center;
+}
+.btn-delete-lesson-row {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+.btn-delete-lesson-row:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+  opacity: 1;
+}
+
+/* Expired subscription panel */
+.sub-panel-expired {
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  opacity: 0.85;
+}
+
+.sub-badge-expired {
+  background: var(--text-muted);
+  color: #fff;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.sub-progress-bar-muted {
+  background: rgba(127, 127, 127, 0.15);
+}
+
+.sub-progress-fill-muted {
+  background: var(--text-muted);
+}
+
+/* Valid-reason checkbox row in cancellation reason modal */
+.reason-valid-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.reason-valid-row input[type=checkbox] {
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.reason-valid-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.reason-valid-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.reason-valid-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* Payroll: breakdown row under summary */
+.payroll-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding: 6px 0 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.payroll-breakdown-item b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Payroll: subscription/sold subsections */
+.payroll-sub-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+.payroll-sub-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+/* Subscription-attended lesson row — subtle accent stripe on left */
+.payroll-student-sub {
+  border-left: 3px solid var(--accent);
+  padding-left: 9px;
+}
+
+/* Sold-subscription row — dashed indicator on left, neutral */
+.payroll-student-sold {
+  border-left: 3px dashed var(--accent);
+  padding-left: 9px;
+  background: var(--accent-soft);
+}
+
+.ps-sub-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* Refund modal */
+.sub-refund-summary {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sub-refund-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+}
+.sub-refund-row-sub {
+  padding-left: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.sub-refund-label {
+  color: var(--text-muted);
+}
+.sub-refund-value {
+  color: var(--text);
+  text-align: right;
+}
+.sub-refund-label-strong {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 14px;
+}
+.sub-refund-amount-big {
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 18px;
+}
+.sub-refund-calc {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sub-refund-section {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sub-refund-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.sub-refund-section-total {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+}
+.sub-refund-warning {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 12px;
+  margin-top: 8px;
+}
+.form-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+/* Refund button in subscription panel header */
+.sub-panel-refund {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.sub-panel-refund:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.sub-panel-delete {
+  margin-left: 0;
+}
+
+/* Refunded subscription panel */
+.sub-panel-refunded {
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sub-badge-refunded {
+  background: #6c757d;
+  color: #fff;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.sub-refund-tag {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+/* Refund row in payroll */
+.payroll-student-refund {
+  border-left: 3px solid var(--danger);
+  padding-left: 9px;
+  background: var(--danger-soft);
+}
+.payroll-student-refund .ps-amount {
+  color: var(--danger);
+  font-weight: 600;
+}

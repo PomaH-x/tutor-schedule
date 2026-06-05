@@ -226,6 +226,7 @@ async function saveOnlineLesson() {
     if (newLesson) {
       const { error: e2 } = await db.from('lesson_students').insert({ lesson_id: newLesson.id, student_id: onlineSelectedStudentId });
       if (e2) { console.error('Student link error:', e2); }
+      else await attachActiveSubscriptionIfAny(newLesson.id, onlineSelectedStudentId, state.user.id);
     }
   }
 

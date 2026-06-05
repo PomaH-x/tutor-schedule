@@ -423,7 +423,7 @@ async function openStudentDetail(studentId) {
     t += `</div>`;
 
     t += `<div class="sd-table-wrap"><table class="sd-table">
-      <thead><tr><th>Дата</th><th>Время</th><th>Длит.</th><th>Статус</th><th>Оплата</th></tr></thead><tbody>`;
+      <thead><tr><th>Дата</th><th>Время</th><th>Длит.</th><th>Статус</th><th>Оплата</th><th></th></tr></thead><tbody>`;
 
     group.forEach(l => {
       const s = new Date(l.start_time); const e = new Date(l.end_time);
@@ -443,12 +443,22 @@ async function openStudentDetail(studentId) {
         : p?.status === 'approved' ? '<span class="pay-paid">✓</span>'
         : p?.status === 'pending' ? '<span class="pay-pending">⏳</span>'
         : '<span class="pay-unpaid">✕</span>';
-      t += `<tr><td>${dd}.${mm} ${day}</td><td>${time}</td><td>${dur}</td><td>${statusStr}</td><td>${payStr}</td></tr>`;
+      const delBtn = `<button class="btn-delete-lesson-row" data-lesson-id="${l.id}" title="Удалить запись">✕</button>`;
+      t += `<tr><td>${dd}.${mm} ${day}</td><td>${time}</td><td>${dur}</td><td>${statusStr}</td><td>${payStr}</td><td class="sd-table-actions">${delBtn}</td></tr>`;
     });
 
     t += `</tbody></table></div>`;
     return t;
   }
+
+  // Active subscription panel (above lessons)
+  await rebindOrphanLessonsForStudents([studentId]); // recover from any past attach failures
+  await recomputeSubscriptionsForStudents([studentId]);
+  const activeSub = await loadActiveSubscriptionForStudent(studentId, true);
+  html += `<div class="sd-section sd-section-subscription">
+    <h4>Абонемент</h4>
+    ${renderSubscriptionPanelHTML(activeSub, studentId)}
+  </div>`;
 
   const subjectEntries = Object.entries(subjectGroups);
   if (subjectEntries.length === 0) {
@@ -505,6 +515,51 @@ async function openStudentDetail(studentId) {
   if (linkBtn) {
     linkBtn.addEventListener('click', () => openLinkStudentModal(studentId, student.teacher_id));
   }
+
+  const activateSubBtn = body.querySelector('#btn-activate-sub');
+  if (activateSubBtn) {
+    activateSubBtn.addEventListener('click', () => openSubscriptionActivation(activateSubBtn.dataset.studentId));
+  }
+
+  // Delete subscription button (inside the active panel)
+  const deleteSubBtn = body.querySelector('#btn-delete-sub');
+  if (deleteSubBtn) {
+    deleteSubBtn.addEventListener('click', async () => {
+      const subId = deleteSubBtn.dataset.subId;
+      showConfirm('Удалить абонемент? Связанные занятия останутся в расписании и станут разовыми. Это действие нельзя отменить.', async () => {
+        const { error } = await db.from('subscriptions').delete().eq('id', subId);
+        if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
+        showToast('Абонемент удалён', 'success');
+        invalidateSubscriptionCache(studentId);
+        await openStudentDetail(studentId);
+      }, 'Удалить');
+    });
+  }
+
+  // Refund subscription button
+  const refundSubBtn = body.querySelector('#btn-refund-sub');
+  if (refundSubBtn) {
+    refundSubBtn.addEventListener('click', () => openSubscriptionRefund(refundSubBtn.dataset.subId));
+  }
+
+  // Delete lesson row in history table
+  body.querySelectorAll('.btn-delete-lesson-row').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const lessonId = btn.dataset.lessonId;
+      showConfirm('Удалить это занятие? Запись будет удалена для всех учеников этого занятия. Это действие нельзя отменить.', async () => {
+        // Remember linked subscriptions before delete to recompute them after
+        const { data: links } = await db.from('lesson_students')
+          .select('subscription_id').eq('lesson_id', lessonId);
+        const subIds = new Set((links || []).map(r => r.subscription_id).filter(Boolean));
+
+        const { error } = await db.from('lessons').delete().eq('id', lessonId);
+        if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
+        for (const id of subIds) await recomputeSubscriptionUsage(id);
+        showToast('Занятие удалено', 'success');
+        await openStudentDetail(studentId);
+      }, 'Удалить');
+    });
+  });
 
   document.getElementById('student-detail-overlay').classList.add('active');
 }

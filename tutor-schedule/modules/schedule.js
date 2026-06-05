@@ -16,6 +16,7 @@ let scheduleInited = false;
 let hoveredTooltip = null;
 let durationLabel = null;
 let allTeacherStudents = [];
+let studentActiveSub = {}; // studentId -> active subscription row (with pricing.duration_minutes)
 let studentWeekStatus = {};
 let studentCancellations = {};
 let dragState = null;
@@ -699,12 +700,120 @@ function cancelPlacing() {
   }
 }
 
+// Returns true if all studentIds passed the transfer-limit check.
+// For each student with an active subscription where transfers_used >= total_transfers,
+// asks user confirmation (showConfirm). If user agrees — proceeds; if rejects — aborts.
+// Like checkTransferLimit, but for NEW or RESCHEDULED lessons.
+// A lesson counts as a transfer only if its (day_of_week, HH:MM) does NOT match
+// any recurring template of the student at this teacher. If matches → not a transfer.
+async function checkTransferLimitForLessonCreation(studentIds, lessonStart, teacherId) {
+  if (!Array.isArray(studentIds) || studentIds.length === 0) return true;
+  await recomputeSubscriptionsForStudents(studentIds);
+
+  const { data: subs } = await db.from('subscriptions')
+    .select('id, student_id, transfers_used, total_transfers, student:students(first_name, last_name)')
+    .in('student_id', studentIds)
+    .eq('status', 'active');
+  const subByStudent = {};
+  (subs || []).forEach(s => { subByStudent[s.student_id] = s; });
+
+  const dow = lessonStart.getDay() === 0 ? 6 : lessonStart.getDay() - 1; // Mon=0..Sun=6
+  const lessonKey = `${dow}-${lessonStart.getHours()}:${lessonStart.getMinutes().toString().padStart(2, '0')}`;
+
+  // For students that have an active subscription — check if their recurring templates
+  // match the new lesson slot. If no match → this new lesson is a transfer.
+  const overLimitNames = [];
+  for (const sid of studentIds) {
+    const sub = subByStudent[sid];
+    if (!sub) continue;
+    const { data: recLinks } = await db.from('recurring_lesson_students')
+      .select('recurring_lesson:recurring_lessons(day_of_week, start_time, teacher_id)')
+      .eq('student_id', sid);
+    const templates = (recLinks || [])
+      .map(r => r.recurring_lesson)
+      .filter(rl => rl && rl.teacher_id === teacherId);
+    const isTransfer = templates.length === 0 || !templates.some(rl => {
+      const sp = rl.start_time.split(':');
+      const key = `${rl.day_of_week}-${+sp[0]}:${(+sp[1]).toString().padStart(2, '0')}`;
+      return key === lessonKey;
+    });
+    if (!isTransfer) continue;
+    if ((sub.transfers_used || 0) >= sub.total_transfers) {
+      const name = `${sub.student?.first_name || ''} ${sub.student?.last_name || ''}`.trim();
+      if (name) overLimitNames.push(name);
+    }
+  }
+
+  if (overLimitNames.length === 0) return true;
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    const overlay = document.getElementById('confirm-overlay');
+    const observer = new MutationObserver(() => {
+      if (!overlay.classList.contains('active')) {
+        observer.disconnect();
+        setTimeout(() => { if (!resolved) { resolved = true; resolve(false); } }, 0);
+      }
+    });
+    observer.observe(overlay, { attributes: true, attributeFilter: ['class'] });
+
+    showConfirm(
+      `Лимит переносов исчерпан у: ${overLimitNames.join(', ')}. Создать занятие всё равно?`,
+      () => { resolved = true; observer.disconnect(); resolve(true); },
+      'Создать',
+      'primary'
+    );
+  });
+}
+
+async function checkTransferLimit(studentIds) {
+  if (!Array.isArray(studentIds) || studentIds.length === 0) return true;
+  await recomputeSubscriptionsForStudents(studentIds);
+
+  const { data: subs } = await db.from('subscriptions')
+    .select('id, student_id, transfers_used, total_transfers, student:students(first_name, last_name)')
+    .in('student_id', studentIds)
+    .eq('status', 'active');
+
+  const over = (subs || []).filter(s => (s.transfers_used || 0) >= s.total_transfers);
+  if (over.length === 0) return true;
+
+  const names = over.map(s => `${s.student?.first_name || ''} ${s.student?.last_name || ''}`.trim()).filter(Boolean).join(', ');
+
+  // Use the existing showConfirm; resolve true when user clicks OK, false on overlay close otherwise.
+  return new Promise((resolve) => {
+    let resolved = false;
+    const overlay = document.getElementById('confirm-overlay');
+    const onClose = () => {
+      if (resolved) return;
+      // Wait one tick to let click handlers run; if not resolved (i.e., OK wasn't clicked) — treat as cancel
+      setTimeout(() => { if (!resolved) { resolved = true; resolve(false); } }, 0);
+    };
+    const observer = new MutationObserver(() => {
+      if (!overlay.classList.contains('active')) {
+        observer.disconnect();
+        onClose();
+      }
+    });
+    observer.observe(overlay, { attributes: true, attributeFilter: ['class'] });
+
+    showConfirm(
+      `Лимит переносов исчерпан у: ${names}. Перенести всё равно?`,
+      () => { resolved = true; observer.disconnect(); resolve(true); },
+      'Перенести',
+      'primary'
+    );
+  });
+}
+
 async function placeTransferredLesson(day, room, slot) {
   const p = state.placingLesson; if (!p) return;
   const end = slot + p.slotLength;
   if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); return; }
   const ct = await checkConflictServer(day, room, slot, end, null, p.teacherId);
   if (ct) { conflictToast(ct); return; }
+
+  if (!(await checkTransferLimit(p.studentIds || []))) return;
 
   const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
   const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
@@ -715,8 +824,16 @@ async function placeTransferredLesson(day, room, slot) {
     start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active', transferred_from_id: p.originalLessonId
   }).select().single();
   if (error) { showToast('Ошибка переноса', 'error'); return; }
-  if (p.studentIds.length > 0) await db.from('lesson_students').insert(p.studentIds.map(sid => ({ lesson_id: data.id, student_id: sid })));
+  if (p.studentIds.length > 0) {
+    await db.from('lesson_students').insert(p.studentIds.map(sid => ({ lesson_id: data.id, student_id: sid })));
+    for (const sid of p.studentIds) {
+      await attachActiveSubscriptionIfAny(data.id, sid, p.teacherId);
+    }
+  }
   await db.from('lessons').update({ status: 'transferred' }).eq('id', p.originalLessonId);
+  // Original lesson's subscription was already counted while it was 'active' in past;
+  // since we mark it transferred and create a new lesson, recompute affected subs.
+  await recomputeSubscriptionsByLesson(p.originalLessonId);
   state.placingLesson = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Занятие перенесено на следующую неделю', 'success'); await loadLessons();
 }
@@ -727,6 +844,8 @@ async function placeTransferredStudent(day, room, slot) {
   if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); return; }
   const ct = await checkConflictServer(day, room, slot, end, null, p.teacherId);
   if (ct) { conflictToast(ct); return; }
+
+  if (!(await checkTransferLimit([p.studentId]))) return;
 
   const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
   const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
@@ -739,6 +858,8 @@ async function placeTransferredStudent(day, room, slot) {
   if (error) { showToast('Ошибка', 'error'); return; }
   await db.from('lesson_students').insert({ lesson_id: data.id, student_id: p.studentId });
   await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
+  await attachActiveSubscriptionIfAny(data.id, p.studentId, p.teacherId);
+  await recomputeSubscriptionsByLesson(p.lessonId);
   // Record transfer (not cancellation) - won't show in truants
   const origLesson = state.lessons.find(l => l.id === p.lessonId);
   const origWs = p.originalWeekStart || formatDate(getMonday(new Date()));
@@ -758,8 +879,12 @@ async function placeTransferredStudentOnLesson(targetLessonId) {
   if (tl.teacher_id !== p.teacherId) { showToast('Можно добавить только к своему преподавателю', 'error'); return; }
   if ((tl.lesson_students?.length || 0) >= getMaxGroup(tl.teacher_id)) { showToast(`Максимум ${getMaxGroup(tl.teacher_id)} учеников`, 'error'); return; }
 
+  if (!(await checkTransferLimit([p.studentId]))) return;
+
   await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: p.studentId });
   await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
+  await attachActiveSubscriptionIfAny(targetLessonId, p.studentId, p.teacherId);
+  await recomputeSubscriptionsByLesson(p.lessonId);
   await cleanEmptyLesson(p.lessonId);
   state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Ученик добавлен к занятию', 'success'); await loadLessons();
@@ -788,6 +913,8 @@ async function placeStudentOnCell(day, room, slot) {
   const ct = await checkConflictServer(day, room, slot, end, null, s.teacherId);
   if (ct) { conflictToast(ct, cancelStudentDrag); return; }
 
+  if (!(await checkTransferLimit([s.studentId]))) { cancelStudentDrag(); return; }
+
   const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
   const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
   const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
@@ -799,6 +926,8 @@ async function placeStudentOnCell(day, room, slot) {
   if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
   await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
   await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
+  await attachActiveSubscriptionIfAny(data.id, s.studentId, s.teacherId);
+  await recomputeSubscriptionsByLesson(s.lessonId);
   await cleanEmptyLesson(s.lessonId);
   cancelStudentDrag();
   showToast('Ученик перенесён', 'success'); await loadLessons();
@@ -825,8 +954,12 @@ async function placeStudentOnLesson(targetLessonId) {
   }
   if (targetStudents.length >= getMaxGroup(tl.teacher_id)) { showToast(`Максимум ${getMaxGroup(tl.teacher_id)} учеников`, 'error'); cancelStudentDrag(); return; }
 
+  if (!(await checkTransferLimit([s.studentId]))) { cancelStudentDrag(); return; }
+
   await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: s.studentId });
   await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
+  await attachActiveSubscriptionIfAny(targetLessonId, s.studentId, s.teacherId);
+  await recomputeSubscriptionsByLesson(s.lessonId);
   await cleanEmptyLesson(s.lessonId);
   cancelStudentDrag();
   showToast('Ученик добавлен к занятию', 'success'); await loadLessons();
@@ -1047,9 +1180,22 @@ async function loadTeacherStudentsForModal(tid) {
   const seen = new Set();
   allTeacherStudents = (data || []).filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
 
+  // Load active subscriptions for these students (to know each student's required lesson duration)
+  const sids = allTeacherStudents.map(s => s.id);
+  studentActiveSub = {};
+  if (sids.length > 0) {
+    // Recover from any past attach failures, then recompute fresh values
+    await rebindOrphanLessonsForStudents(sids);
+    await recomputeSubscriptionsForStudents(sids);
+    const { data: subs } = await db.from('subscriptions')
+      .select('id, student_id, total_lessons, used_lessons, end_date, pricing:pricing_id(duration_minutes, format)')
+      .in('student_id', sids)
+      .eq('status', 'active');
+    (subs || []).forEach(s => { studentActiveSub[s.student_id] = s; });
+  }
+
   // Load current-week lesson status for each student
   const currentWs = formatDate(getMonday(new Date()));
-  const sids = allTeacherStudents.map(s => s.id);
   if (sids.length === 0) return;
 
   const { data: weekLessons } = await db.from('lessons')
@@ -1071,7 +1217,7 @@ async function loadTeacherStudentsForModal(tid) {
   const threeWeeksAgo = new Date(getMonday(new Date()));
   threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 14);
   const { data: cancellations } = await db.from('cancellations')
-    .select('id, student_id, week_start, status, lesson_start_time, lesson_day, is_paid, recurring_lesson:recurring_lessons(start_time, day_of_week)')
+    .select('id, student_id, week_start, status, lesson_start_time, lesson_day, is_paid, valid_reason, recurring_lesson:recurring_lessons(start_time, day_of_week)')
     .eq('teacher_id', tid).in('status', ['pending', 'transferred'])
     .gte('week_start', formatDate(threeWeeksAgo));
 
@@ -1294,16 +1440,29 @@ function renderLessonStudentsList(filter) {
   const canEdit = state.profile.role === 'admin' || (m.mode === 'create' || m.mode === 'rec-create') || (m.teacherId === state.user.id);
   const currentWs = formatDate(getMonday(new Date()));
 
-  // Truant students (only pending, not transferred)
+  // Truant students (only pending, not transferred; valid_reason=true excluded)
   const truantIds = new Set();
   const pendingCancels = {};
   Object.entries(studentCancellations).forEach(([sid, cancels]) => {
-    const pending = cancels.filter(c => c.status === 'pending' && !c.is_paid);
+    const pending = cancels.filter(c => c.status === 'pending' && !c.is_paid && !c.valid_reason);
     if (pending.length > 0) { truantIds.add(sid); pendingCancels[sid] = pending; }
   });
 
   let allStudents = allTeacherStudents;
   if (search) allStudents = allStudents.filter(s => s.first_name.toLowerCase().includes(search) || s.last_name.toLowerCase().includes(search));
+
+  // Filter by active subscription's lesson duration.
+  // Lesson duration in this modal = (slotTo - slotFrom) * 30 minutes.
+  // A student with an active subscription can only attend lessons matching that subscription's duration.
+  // Students without an active subscription pay per single lesson — no duration restriction.
+  // Always keep already-selected students visible (so user can deselect them).
+  const lessonDurationMin = (m.slotTo - m.slotFrom) * 30;
+  allStudents = allStudents.filter(s => {
+    if (m.selectedIds.has(s.id)) return true; // never hide already-checked
+    const sub = studentActiveSub[s.id];
+    if (!sub) return true;
+    return sub.pricing?.duration_minutes === lessonDurationMin;
+  });
 
   const truantStudents = allStudents.filter(s => truantIds.has(s.id));
   const regularStudents = allStudents.filter(s => !truantIds.has(s.id));
@@ -1319,12 +1478,13 @@ function renderLessonStudentsList(filter) {
       const ch = m.selectedIds.has(s.id);
       const indBadge = s.is_individual ? '<span class="lesson-ind-badge">Инд.</span>' : '';
       const onlBadge = s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : '';
+      const subBadge = studentActiveSub[s.id] ? '<span class="lesson-sub-badge" title="Активный абонемент">Абн.</span>' : '';
       const cancels = pendingCancels[s.id] || [];
       const dateBadges = cancels.map(c => {
         const timeStr = getCancelTimeStr(c);
         return timeStr ? `<span class="modal-truant-date">${timeStr}</span>` : '';
       }).filter(Boolean).join('');
-      html += `<label class="lesson-student-row truant-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${onlBadge}${dateBadges}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
+      html += `<label class="lesson-student-row truant-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${onlBadge}${subBadge}${dateBadges}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
     });
     html += '</div>';
   }
@@ -1334,8 +1494,9 @@ function renderLessonStudentsList(filter) {
     const ch = m.selectedIds.has(s.id);
     const indBadge = s.is_individual ? '<span class="lesson-ind-badge">Инд.</span>' : '';
     const onlBadge = s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : '';
+    const subBadge = studentActiveSub[s.id] ? '<span class="lesson-sub-badge" title="Активный абонемент">Абн.</span>' : '';
     const weekBadge = buildStudentWeekBadge(s.id);
-    html += `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${onlBadge}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
+    html += `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${onlBadge}${subBadge}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
   });
 
   list.innerHTML = html;
@@ -1390,18 +1551,37 @@ async function saveLesson() {
   const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(m.slotTo * SLOT_MINUTES / 60), (m.slotTo * SLOT_MINUTES) % 60, 0, 0);
   const sids = Array.from(m.selectedIds);
 
+  // Transfer-limit check (only for real lessons, not recurring templates)
+  if (sids.length > 0 && (m.mode === 'create' || m.mode === 'edit')) {
+    if (!(await checkTransferLimitForLessonCreation(sids, sTime, tid))) {
+      btn.disabled = false;
+      return;
+    }
+  }
+
   if (m.mode === 'create' || m.mode === 'rec-create') {
     const lessonSubject = selectedStudents.length > 0 ? (selectedStudents[0].subject || null) : null;
     const { data, error } = await db.from('lessons').insert({ teacher_id: state.user.id, room: m.room, week_start: ws, start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active', subject: lessonSubject }).select().single();
     if (error) { showToast('Ошибка', 'error'); btn.disabled = false; return; }
-    if (sids.length > 0) await db.from('lesson_students').insert(sids.map(sid => ({ lesson_id: data.id, student_id: sid })));
+    if (sids.length > 0) {
+      await db.from('lesson_students').insert(sids.map(sid => ({ lesson_id: data.id, student_id: sid })));
+      for (const sid of sids) await attachActiveSubscriptionIfAny(data.id, sid, state.user.id);
+    }
     showToast('Занятие создано', 'success');
   } else {
     const lessonSubject = selectedStudents.length > 0 ? (selectedStudents[0].subject || null) : null;
     const { error } = await db.from('lessons').update({ room: m.room, start_time: sTime.toISOString(), end_time: eTime.toISOString(), subject: lessonSubject }).eq('id', m.lessonId);
     if (error) { showToast('Ошибка', 'error'); btn.disabled = false; return; }
+    // Snapshot subscriptions before deleting links so we can recompute them after
+    const { data: oldLinks } = await db.from('lesson_students').select('subscription_id').eq('lesson_id', m.lessonId);
+    const oldSubIds = new Set((oldLinks || []).map(r => r.subscription_id).filter(Boolean));
+
     await db.from('lesson_students').delete().eq('lesson_id', m.lessonId);
-    if (sids.length > 0) await db.from('lesson_students').insert(sids.map(sid => ({ lesson_id: m.lessonId, student_id: sid })));
+    if (sids.length > 0) {
+      await db.from('lesson_students').insert(sids.map(sid => ({ lesson_id: m.lessonId, student_id: sid })));
+      for (const sid of sids) await attachActiveSubscriptionIfAny(m.lessonId, sid, state.user.id);
+    }
+    for (const subId of oldSubIds) await recomputeSubscriptionUsage(subId);
     showToast('Занятие обновлено', 'success');
   }
   btn.disabled = false; closeLessonModal(); await loadLessons();
@@ -1449,6 +1629,7 @@ async function cancelLesson() {
   closeLessonModal();
   showConfirm('Отменить занятие? Все ученики будут отменены.', async () => {
     await db.from('lessons').update({ status: 'cancelled' }).eq('id', lid);
+    await recomputeSubscriptionsByLesson(lid);
     const ws = lessonWeekStart || formatDate(getMonday(new Date()));
     if (studentIds.length > 0) {
       await db.from('cancellations').insert(

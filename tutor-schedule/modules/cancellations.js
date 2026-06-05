@@ -317,6 +317,7 @@ async function placeTruantOnCell(day, room, slot) {
   }).select().single();
   if (result.error) { showToast('Ошибка', 'error'); return; }
   await db.from('lesson_students').insert({ lesson_id: result.data.id, student_id: t.studentId });
+  await attachActiveSubscriptionIfAny(result.data.id, t.studentId, t.teacherId);
 
   // Close the specific cancellation that was being placed (fallback: oldest pending)
   if (t.cancellationId) {
@@ -351,6 +352,7 @@ async function placeTruantOnLesson(targetLessonId) {
   if (targetStudents.length >= getMaxGroup(tl.teacher_id)) { showToast('Максимум ' + getMaxGroup(tl.teacher_id) + ' учеников', 'error'); return; }
 
   await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: t.studentId });
+  await attachActiveSubscriptionIfAny(targetLessonId, t.studentId, t.teacherId);
 
   // Close the specific cancellation that was being placed (fallback: oldest pending)
   if (t.cancellationId) {
