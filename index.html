@@ -745,13 +745,20 @@
           <button class="btn-modal-close" id="btn-close-reason">×</button>
         </div>
         <div class="modal-body">
-          <label class="reason-valid-row">
-            <input type="checkbox" id="reason-valid">
-            <span class="reason-valid-text">
-              <span class="reason-valid-title">Уважительная причина</span>
-              <span class="reason-valid-hint">Болезнь, справка, праздник и т.д. Отмена не списывается с абонемента, ученик не попадает в список прогульщиков. При наличии активного абонемента — срок продлевается на 7 дней.</span>
-            </span>
-          </label>
+          <div class="reason-actions-grid">
+            <button type="button" id="btn-toggle-valid" class="reason-action reason-action-valid">
+              <span class="reason-action-text">
+                <span class="reason-action-title">Уважительная причина</span>
+                <span class="reason-action-hint">Делает платную отмену бесплатной, ученик не попадает в прогульщики</span>
+              </span>
+            </button>
+            <button type="button" id="btn-extend-sub" class="reason-action reason-action-extend">
+              <span class="reason-action-text">
+                <span class="reason-action-title">+7 дней абонемента</span>
+                <span class="reason-action-hint">Продлевает активный абонемент ученика на 7 дней</span>
+              </span>
+            </button>
+          </div>
           <div class="form-group">
             <label>Описание</label>
             <textarea id="reason-text" rows="4" placeholder="Что случилось? (необязательно, если есть скриншот)"></textarea>

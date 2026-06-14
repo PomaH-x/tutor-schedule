@@ -122,26 +122,32 @@ async function checkConflictServer(day, room, slotFrom, slotTo, excludeId, teach
 
   const isAdmin = state.profile?.role === 'admin';
 
+  // Ghost lessons (no students) sometimes linger in DB — they're hidden in the UI
+  // (loadLessons filters them out) but the server still sees them. Always ignore them
+  // so the conflict check matches what the user actually sees on the grid.
+  const hasStudents = (l) => (l.lesson_students || []).length > 0;
+
   // Check room conflict (different teacher same room) — admin can overlap anyone
   if (!isAdmin) {
-    let q = db.from('lessons').select('id, teacher_id').eq('week_start', ws).eq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
+    let q = db.from('lessons').select('id, teacher_id, lesson_students(student_id)').eq('week_start', ws).eq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
     if (excludeId) q = q.neq('id', excludeId);
     const { data: rd } = await q;
-    if ((rd || []).some(l => l.teacher_id !== teacherId)) return 'room';
+    if ((rd || []).some(l => l.teacher_id !== teacherId && hasStudents(l))) return 'room';
   }
 
   // Check teacher in two rooms simultaneously — admin too is exempt (they set tid explicitly)
   if (!isAdmin) {
-    let q2 = db.from('lessons').select('id').eq('week_start', ws).eq('teacher_id', teacherId).neq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
+    let q2 = db.from('lessons').select('id, lesson_students(student_id)').eq('week_start', ws).eq('teacher_id', teacherId).neq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
     if (excludeId) q2 = q2.neq('id', excludeId);
     const { data: td } = await q2;
-    if (td && td.length > 0) return 'teacher';
+    if ((td || []).some(hasStudents)) return 'teacher';
   }
 
   // Check student count and individual mixing among overlapping lessons in same room
   let q3 = db.from('lessons').select('id, lesson_students(student_id, student:students(is_individual))').eq('week_start', ws).eq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
   if (excludeId) q3 = q3.neq('id', excludeId);
-  const { data: overlapping } = await q3;
+  const { data: overlappingRaw } = await q3;
+  const overlapping = (overlappingRaw || []).filter(hasStudents);
   if (overlapping && overlapping.length > 0) {
     const overlappingStudents = overlapping.flatMap(l => l.lesson_students || []);
     const overlappingCount = overlappingStudents.length;
@@ -228,12 +234,18 @@ function renderGrid() {
 
 // ===== LESSONS RENDER (overlap) =====
 function renderLessons() {
-  document.querySelectorAll('.lesson-card').forEach(el => el.remove());
-  document.querySelectorAll('.grid-cell').forEach(c => {
-    c.style.background = ''; c.innerHTML = '';
-    
-    delete c.dataset.lessonIds;
-  });
+  // IMPORTANT: scope cleanup to #schedule-grid only.
+  // Using document.querySelectorAll would also wipe cards/cells of #recurring-grid
+  // when realtime triggers a loadLessons → renderLessons while the recurring screen
+  // is visible (cards disappear until F5).
+  const scheduleGrid = document.getElementById('schedule-grid');
+  if (scheduleGrid) {
+    scheduleGrid.querySelectorAll('.lesson-card').forEach(el => el.remove());
+    scheduleGrid.querySelectorAll('.grid-cell').forEach(c => {
+      c.style.background = ''; c.innerHTML = '';
+      delete c.dataset.lessonIds;
+    });
+  }
 
   const grid = document.getElementById('schedule-grid');
   const dates = getWeekDates(state.currentWeekStart);
@@ -1180,13 +1192,11 @@ async function loadTeacherStudentsForModal(tid) {
   const seen = new Set();
   allTeacherStudents = (data || []).filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
 
-  // Load active subscriptions for these students (to know each student's required lesson duration)
+  // Read active subscriptions (no rebind/recompute here — those are heavy and run only
+  // in openStudentDetail / when lessons actually change. Reading is enough for the modal.)
   const sids = allTeacherStudents.map(s => s.id);
   studentActiveSub = {};
   if (sids.length > 0) {
-    // Recover from any past attach failures, then recompute fresh values
-    await rebindOrphanLessonsForStudents(sids);
-    await recomputeSubscriptionsForStudents(sids);
     const { data: subs } = await db.from('subscriptions')
       .select('id, student_id, total_lessons, used_lessons, end_date, pricing:pricing_id(duration_minutes, format)')
       .in('student_id', sids)

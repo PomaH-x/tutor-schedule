@@ -319,23 +319,26 @@ let studentDetailId = null;
 
 async function openStudentDetail(studentId) {
   studentDetailId = studentId;
-  const { data: student } = await db.from('students')
-    .select('*, teacher:profiles!teacher_id(full_name, color)')
-    .eq('id', studentId).single();
+  // Fire the three independent reads in parallel — they don't depend on each other.
+  // Saves ~2 round-trips on slow connections.
+  const [studentRes, lessonsRes, paymentsRes] = await Promise.all([
+    db.from('students')
+      .select('*, teacher:profiles!teacher_id(full_name, color)')
+      .eq('id', studentId).single(),
+    db.from('lessons')
+      .select('id, start_time, end_time, status, subject, week_start, lesson_students!inner(student_id)')
+      .eq('lesson_students.student_id', studentId)
+      .in('status', ['active', 'cancelled'])
+      .order('start_time', { ascending: false }),
+    db.from('payments')
+      .select('id, lesson_id, amount, payment_method, status, submitted_at')
+      .eq('student_id', studentId)
+      .order('submitted_at', { ascending: false })
+  ]);
+  const student = studentRes.data;
   if (!student) { showToast('Ученик не найден', 'error'); return; }
-
-  // All lessons for this student
-  const { data: lessons } = await db.from('lessons')
-    .select('id, start_time, end_time, status, subject, week_start, lesson_students!inner(student_id)')
-    .eq('lesson_students.student_id', studentId)
-    .in('status', ['active', 'cancelled'])
-    .order('start_time', { ascending: false });
-
-  // Payments
-  const { data: payments } = await db.from('payments')
-    .select('id, lesson_id, amount, payment_method, status, submitted_at')
-    .eq('student_id', studentId)
-    .order('submitted_at', { ascending: false });
+  const lessons = lessonsRes.data;
+  const payments = paymentsRes.data;
 
   const pendingPayments = (payments || []).filter(p => p.status === 'pending');
   const paymentsByLesson = {};
@@ -451,13 +454,14 @@ async function openStudentDetail(studentId) {
     return t;
   }
 
-  // Active subscription panel (above lessons)
-  await rebindOrphanLessonsForStudents([studentId]); // recover from any past attach failures
-  await recomputeSubscriptionsForStudents([studentId]);
-  const activeSub = await loadActiveSubscriptionForStudent(studentId, true);
+  // Subscription section: render with a placeholder first; the heavy chain
+  // (rebindOrphan → recompute → loadActive) runs asynchronously below and replaces
+  // just this block when ready. This makes the card appear ~1s sooner on slow connections.
   html += `<div class="sd-section sd-section-subscription">
     <h4>Абонемент</h4>
-    ${renderSubscriptionPanelHTML(activeSub, studentId)}
+    <div id="sd-sub-panel-container">
+      <div class="sub-panel sub-panel-empty"><div class="sub-empty-text">Загрузка…</div></div>
+    </div>
   </div>`;
 
   const subjectEntries = Object.entries(subjectGroups);
@@ -516,31 +520,48 @@ async function openStudentDetail(studentId) {
     linkBtn.addEventListener('click', () => openLinkStudentModal(studentId, student.teacher_id));
   }
 
-  const activateSubBtn = body.querySelector('#btn-activate-sub');
-  if (activateSubBtn) {
-    activateSubBtn.addEventListener('click', () => openSubscriptionActivation(activateSubBtn.dataset.studentId));
+  // Helper: bind buttons that live inside the (re-rendered) subscription panel
+  function bindSubPanelButtons() {
+    const activateSubBtn = body.querySelector('#btn-activate-sub');
+    if (activateSubBtn) {
+      activateSubBtn.addEventListener('click', () => openSubscriptionActivation(activateSubBtn.dataset.studentId));
+    }
+    const deleteSubBtn = body.querySelector('#btn-delete-sub');
+    if (deleteSubBtn) {
+      deleteSubBtn.addEventListener('click', async () => {
+        const subId = deleteSubBtn.dataset.subId;
+        showConfirm('Удалить абонемент? Связанные занятия останутся в расписании и станут разовыми. Это действие нельзя отменить.', async () => {
+          const { error } = await db.from('subscriptions').delete().eq('id', subId);
+          if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
+          showToast('Абонемент удалён', 'success');
+          invalidateSubscriptionCache(studentId);
+          await openStudentDetail(studentId);
+        }, 'Удалить');
+      });
+    }
+    const refundSubBtn = body.querySelector('#btn-refund-sub');
+    if (refundSubBtn) {
+      refundSubBtn.addEventListener('click', () => openSubscriptionRefund(refundSubBtn.dataset.subId));
+    }
   }
 
-  // Delete subscription button (inside the active panel)
-  const deleteSubBtn = body.querySelector('#btn-delete-sub');
-  if (deleteSubBtn) {
-    deleteSubBtn.addEventListener('click', async () => {
-      const subId = deleteSubBtn.dataset.subId;
-      showConfirm('Удалить абонемент? Связанные занятия останутся в расписании и станут разовыми. Это действие нельзя отменить.', async () => {
-        const { error } = await db.from('subscriptions').delete().eq('id', subId);
-        if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
-        showToast('Абонемент удалён', 'success');
-        invalidateSubscriptionCache(studentId);
-        await openStudentDetail(studentId);
-      }, 'Удалить');
-    });
-  }
-
-  // Refund subscription button
-  const refundSubBtn = body.querySelector('#btn-refund-sub');
-  if (refundSubBtn) {
-    refundSubBtn.addEventListener('click', () => openSubscriptionRefund(refundSubBtn.dataset.subId));
-  }
+  // Kick off the heavy subscription chain in the background — the card is already
+  // visible at this point. When ready, swap just the placeholder panel.
+  (async () => {
+    try {
+      await rebindOrphanLessonsForStudents([studentId]);
+      await recomputeSubscriptionsForStudents([studentId]);
+      const activeSub = await loadActiveSubscriptionForStudent(studentId, true);
+      // Guard: user may have closed the card or opened another one in the meantime.
+      if (studentDetailId !== studentId) return;
+      const container = document.getElementById('sd-sub-panel-container');
+      if (!container) return;
+      container.innerHTML = renderSubscriptionPanelHTML(activeSub, studentId);
+      bindSubPanelButtons();
+    } catch (e) {
+      console.error('sub panel load failed:', e);
+    }
+  })();
 
   // Delete lesson row in history table
   body.querySelectorAll('.btn-delete-lesson-row').forEach(btn => {

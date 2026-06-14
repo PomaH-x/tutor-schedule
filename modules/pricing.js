@@ -249,7 +249,7 @@ async function loadPayroll() {
   let subsById = {};
   if (subIds.size > 0) {
     const { data: subs } = await db.from('subscriptions')
-      .select('id, total_lessons, paid_amount, teacher_share, center_share, pricing:pricing_id(duration_minutes, format)')
+      .select('id, total_lessons, paid_amount, teacher_share, center_share, status, pricing:pricing_id(duration_minutes, format, is_individual, is_online)')
       .in('id', Array.from(subIds));
     (subs || []).forEach(s => { subsById[s.id] = s; });
   }
@@ -308,8 +308,32 @@ function renderPayroll(lessons, cancellations, soldSubs, refundedSubs, subsById,
       const sKey = ls.student_id;
       const sub = ls.subscription_id ? subsById[ls.subscription_id] : null;
 
-      if (sub) {
-        // Subscription lesson — spread profit across all lessons of the subscription
+      if (sub && sub.status === 'refunded') {
+        // Refunded subscription — its lessons are re-valued at single-tariff (per AM rule).
+        // Show in the "subscription" block but compute as one-off.
+        const isInd = sub.pricing?.is_individual ?? (s.is_individual || false);
+        const isOnline = sub.pricing?.is_online ?? (s.is_online || false);
+        const dur = sub.pricing?.duration_minutes || durationMin;
+        const sp = findPricing(dur, isInd, s.price_type || 'new', isOnline, 'single');
+        if (!sp) return;
+        const perProfit = isTeacherAdmin ? sp.student_price : sp.teacher_profit;
+        const perRevenue = sp.student_price;
+        td.subProfit += perProfit;
+        td.subRevenue += perRevenue;
+        const fmt = sub.pricing?.format === 'sub4' ? 4 : 8;
+        if (!td.subStudents[sKey]) {
+          td.subStudents[sKey] = {
+            name: `${s.first_name} ${s.last_name}`, amount: 0, count: 0, subType: fmt,
+            duration: sub.pricing?.duration_minutes, refunded: true
+          };
+        }
+        // For refunded subscriptions in the payroll row show "money received after recalc"
+        // — i.e. count × single-tariff price — instead of teacher's per-lesson share.
+        // This matches the breakdown the admin saw in the refund modal (used × student_price).
+        td.subStudents[sKey].amount += perRevenue;
+        td.subStudents[sKey].count++;
+      } else if (sub) {
+        // Active/expired subscription lesson — spread profit across all lessons
         const total = sub.total_lessons || 8;
         const perProfit = Math.round((isTeacherAdmin ? sub.paid_amount : sub.teacher_share) / total);
         const perRevenue = Math.round(sub.paid_amount / total);
@@ -455,7 +479,11 @@ function renderPayroll(lessons, cancellations, soldSubs, refundedSubs, subsById,
     const sp = findPricing(dur, isInd, 'new', isOnline, 'single');
     let centerPart = 0, teacherPart = refundAmount;
     if (sp && sp.student_price > 0) {
-      centerPart = Math.round(refundAmount * (sp.commission / sp.student_price));
+      // Round up to multiples of 50 — center pays cash in human-friendly amounts.
+      // Teacher part keeps the remainder so display sum equals total refundAmount.
+      const rawCenter = refundAmount * (sp.commission / sp.student_price);
+      centerPart = Math.ceil(rawCenter / 50) * 50;
+      if (centerPart > refundAmount) centerPart = refundAmount;
       teacherPart = refundAmount - centerPart;
     }
     td.refundsCommission = (td.refundsCommission || 0) - centerPart; // negative, reduces this week's commission
@@ -693,6 +721,10 @@ function initPricingAndPayroll() {
   document.getElementById('btn-close-reason').addEventListener('click', closeReasonModal);
   document.getElementById('btn-cancel-reason').addEventListener('click', closeReasonModal);
   document.getElementById('btn-save-reason').addEventListener('click', saveReason);
+  const validBtn = document.getElementById('btn-toggle-valid');
+  if (validBtn) validBtn.addEventListener('click', toggleValidReasonAction);
+  const extendBtn = document.getElementById('btn-extend-sub');
+  if (extendBtn) extendBtn.addEventListener('click', applyExtensionAction);
   document.getElementById('btn-remove-reason-image').addEventListener('click', removeReasonImage);
   document.getElementById('reason-overlay').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeReasonModal();
@@ -738,7 +770,7 @@ let reasonCtx = null; // { id, editable, existingImagePath, pendingFile, removeE
 
 async function openReasonModal(cancellationId, editable) {
   const { data: c, error } = await db.from('cancellations')
-    .select('id, teacher_id, student_id, reason_text, reason_image_url, valid_reason, student:students(first_name, last_name)')
+    .select('id, teacher_id, student_id, reason_text, reason_image_url, valid_reason, extension_applied_at, student:students(first_name, last_name)')
     .eq('id', cancellationId).single();
   if (error || !c) { showToast('Не удалось загрузить отмену', 'error'); return; }
 
@@ -750,7 +782,8 @@ async function openReasonModal(cancellationId, editable) {
     existingImagePath: c.reason_image_url || null,
     pendingFile: null,
     removeExistingImage: false,
-    initialValidReason: !!c.valid_reason
+    validReason: !!c.valid_reason,
+    extensionAppliedAt: c.extension_applied_at || null
   };
 
   document.getElementById('reason-modal-title').textContent =
@@ -760,10 +793,29 @@ async function openReasonModal(cancellationId, editable) {
   textarea.value = c.reason_text || '';
   textarea.disabled = !editable;
 
-  const validCb = document.getElementById('reason-valid');
-  if (validCb) { validCb.checked = !!c.valid_reason; validCb.disabled = !editable; }
+  // "Уважительная причина" toggle button — visual state by reasonCtx.validReason
+  const validBtn = document.getElementById('btn-toggle-valid');
+  if (validBtn) {
+    validBtn.classList.toggle('active', !!c.valid_reason);
+    validBtn.disabled = !editable;
+  }
 
-  // Image preview
+  // "+7 дней абонемента" button — disabled if already applied or not editable
+  const extendBtn = document.getElementById('btn-extend-sub');
+  if (extendBtn) {
+    if (c.extension_applied_at) {
+      extendBtn.disabled = true;
+      extendBtn.classList.add('applied');
+      const titleSpan = extendBtn.querySelector('.reason-action-title');
+      if (titleSpan) titleSpan.textContent = '+7 дней применены';
+    } else {
+      extendBtn.disabled = !editable;
+      extendBtn.classList.remove('applied');
+      const titleSpan = extendBtn.querySelector('.reason-action-title');
+      if (titleSpan) titleSpan.textContent = '+7 дней абонемента';
+    }
+  }
+
   await refreshReasonImagePreview();
 
   document.getElementById('reason-edit-controls').style.display = editable ? 'flex' : 'none';
@@ -860,9 +912,8 @@ async function saveReason() {
   if (!reasonCtx || !reasonCtx.editable) return;
   const text = document.getElementById('reason-text').value.trim();
   const willHaveImage = !!reasonCtx.pendingFile || (reasonCtx.existingImagePath && !reasonCtx.removeExistingImage);
-  const validReason = document.getElementById('reason-valid')?.checked || false;
+  const validReason = !!reasonCtx.validReason;
 
-  // When marking as "valid reason" — text/screenshot are optional (справка идёт оффлайн)
   if (!validReason && !text && !willHaveImage) {
     showToast('Нужно указать текст, прикрепить скриншот или отметить уважительную причину', 'error');
     return;
@@ -874,15 +925,12 @@ async function saveReason() {
   try {
     let imagePathToSave = reasonCtx.existingImagePath;
 
-    // Upload new file if picked
     if (reasonCtx.pendingFile) {
       const ext = (reasonCtx.pendingFile.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
       const path = `${reasonCtx.teacherId}/${reasonCtx.id}.${ext}`;
       const { error: upErr } = await db.storage.from('cancellation-reasons')
         .upload(path, reasonCtx.pendingFile, { upsert: true, contentType: reasonCtx.pendingFile.type });
       if (upErr) throw upErr;
-
-      // If previous file had a different extension, delete it
       if (reasonCtx.existingImagePath && reasonCtx.existingImagePath !== path) {
         await db.storage.from('cancellation-reasons').remove([reasonCtx.existingImagePath]);
       }
@@ -892,7 +940,8 @@ async function saveReason() {
       imagePathToSave = null;
     }
 
-    // Build update. When valid_reason=true — force is_paid=false (not charged, not consumed).
+    // valid_reason here only frees the cancellation (no payment, not a truant).
+    // Extension is a separate one-shot action via "+7 дней абонемента" button.
     const update = {
       reason_text: text || null,
       reason_image_url: imagePathToSave,
@@ -904,23 +953,6 @@ async function saveReason() {
     const { error: dbErr } = await db.from('cancellations').update(update).eq('id', reasonCtx.id);
     if (dbErr) throw dbErr;
 
-    // When transitioning false → true: extend the student's active subscription by 7 days
-    if (validReason && !reasonCtx.initialValidReason && reasonCtx.studentId) {
-      const { data: activeSub } = await db.from('subscriptions')
-        .select('id, end_date')
-        .eq('student_id', reasonCtx.studentId)
-        .eq('status', 'active')
-        .maybeSingle();
-      if (activeSub) {
-        const newEnd = new Date(activeSub.end_date);
-        newEnd.setDate(newEnd.getDate() + 7);
-        const newEndStr = `${newEnd.getFullYear()}-${(newEnd.getMonth()+1).toString().padStart(2,'0')}-${newEnd.getDate().toString().padStart(2,'0')}`;
-        await db.from('subscriptions').update({ end_date: newEndStr }).eq('id', activeSub.id);
-        showToast('Срок абонемента продлён на 7 дней', 'success');
-      }
-    }
-
-    // Recompute subscription usage for this student (used_lessons changes when valid_reason toggles)
     if (reasonCtx.studentId) await recomputeSubscriptionsByStudent(reasonCtx.studentId);
 
     showToast('Причина сохранена', 'success');
@@ -931,5 +963,74 @@ async function saveReason() {
     showToast('Ошибка: ' + (e.message || 'неизвестно'), 'error');
   } finally {
     btn.disabled = false;
+  }
+}
+
+// Toggle "Уважительная причина" — visual state, persisted on Save
+function toggleValidReasonAction() {
+  if (!reasonCtx || !reasonCtx.editable) return;
+  reasonCtx.validReason = !reasonCtx.validReason;
+  const btn = document.getElementById('btn-toggle-valid');
+  if (btn) btn.classList.toggle('active', !!reasonCtx.validReason);
+}
+
+// One-shot "+7 days" — extends active subscription, marks extension_applied_at,
+// disables the button. Persistent in DB so it cannot be applied twice for the same cancellation.
+async function applyExtensionAction() {
+  if (!reasonCtx || !reasonCtx.editable) return;
+  if (reasonCtx.extensionAppliedAt) {
+    showToast('Уже применено для этой отмены', 'error');
+    return;
+  }
+  // One-shot and irreversible — ask before doing it.
+  showConfirm(
+    'Продлить активный абонемент ученика на 7 дней? Действие можно применить только один раз для этой отмены.',
+    () => doApplyExtension(),
+    'Продлить',
+    'primary'
+  );
+}
+
+async function doApplyExtension() {
+  if (!reasonCtx || !reasonCtx.editable) return;
+  if (reasonCtx.extensionAppliedAt) return;
+  const btn = document.getElementById('btn-extend-sub');
+  if (btn) btn.disabled = true;
+  try {
+    const { data: activeSub } = await db.from('subscriptions')
+      .select('id, end_date')
+      .eq('student_id', reasonCtx.studentId)
+      .eq('status', 'active')
+      .maybeSingle();
+    if (!activeSub) {
+      showToast('У ученика нет активного абонемента для продления', 'error');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    const newEnd = new Date(activeSub.end_date);
+    newEnd.setDate(newEnd.getDate() + 7);
+    const yyyy = newEnd.getFullYear();
+    const mm = (newEnd.getMonth() + 1).toString().padStart(2, '0');
+    const dd = newEnd.getDate().toString().padStart(2, '0');
+    const newEndStr = `${yyyy}-${mm}-${dd}`;
+
+    const nowIso = new Date().toISOString();
+    const [{ error: e1 }, { error: e2 }] = await Promise.all([
+      db.from('subscriptions').update({ end_date: newEndStr }).eq('id', activeSub.id),
+      db.from('cancellations').update({ extension_applied_at: nowIso }).eq('id', reasonCtx.id)
+    ]);
+    if (e1 || e2) throw (e1 || e2);
+
+    reasonCtx.extensionAppliedAt = nowIso;
+    if (btn) {
+      btn.classList.add('applied');
+      const titleSpan = btn.querySelector('.reason-action-title');
+      if (titleSpan) titleSpan.textContent = '+7 дней применены';
+    }
+    showToast('Срок абонемента продлён на 7 дней', 'success');
+  } catch (e) {
+    console.error('applyExtensionAction:', e);
+    showToast('Ошибка: ' + (e.message || 'неизвестно'), 'error');
+    if (btn) btn.disabled = false;
   }
 }

@@ -16,6 +16,38 @@ function normalizePhone(phone) {
   return phone.replace(/\D/g, '');
 }
 
+// ===== INPUT VALIDATION =====
+
+// Russian or latin letters, hyphens and spaces. Must start and end with a letter.
+// Length 2..50. Allows compound names like "Анна-Мария" or "Van Der Berg".
+const NAME_RE = /^[А-Яа-яЁёA-Za-z](?:[А-Яа-яЁёA-Za-z\- ]{0,48}[А-Яа-яЁёA-Za-z])?$/;
+
+function validateName(value, fieldLabel) {
+  if (!value) return `Укажите: ${fieldLabel}`;
+  if (value.length < 2) return `${fieldLabel}: минимум 2 символа`;
+  if (value.length > 50) return `${fieldLabel}: максимум 50 символов`;
+  if (!NAME_RE.test(value)) return `${fieldLabel}: только буквы, дефис и пробел`;
+  return null;
+}
+
+// digits-only string from normalizePhone(). Accepts Russian formats:
+//   11 digits starting with 7 or 8  → mobile/landline with country code
+//   10 digits starting with 9       → mobile without country code
+function validatePhone(digits) {
+  if (!digits) return 'Укажите телефон';
+  if (digits.length === 11) {
+    if (digits[0] !== '7' && digits[0] !== '8') {
+      return 'Телефон должен начинаться с +7 или 8';
+    }
+    return null;
+  }
+  if (digits.length === 10) {
+    if (digits[0] !== '9') return 'Введите телефон в формате +7 9XX XXX XX XX';
+    return null;
+  }
+  return 'Телефон должен содержать 10 или 11 цифр';
+}
+
 function generateShortName(name1, name2) {
   return name1[0].toUpperCase() + name2[0].toUpperCase();
 }
@@ -189,19 +221,24 @@ async function handleRegister() {
   const login = document.getElementById('input-reg-login').value.trim();
   const password = document.getElementById('input-reg-password').value;
 
-  if (!name1 || !name2 || !login || !password) {
-    showToast('Заполните все поля', 'error');
-    return;
-  }
-
   const role = state.selectedRole;
-  const phone = normalizePhone(login);
+  // Student form is "Имя + Фамилия"; teacher/admin form is "Имя + Отчество".
+  // Use the right label for the second field so toast tells exactly which one is wrong.
+  const name2Label = role === 'student' ? 'Фамилия' : 'Отчество';
 
-  if (phone.length < 10) {
-    showToast('Введите корректный телефон', 'error');
+  const name1Err = validateName(name1, 'Имя');
+  if (name1Err) { showToast(name1Err, 'error'); return; }
+  const name2Err = validateName(name2, name2Label);
+  if (name2Err) { showToast(name2Err, 'error'); return; }
+
+  const phone = normalizePhone(login);
+  const phoneErr = validatePhone(phone);
+  if (phoneErr) { showToast(phoneErr, 'error'); return; }
+
+  if (!password) {
+    showToast('Укажите пароль', 'error');
     return;
   }
-
   if (password.length < 6) {
     showToast('Пароль минимум 6 символов', 'error');
     return;

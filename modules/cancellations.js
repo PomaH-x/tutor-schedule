@@ -42,7 +42,7 @@ async function computeAndSyncCancellations() {
 
   // Existing cancellations for this week
   const { data: existing } = await db.from('cancellations')
-    .select('id, student_id, recurring_lesson_id, status')
+    .select('id, student_id, recurring_lesson_id, status, dismissed_at')
     .eq('teacher_id', teacherId).eq('week_start', ws);
   const existingMap = {};
   (existing || []).forEach(c => { existingMap[`${c.student_id}-${c.recurring_lesson_id}`] = c; });
@@ -63,6 +63,8 @@ async function computeAndSyncCancellations() {
       const rlId = rlIds[i];
       const key = `${sid}-${rlId}`;
       const ex = existingMap[key];
+      // dismissed_at means an admin manually removed this truant — never recreate / reopen it
+      if (ex && ex.dismissed_at) continue;
       if (i < missed) {
         if (!ex) toInsert.push({ student_id: sid, teacher_id: teacherId, week_start: ws, recurring_lesson_id: rlId, status: 'pending' });
         else if (ex.status === 'made_up') toReopen.push(ex.id);
@@ -267,7 +269,14 @@ function renderTruants(cancellations) {
         var cid = removeBtn.dataset.cid;
         var cname = removeBtn.dataset.name;
         showConfirm('Убрать отмену для ' + cname + '?', async function() {
-          await db.from('cancellations').delete().eq('id', cid);
+          // Mark as dismissed instead of deleting. If we just delete, computeAndSyncCancellations()
+          // will recreate the cancellation on the next loadLessons because the recurring template
+          // still says "should be a lesson, but there isn't one". The dismissed_at flag tells
+          // the sync routine to leave this record alone.
+          await db.from('cancellations').update({
+            status: 'made_up',
+            dismissed_at: new Date().toISOString()
+          }).eq('id', cid);
           showToast('Отмена убрана', 'success');
           await loadTruants();
           if (typeof loadPayroll === 'function' && document.getElementById('screen-profile')?.classList.contains('active')) loadPayroll();

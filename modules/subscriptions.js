@@ -566,6 +566,12 @@ function closeSubscriptionRefund() {
   refundCtx = null;
 }
 
+// Round refund up to multiples of 50 — center pays human-friendly amounts in cash
+function roundRefundUp50(n) {
+  if (n <= 0) return 0;
+  return Math.ceil(n / 50) * 50;
+}
+
 function refreshRefundCalc() {
   if (!refundCtx) return;
   const sub = refundCtx.sub;
@@ -573,52 +579,66 @@ function refreshRefundCalc() {
   const usedRaw = parseInt(document.getElementById('sub-refund-used').value);
   const used = Math.max(0, Math.min(isNaN(usedRaw) ? 0 : usedRaw, sub.total_lessons));
 
-  // Recalc by single-tariff
-  const newPaid = used * sp.student_price;
+  // What the student "really paid" after refund: used × single tariff
+  const newPaidExact = used * sp.student_price;
   const newTeacher = used * sp.teacher_profit;
   const newCenter = used * sp.commission;
 
-  const refund = sub.paid_amount - newPaid;
-  const teacherDelta = sub.teacher_share - newTeacher;
-  const centerDelta = sub.center_share - newCenter;
+  // Raw refund and rounded-up to multiples of 50
+  const refundExact = sub.paid_amount - newPaidExact;
+  const refund = roundRefundUp50(refundExact);
+  // Adjust effective paid (after rounding the refund up, slightly less stays in the system)
+  const effectivePaid = sub.paid_amount - refund;
+
+  // Splits of refund between teacher and center, by single-tariff proportion
+  // Round center part up to multiples of 50; teacher keeps the remainder (so the sum
+  // still equals the displayed total refund).
+  const teacherRatio = sp.student_price > 0 ? sp.teacher_profit / sp.student_price : 0;
+  const rawCenter = refund * (1 - teacherRatio);
+  let refundFromCenter = Math.ceil(rawCenter / 50) * 50;
+  if (refundFromCenter > refund) refundFromCenter = refund;
+  const refundFromTeacher = refund - refundFromCenter;
 
   const calc = document.getElementById('sub-refund-calc');
+  const roundedNote = refund !== refundExact
+    ? `<div class="sub-refund-row sub-refund-row-sub"><span>округлено вверх до 50 ₽ (было ${refundExact} ₽)</span><span></span></div>`
+    : '';
   calc.innerHTML = `
     <div class="sub-refund-section">
       <div class="sub-refund-section-title">Пересчёт по разовой цене</div>
-      <div class="sub-refund-row"><span>${used} × ${sp.student_price} ₽</span><span><b>${newPaid} ₽</b></span></div>
+      <div class="sub-refund-row"><span>${used} × ${sp.student_price} ₽</span><span><b>${newPaidExact} ₽</b></span></div>
       <div class="sub-refund-row sub-refund-row-sub"><span>├─ Преподавателю: ${used} × ${sp.teacher_profit}</span><span>${newTeacher} ₽</span></div>
       <div class="sub-refund-row sub-refund-row-sub"><span>└─ Центру: ${used} × ${sp.commission}</span><span>${newCenter} ₽</span></div>
     </div>
     <div class="sub-refund-section sub-refund-section-total">
       <div class="sub-refund-row"><span class="sub-refund-label-strong">К возврату ученику</span><span class="sub-refund-amount-big">${refund} ₽</span></div>
-      <div class="sub-refund-row sub-refund-row-sub"><span>├─ Из доли преподавателя: ${sub.teacher_share} − ${newTeacher}</span><span>${teacherDelta} ₽</span></div>
-      <div class="sub-refund-row sub-refund-row-sub"><span>└─ Из доли центра: ${sub.center_share} − ${newCenter}</span><span>${centerDelta} ₽</span></div>
+      ${roundedNote}
+      <div class="sub-refund-row sub-refund-row-sub"><span>├─ Из доли преподавателя</span><span>${refundFromTeacher} ₽</span></div>
+      <div class="sub-refund-row sub-refund-row-sub"><span>└─ Из доли центра</span><span>${refundFromCenter} ₽</span></div>
     </div>
-    ${refund < 0 ? '<div class="sub-refund-warning">Возврат отрицательный — это значит, что ученик использовал больше слотов, чем мог. Проверьте число пройденных занятий.</div>' : ''}
+    ${refundExact < 0 ? '<div class="sub-refund-warning">Возврат отрицательный — ученик использовал больше слотов, чем мог. Проверьте число пройденных занятий.</div>' : ''}
   `;
 
-  // Save calculated values into ctx so confirm uses fresh numbers
-  refundCtx.calc = { used, newPaid, newTeacher, newCenter, refund };
+  refundCtx.calc = { used, refund, effectivePaid, refundFromTeacher, refundFromCenter };
 
-  document.getElementById('btn-confirm-sub-refund').disabled = refund < 0;
+  document.getElementById('btn-confirm-sub-refund').disabled = refundExact < 0;
 }
 
 async function confirmSubscriptionRefund() {
   if (!refundCtx || !refundCtx.calc) return;
   const { sub, calc } = refundCtx;
-  const { used, newPaid, newTeacher, newCenter, refund } = calc;
+  const { used, refund } = calc;
 
   const btn = document.getElementById('btn-confirm-sub-refund');
   btn.disabled = true;
 
   try {
+    // We keep original paid_amount / teacher_share / center_share as they were at the sale.
+    // Only mark the subscription as refunded and record how much was returned.
+    // This way payroll historical weeks remain consistent — the sale-week numbers don't change.
     const { error } = await db.from('subscriptions').update({
       status: 'refunded',
       used_lessons: used,
-      paid_amount: newPaid,
-      teacher_share: newTeacher,
-      center_share: newCenter,
       refund_amount: refund,
       refunded_at: new Date().toISOString()
     }).eq('id', sub.id);
@@ -628,7 +648,6 @@ async function confirmSubscriptionRefund() {
     closeSubscriptionRefund();
     showToast(`Возврат оформлен: ${refund} ₽ ученику`, 'success');
 
-    // Reopen student detail if open (find the student id)
     if (typeof openStudentDetail === 'function') {
       const studentDetailEl = document.getElementById('student-detail-overlay');
       if (studentDetailEl && studentDetailEl.classList.contains('active')) {

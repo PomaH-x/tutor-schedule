@@ -21,9 +21,22 @@ async function loadRecurringLessons() {
   // Everyone (admin + teacher) sees ALL recurring lessons — needed for conflict prevention
   const { data, error } = await db.from('recurring_lessons')
     .select('*, teacher:profiles!teacher_id(short_name, color, full_name), recurring_lesson_students(student_id, student:students(first_name, last_name, subject))');
-  if (error) { showToast('Ошибка загрузки', 'error'); return; }
+  if (error) {
+    console.error('loadRecurringLessons error:', error);
+    showToast('Ошибка загрузки', 'error');
+    return;
+  }
   recurringLessons = data || [];
   renderRecurringLessons();
+  // Defensive: occasionally the first render races with grid setup — verify and retry once.
+  setTimeout(() => {
+    if (recurringLessons.length === 0) return;
+    const visible = document.querySelectorAll('#recurring-grid .lesson-card').length;
+    if (visible === 0) {
+      console.warn('Recurring cards missing after render — retrying. data:', recurringLessons.length);
+      renderRecurringLessons();
+    }
+  }, 100);
 }
 
 function renderRecurringGrid() {

@@ -4705,3 +4705,80 @@ input, textarea, select {
   color: var(--danger);
   font-weight: 600;
 }
+
+/* Reason modal: two action buttons (Уважительная причина / +7 дней абонемента) */
+.reason-actions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+@media (max-width: 520px) {
+  .reason-actions-grid { grid-template-columns: 1fr; }
+}
+.reason-action {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+  transition: background 0.15s, border-color 0.15s;
+}
+.reason-action:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.reason-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.reason-action-icon {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+.reason-action.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.reason-action.active .reason-action-icon {
+  background: var(--accent);
+  color: #fff;
+}
+.reason-action.applied {
+  background: var(--success-soft);
+  border-color: var(--success);
+}
+.reason-action.applied .reason-action-icon {
+  background: var(--success);
+  color: #fff;
+}
+.reason-action-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.reason-action-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.reason-action-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
