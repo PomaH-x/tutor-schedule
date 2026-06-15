@@ -128,11 +128,11 @@
           <h2 id="current-week-label"></h2>
           <button class="btn-schedule-type" id="btn-to-recurring" title="Постоянное расписание">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
-            Постоянное
+            <span class="btn-label">Постоянное</span>
           </button>
           <button class="btn-schedule-type btn-online-type" id="btn-to-online" title="Онлайн занятия">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
-            Онлайн
+            <span class="btn-label">Онлайн</span>
           </button>
         </div>
         <div class="top-bar-right">
@@ -150,11 +150,11 @@
         </div>
       </header>
       <div class="week-tabs" id="week-tabs">
-        <button class="week-tab" data-offset="-2">2 нед. назад</button>
-        <button class="week-tab" data-offset="-1">Предыдущая</button>
-        <button class="week-tab active" data-offset="0">Текущая</button>
-        <button class="week-tab" data-offset="1">Следующая</button>
-        <button class="week-tab" data-offset="2">2 нед. вперёд</button>
+        <button class="week-tab" data-offset="-2" data-short="-2 нед.">2 нед. назад</button>
+        <button class="week-tab" data-offset="-1" data-short="Пред.">Предыдущая</button>
+        <button class="week-tab active" data-offset="0" data-short="Текущая">Текущая</button>
+        <button class="week-tab" data-offset="1" data-short="След.">Следующая</button>
+        <button class="week-tab" data-offset="2" data-short="+2 нед.">2 нед. вперёд</button>
       </div>
       <div id="schedule-grid" class="schedule-grid"></div>
     </div>
@@ -213,11 +213,11 @@
         </div>
       </header>
       <div class="week-tabs" id="online-week-tabs">
-        <button class="week-tab" data-offset="-2">2 нед. назад</button>
-        <button class="week-tab" data-offset="-1">Предыдущая</button>
-        <button class="week-tab active" data-offset="0">Текущая</button>
-        <button class="week-tab" data-offset="1">Следующая</button>
-        <button class="week-tab" data-offset="2">2 нед. вперёд</button>
+        <button class="week-tab" data-offset="-2" data-short="-2 нед.">2 нед. назад</button>
+        <button class="week-tab" data-offset="-1" data-short="Пред.">Предыдущая</button>
+        <button class="week-tab active" data-offset="0" data-short="Текущая">Текущая</button>
+        <button class="week-tab" data-offset="1" data-short="След.">Следующая</button>
+        <button class="week-tab" data-offset="2" data-short="+2 нед.">2 нед. вперёд</button>
       </div>
       <div id="online-lessons-list" class="online-lessons-list"></div>
     </div>
@@ -245,11 +245,11 @@
         </div>
       </header>
       <div class="week-tabs" id="student-week-tabs">
-        <button class="week-tab" data-offset="-2">2 нед. назад</button>
-        <button class="week-tab" data-offset="-1">Предыдущая</button>
-        <button class="week-tab active" data-offset="0">Текущая</button>
-        <button class="week-tab" data-offset="1">Следующая</button>
-        <button class="week-tab" data-offset="2">2 нед. вперёд</button>
+        <button class="week-tab" data-offset="-2" data-short="-2 нед.">2 нед. назад</button>
+        <button class="week-tab" data-offset="-1" data-short="Пред.">Предыдущая</button>
+        <button class="week-tab active" data-offset="0" data-short="Текущая">Текущая</button>
+        <button class="week-tab" data-offset="1" data-short="След.">Следующая</button>
+        <button class="week-tab" data-offset="2" data-short="+2 нед.">2 нед. вперёд</button>
       </div>
       <div class="student-summary" id="student-summary"></div>
       <div class="student-lessons-list" id="student-lessons-list"></div>

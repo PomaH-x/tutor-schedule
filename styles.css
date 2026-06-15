@@ -2448,6 +2448,38 @@ input, textarea, select {
   }
 }
 
+@media (max-width: 600px) {
+  /* Top-bar: hide text labels on schedule-type buttons, keep icons only */
+  .btn-schedule-type .btn-label {
+    display: none;
+  }
+  .btn-schedule-type {
+    padding: 6px 8px;
+    margin-left: 6px;
+    gap: 0;
+  }
+
+  /* Week tabs: swap full labels for short ones via data-short */
+  .week-tabs {
+    padding: 6px 8px;
+    gap: 3px;
+  }
+  .week-tab {
+    font-size: 0;
+    padding: 8px 2px;
+    flex: 1;
+    min-width: 0;
+  }
+  .week-tab[data-short]::before {
+    content: attr(data-short);
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .week-tab.active[data-short]::before {
+    font-weight: 600;
+  }
+}
+
 /* ===== PROFILE SCREEN ===== */
 
 .profile-content {
