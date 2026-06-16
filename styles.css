@@ -732,8 +732,10 @@ input, textarea, select {
   z-index: 1;
 }
 
-.lesson-card:hover .lc-drag-handle {
-  opacity: 0.5;
+@media (hover: hover) {
+  .lesson-card:hover .lc-drag-handle {
+    opacity: 0.5;
+  }
 }
 
 .lc-drag-handle:hover {
@@ -1003,11 +1005,13 @@ input, textarea, select {
   50%      { outline-color: transparent; }
 }
 
-.lesson-card:hover {
-  border-width: 2px;
-  border-color: #f5c518 !important;
-  margin: 0.5px;
-  z-index: 3;
+@media (hover: hover) {
+  .lesson-card:hover {
+    border-width: 2px;
+    border-color: #f5c518 !important;
+    margin: 0.5px;
+    z-index: 3;
+  }
 }
 
 .lesson-card.lesson-card-hover {
@@ -4926,5 +4930,108 @@ input, textarea, select {
   .teacher-info {
     flex: 1 1 calc(100% - 60px);
     min-width: 0;
+  }
+}
+
+/* ===== TOUCH / MOBILE GRID INTERACTIONS ===== */
+
+/* Allow native scroll on grids but disable pinch-zoom (interferes with long-press) */
+#schedule-grid,
+#recurring-grid {
+  touch-action: pan-x pan-y;
+}
+
+/* Suppress system selection/callout on cards & cells during touch */
+.lesson-card,
+.grid-cell {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Z-cycle button on the topmost card of an overlap stack (mobile + desktop) */
+.lc-zcycle {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 24px;
+  height: 24px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0.55;
+  z-index: 2;
+  font-family: var(--font);
+}
+.lc-zcycle:hover,
+.lc-zcycle:active {
+  opacity: 1;
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* Touch tooltip auto-dismiss appearance (slight emphasis vs hover tooltip) */
+.lesson-tooltip-touch {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+/* Mobile-only adjustments: replace corner ⠿ with horizontal top band */
+@media (max-width: 600px) {
+  .lc-drag-handle {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: auto;
+    width: auto;
+    height: 14px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0;       /* hides the ⠿ glyph */
+    background: rgba(0, 0, 0, 0.35);
+    color: inherit;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    cursor: grab;
+    z-index: 2;
+    opacity: 0.85;
+  }
+  [data-theme="light"] .lc-drag-handle {
+    background: rgba(0, 0, 0, 0.25);
+  }
+  /* Horizontal bar inside band — the visible handle marker */
+  .lc-drag-handle::before {
+    content: '';
+    display: block;
+    width: 28px;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.9);
+  }
+  /* Always visible (no hover) */
+  .lesson-card .lc-drag-handle {
+    opacity: 0.85;
+  }
+  /* Slight visual feedback when card is in active touch-move */
+  .lesson-card-dragging {
+    opacity: 0.55;
+  }
+
+  /* Z-cycle button slightly larger on mobile for finger tap */
+  .lc-zcycle {
+    width: 28px;
+    height: 28px;
+    font-size: 16px;
   }
 }

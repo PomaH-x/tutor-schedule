@@ -17,6 +17,12 @@ let recPendingClick = null;
 let recDurationLabel = null;
 let recTooltip = null;
 
+// Touch gesture state (mobile) — mirrors schedule.js
+let recTouchGesture = null;
+let recLastTouchTime = 0;
+let recTouchTooltipTimer = null;
+function recIsShortlyAfterTouch() { return Date.now() - recLastTouchTime < 600; }
+
 async function loadRecurringLessons() {
   // Everyone (admin + teacher) sees ALL recurring lessons — needed for conflict prevention
   const { data, error } = await db.from('recurring_lessons')
@@ -181,6 +187,7 @@ function renderRecurringLessons() {
     });
   });
   if (typeof applyLockVisuals === 'function') applyLockVisuals();
+  if (typeof decorateZCycleButtons === 'function') decorateZCycleButtons('#recurring-grid');
 }
 
 // ===== RECURRING GRID EVENTS =====
@@ -204,12 +211,19 @@ function initRecurringGridEvents(grid) {
     removeRecTooltip();
     clearRecDragHighlight();
   });
+  // Touch (mobile)
+  grid.addEventListener('pointerdown', onRecGridPointerDown);
+  grid.addEventListener('pointermove', onRecGridPointerMove);
+  grid.addEventListener('pointerup', onRecGridPointerUp);
+  grid.addEventListener('pointercancel', onRecGridPointerCancel);
+  grid.addEventListener('touchmove', onRecGridTouchMove, { passive: false });
 }
 
 function onRecGridContextMenu(e) {
+  e.preventDefault();
+  if (recIsShortlyAfterTouch()) return;
   const card = e.target.closest('.lesson-card');
   if (!card) return;
-  e.preventDefault();
   const col = card.style.gridColumn;
   const allCards = [...document.querySelectorAll('#recurring-grid .lesson-card')].filter(c => c.style.gridColumn === col);
   if (allCards.length <= 1) return;
@@ -229,6 +243,7 @@ function onRecGridContextMenu(e) {
 
 function onRecGridMouseDown(e) {
   if (e.button === 2) return;
+  if (recIsShortlyAfterTouch()) return;
   if (state.profile.role === 'student') return;
 
   const dragHandle = e.target.closest('.lc-drag-handle');
@@ -258,6 +273,7 @@ function onRecGridMouseDown(e) {
 }
 
 function onRecGridMouseMove(e) {
+  if (recIsShortlyAfterTouch()) return;
   const grid = document.getElementById('recurring-grid');
 
   // Student drag — highlight target cells with conflict awareness
@@ -328,6 +344,7 @@ function onRecGridMouseMove(e) {
 }
 
 async function onRecGridMouseUp(e) {
+  if (recIsShortlyAfterTouch()) return;
   // Student drag (started from a lesson modal, modal was closed, banner shown)
   if (studentDragState) {
     const card = e.target.closest('.lesson-card');
@@ -393,6 +410,209 @@ async function onRecGridMouseUp(e) {
     }
     openRecurringCreateModal({ day: recSelStart.day, room: recSelStart.room, slotFrom: sf, slotTo: st });
   }
+}
+
+// ===== TOUCH GESTURES for recurring grid (mobile) =====
+// Same logic as schedule.js but without next-week transfer.
+function onRecGridPointerDown(e) {
+  if (e.pointerType !== 'touch') return;
+  recLastTouchTime = Date.now();
+  if (state.profile.role === 'student') return;
+
+  // Student-from-modal placing → tap-to-place
+  if (studentDragState) {
+    const cardEl = e.target.closest('.lesson-card');
+    if (cardEl) { e.preventDefault(); hidePlacingBanner(); placeStudentOnRecurringLesson(cardEl.dataset.lessonId); return; }
+    const cellEl = e.target.closest('.grid-cell');
+    if (cellEl) { e.preventDefault(); hidePlacingBanner(); placeStudentOnRecurringCell(+cellEl.dataset.day, +cellEl.dataset.room, +cellEl.dataset.slot); return; }
+    return;
+  }
+
+  const zBtn = e.target.closest('.lc-zcycle');
+  if (zBtn) { e.preventDefault(); cycleZForCard(zBtn.closest('.lesson-card')); return; }
+
+  const card = e.target.closest('.lesson-card');
+  const cell = e.target.closest('.grid-cell');
+  if (!card && !cell) return;
+  const handleHit = !!e.target.closest('.lc-drag-handle');
+
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+
+  recTouchGesture = {
+    pointerId: e.pointerId,
+    startX: e.clientX, startY: e.clientY,
+    card, cell, handleHit,
+    longPress: false, mode: null, timer: null, tooltipTimer: null
+  };
+  recTouchGesture.timer = setTimeout(onRecTouchLongPress, 450);
+}
+
+function onRecTouchLongPress() {
+  const g = recTouchGesture; if (!g) return;
+  g.longPress = true;
+  if (navigator.vibrate) { try { navigator.vibrate(20); } catch (_) {} }
+
+  if (g.card) {
+    const lesson = recurringLessons.find(l => l.id === g.card.dataset.lessonId);
+    if (!lesson) { recTouchGesture = null; return; }
+    if (g.handleHit) {
+      if (state.profile.role !== 'admin' && lesson.teacher_id !== state.user.id) {
+        showToast('Нельзя перемещать чужие занятия', 'error');
+        recTouchGesture = null; return;
+      }
+      if (typeof checkLockedAndToast === 'function' && checkLockedAndToast('rec:' + lesson.id)) {
+        recTouchGesture = null; return;
+      }
+      if (typeof acquireLock === 'function') acquireLock('rec:' + lesson.id);
+      const { ss, es } = recLessonSlots(lesson);
+      recDragState = { lesson, slotLength: es - ss, lockKey: 'rec:' + lesson.id };
+      recDragStarted = true;
+      g.mode = 'move';
+      const grid = document.getElementById('recurring-grid');
+      grid.classList.add('grid-dragging');
+      g.card.classList.add('lesson-card-dragging');
+    } else {
+      g.mode = 'tooltip';
+      showRecLessonTooltipForCard(g.card);
+      if (recTouchTooltipTimer) clearTimeout(recTouchTooltipTimer);
+      recTouchTooltipTimer = setTimeout(() => { clearRecLessonTooltip(); recTouchTooltipTimer = null; }, 3000);
+    }
+  } else if (g.cell) {
+    g.mode = 'select';
+    recSelecting = true;
+    recSelStart = { day: +g.cell.dataset.day, room: +g.cell.dataset.room, slot: +g.cell.dataset.slot };
+    recSelEnd = { ...recSelStart };
+    updateRecSelection();
+    removeRecTooltip();
+  }
+}
+
+function onRecGridPointerMove(e) {
+  if (e.pointerType !== 'touch') return;
+  const g = recTouchGesture; if (!g || g.pointerId !== e.pointerId) return;
+
+  if (!g.longPress) {
+    const dx = e.clientX - g.startX, dy = e.clientY - g.startY;
+    if (Math.sqrt(dx * dx + dy * dy) > 10) {
+      clearTimeout(g.timer); recTouchGesture = null;
+    }
+    return;
+  }
+
+  if (g.mode === 'select') {
+    const cell = findRecCellAt(e.clientX, e.clientY);
+    if (cell && +cell.dataset.day === recSelStart.day && +cell.dataset.room === recSelStart.room) {
+      recSelEnd = { day: +cell.dataset.day, room: +cell.dataset.room, slot: +cell.dataset.slot };
+      updateRecSelection();
+    }
+  } else if (g.mode === 'move') {
+    const grid = document.getElementById('recurring-grid');
+    clearRecDragHighlight();
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const cell = el?.closest?.('.grid-cell');
+    if (cell) {
+      const td = +cell.dataset.day, tr = +cell.dataset.room, ts = +cell.dataset.slot;
+      const end = ts + recDragState.slotLength;
+      if (end <= TOTAL_SLOTS) {
+        const conflict = hasRecConflict(td, tr, ts, end, recDragState.lesson.id, recDragState.lesson.teacher_id);
+        for (let s = ts; s < end; s++) {
+          const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
+          if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
+        }
+      }
+    }
+  }
+}
+
+function onRecGridTouchMove(e) {
+  if (recTouchGesture && recTouchGesture.longPress && (recTouchGesture.mode === 'select' || recTouchGesture.mode === 'move')) {
+    e.preventDefault();
+  }
+}
+
+async function onRecGridPointerUp(e) {
+  if (e.pointerType !== 'touch') return;
+  const g = recTouchGesture; if (!g || g.pointerId !== e.pointerId) return;
+  clearTimeout(g.timer);
+  recLastTouchTime = Date.now();
+
+  if (!g.longPress) {
+    if (g.card) {
+      e.preventDefault();
+      const lesson = recurringLessons.find(l => l.id === g.card.dataset.lessonId);
+      if (lesson) openRecurringEditModal(lesson);
+    }
+    recTouchGesture = null;
+    return;
+  }
+
+  if (g.mode === 'select') {
+    recSelecting = false; clearRecSelection();
+    if (!recSelStart) { recTouchGesture = null; return; }
+    const sf = Math.min(recSelStart.slot, recSelEnd.slot);
+    const st = Math.max(recSelStart.slot, recSelEnd.slot) + 1;
+    const ownTid = state.profile.role === 'admin' ? null : state.user.id;
+    if (hasRecRoomConflict(recSelStart.day, recSelStart.room, sf, st, null, ownTid)) {
+      showToast('Кабинет уже занят в это время', 'error');
+      recTouchGesture = null; return;
+    }
+    if (ownTid && hasRecTeacherDiffRoomConflict(recSelStart.day, recSelStart.room, sf, st, ownTid, null)) {
+      showToast('У вас уже есть занятие в это время', 'error');
+      recTouchGesture = null; return;
+    }
+    openRecurringCreateModal({ day: recSelStart.day, room: recSelStart.room, slotFrom: sf, slotTo: st });
+  } else if (g.mode === 'move') {
+    clearRecDragHighlight();
+    g.card?.classList.remove('lesson-card-dragging');
+    document.getElementById('recurring-grid')?.classList.remove('grid-dragging');
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const cell = el?.closest?.('.grid-cell');
+    if (cell) await finishRecDrag(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+    else { clearRecDragState(); recDragStarted = false; }
+  }
+  recTouchGesture = null;
+}
+
+function onRecGridPointerCancel(e) {
+  if (e.pointerType !== 'touch') return;
+  const g = recTouchGesture; if (!g) return;
+  clearTimeout(g.timer);
+  if (g.mode === 'select') {
+    recSelecting = false; recSelStart = null; recSelEnd = null; clearRecSelection();
+  } else if (g.mode === 'move') {
+    clearRecDragHighlight();
+    g.card?.classList.remove('lesson-card-dragging');
+    document.getElementById('recurring-grid')?.classList.remove('grid-dragging');
+    clearRecDragState(); recDragStarted = false;
+  } else if (g.mode === 'tooltip') {
+    if (recTouchTooltipTimer) { clearTimeout(recTouchTooltipTimer); recTouchTooltipTimer = null; }
+    clearRecLessonTooltip();
+  }
+  recTouchGesture = null;
+}
+
+function showRecLessonTooltipForCard(card) {
+  const lesson = recurringLessons.find(l => l.id === card.dataset.lessonId);
+  if (!lesson) return;
+  clearRecLessonTooltip();
+  const names = (lesson.recurring_lesson_students || [])
+    .filter(s => s.student)
+    .map(s => `${s.student.first_name} ${s.student.last_name}`);
+  if (names.length === 0) return;
+  recLessonTooltip = document.createElement('div');
+  recLessonTooltip.className = 'lesson-tooltip lesson-tooltip-touch';
+  recLessonTooltip.innerHTML = names.join('<br>');
+  document.body.appendChild(recLessonTooltip);
+  const rect = card.getBoundingClientRect();
+  const tw = recLessonTooltip.offsetWidth, th = recLessonTooltip.offsetHeight;
+  let left = rect.right + 8;
+  if (left + tw > window.innerWidth - 16) left = rect.left - tw - 8;
+  if (left < 8) left = 8;
+  let top = rect.top;
+  if (top + th > window.innerHeight - 16) top = window.innerHeight - th - 16;
+  if (top < 8) top = 8;
+  recLessonTooltip.style.left = `${left}px`;
+  recLessonTooltip.style.top = `${top}px`;
 }
 
 let recLessonTooltip = null;

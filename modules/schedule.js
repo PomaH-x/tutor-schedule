@@ -9,6 +9,15 @@ const SLOT_MINUTES = 30;
 const TOTAL_SLOTS = (END_HOUR - START_HOUR) * 2;
 const DRAG_THRESHOLD = 5;
 
+// Touch gesture support (mobile)
+const TOUCH_LONG_PRESS_MS = 450;
+const TOUCH_MOVE_THRESHOLD = 10;
+const TOUCH_TOOLTIP_MS = 3000;
+let touchGesture = null;
+let lastTouchTime = 0;
+let touchTooltipTimer = null;
+function isShortlyAfterTouch() { return Date.now() - lastTouchTime < 600; }
+
 let selecting = false;
 let selStart = null;
 let selEnd = null;
@@ -344,6 +353,7 @@ function renderLessons() {
     });
   });
   if (typeof applyLockVisuals === 'function') applyLockVisuals();
+  decorateZCycleButtons('#schedule-grid');
 }
 
 // ===== GRID INTERACTIONS =====
@@ -352,12 +362,20 @@ function initGridInteractions(grid) {
   grid.addEventListener('mousemove', onGridMouseMove);
   grid.addEventListener('mouseup', onGridMouseUp);
   grid.addEventListener('contextmenu', onGridContextMenu);
+  // Touch (mobile) — pointer events branch on pointerType==='touch'
+  grid.addEventListener('pointerdown', onGridPointerDown);
+  grid.addEventListener('pointermove', onGridPointerMove);
+  grid.addEventListener('pointerup', onGridPointerUp);
+  grid.addEventListener('pointercancel', onGridPointerCancel);
+  grid.addEventListener('touchmove', onGridTouchMove, { passive: false });
 }
 
 function onGridContextMenu(e) {
+  // Always prevent native menu on grid (especially for touch long-press on Android)
+  e.preventDefault();
+  if (isShortlyAfterTouch()) return;
   const card = e.target.closest('.lesson-card');
   if (!card) return;
-  e.preventDefault();
 
   const col = card.style.gridColumn;
   const allCards = [...document.querySelectorAll('.lesson-card')].filter(c => c.style.gridColumn === col);
@@ -392,6 +410,7 @@ function findCellAt(x, y, grid) {
 
 function onGridMouseDown(e) {
   if (e.button === 2) return;
+  if (isShortlyAfterTouch()) return;
   if (state.profile.role === 'student') return;
 
   // Placing mode
@@ -447,6 +466,7 @@ function onGridMouseDown(e) {
 }
 
 function onGridMouseMove(e) {
+  if (isShortlyAfterTouch()) return;
   const grid = document.getElementById('schedule-grid');
 
   // Pending click → check if it becomes a selection
@@ -567,6 +587,7 @@ function onGridMouseMove(e) {
 }
 
 function onGridMouseUp(e) {
+  if (isShortlyAfterTouch()) return;
   // Pending click → it was a click (not drag) → open edit if on card
   if (pendingClick) {
     const pc = pendingClick;
@@ -661,6 +682,355 @@ function addTimeRangeHighlight(grid, slotFrom, slotToInclusive) {
   }
 }
 
+// ===== TOUCH GESTURES (mobile) =====
+// On touch, we use long-press + drag instead of drag-handle drag.
+// Tap on card = edit modal. Long-press on .lc-drag-handle = move.
+// Long-press on card body = students tooltip (3s). Long-press on empty cell = range-select.
+function isInsideExpandedRect(x, y, r, pct) {
+  const xp = (r.right - r.left) * pct / 2;
+  const yp = (r.bottom - r.top) * pct / 2;
+  return x >= r.left - xp && x <= r.right + xp && y >= r.top - yp && y <= r.bottom + yp;
+}
+
+function onGridPointerDown(e) {
+  if (e.pointerType !== 'touch') return;
+  lastTouchTime = Date.now();
+  if (state.profile.role === 'student') return;
+
+  // Student-move (touch): tap-to-place
+  if (studentDragState) {
+    const cardEl = e.target.closest('.lesson-card');
+    const cellEl = e.target.closest('.grid-cell');
+    if (cardEl) { e.preventDefault(); hidePlacingBanner(); placeStudentOnLesson(cardEl.dataset.lessonId); return; }
+    if (cellEl) { e.preventDefault(); hidePlacingBanner(); placeStudentOnCell(+cellEl.dataset.day, +cellEl.dataset.room, +cellEl.dataset.slot); return; }
+    return;
+  }
+
+  // Placing mode: tap to place (delegate to mouse-handler placing logic)
+  if (state.placingLesson || state.placingStudent || state.placingTruant) {
+    const cell = e.target.closest('.grid-cell');
+    const card = e.target.closest('.lesson-card');
+    if (card && (state.placingStudent || state.placingTruant)) {
+      e.preventDefault();
+      if (state.placingStudent) placeTransferredStudentOnLesson(card.dataset.lessonId);
+      else placeTruantOnLesson(card.dataset.lessonId);
+    } else if (cell) {
+      e.preventDefault();
+      if (state.placingLesson) placeTransferredLesson(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+      else if (state.placingStudent) placeTransferredStudent(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+      else placeTruantOnCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+    }
+    return;
+  }
+
+  // Z-cycle button — tap cycles z-order, never starts long-press flow
+  const zBtn = e.target.closest('.lc-zcycle');
+  if (zBtn) {
+    e.preventDefault();
+    cycleZForCard(zBtn.closest('.lesson-card'));
+    return;
+  }
+
+  const card = e.target.closest('.lesson-card');
+  const cell = e.target.closest('.grid-cell');
+  if (!card && !cell) return;
+
+  const handleHit = !!e.target.closest('.lc-drag-handle');
+
+  // Capture pointer to keep receiving events even if finger moves outside grid
+  try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+
+  touchGesture = {
+    pointerId: e.pointerId,
+    startX: e.clientX, startY: e.clientY,
+    card, cell, handleHit,
+    longPress: false,
+    mode: null,        // 'select' | 'move' | 'tooltip'
+    timer: null,
+    tooltipTimer: null
+  };
+  touchGesture.timer = setTimeout(onTouchLongPress, TOUCH_LONG_PRESS_MS);
+}
+
+function onTouchLongPress() {
+  const g = touchGesture; if (!g) return;
+  g.longPress = true;
+  if (navigator.vibrate) { try { navigator.vibrate(20); } catch (_) {} }
+
+  if (g.card) {
+    const lesson = state.lessons.find(l => l.id === g.card.dataset.lessonId);
+    if (!lesson) { touchGesture = null; return; }
+
+    if (g.handleHit) {
+      // Start move
+      if (state.profile.role !== 'admin' && lesson.teacher_id !== state.user.id) {
+        showToast('Нельзя перемещать чужие занятия', 'error');
+        touchGesture = null; return;
+      }
+      if (typeof checkLockedAndToast === 'function' && checkLockedAndToast('lesson:' + lesson.id)) {
+        touchGesture = null; return;
+      }
+      if (typeof acquireLock === 'function') acquireLock('lesson:' + lesson.id);
+      const st = new Date(lesson.start_time); const et = new Date(lesson.end_time);
+      const ss = (st.getHours() * 60 + st.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+      const es = (et.getHours() * 60 + et.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+      dragState = { lesson, slotLength: es - ss, startSlot: ss, lockKey: 'lesson:' + lesson.id };
+      dragStarted = true;
+      g.mode = 'move';
+      const grid = document.getElementById('schedule-grid');
+      grid.classList.add('grid-dragging');
+      g.card.classList.add('lesson-card-dragging');
+    } else {
+      // Show students tooltip
+      g.mode = 'tooltip';
+      showLessonTooltipForCard(g.card);
+      if (touchTooltipTimer) clearTimeout(touchTooltipTimer);
+      touchTooltipTimer = setTimeout(() => { clearLessonTooltip(); touchTooltipTimer = null; }, TOUCH_TOOLTIP_MS);
+    }
+  } else if (g.cell) {
+    // Range-select start
+    g.mode = 'select';
+    selecting = true;
+    selStart = { day: +g.cell.dataset.day, room: +g.cell.dataset.room, slot: +g.cell.dataset.slot };
+    selEnd = { ...selStart };
+    updateSelectionHighlight();
+    removeCellTooltip();
+  }
+}
+
+function onGridPointerMove(e) {
+  if (e.pointerType !== 'touch') return;
+  const g = touchGesture; if (!g || g.pointerId !== e.pointerId) return;
+
+  if (!g.longPress) {
+    const dx = e.clientX - g.startX, dy = e.clientY - g.startY;
+    if (Math.sqrt(dx * dx + dy * dy) > TOUCH_MOVE_THRESHOLD) {
+      // User is scrolling — abandon long-press
+      clearTimeout(g.timer);
+      touchGesture = null;
+    }
+    return;
+  }
+
+  if (g.mode === 'select') {
+    const grid = document.getElementById('schedule-grid');
+    const cell = findCellAt(e.clientX, e.clientY, grid);
+    if (cell && +cell.dataset.day === selStart.day && +cell.dataset.room === selStart.room) {
+      selEnd = { day: +cell.dataset.day, room: +cell.dataset.room, slot: +cell.dataset.slot };
+      updateSelectionHighlight();
+    }
+  } else if (g.mode === 'move') {
+    const grid = document.getElementById('schedule-grid');
+    clearDragHighlight();
+    document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
+
+    const nwTab = getNextWeekTab();
+    if (nwTab && isInsideExpandedRect(e.clientX, e.clientY, nwTab.getBoundingClientRect(), 0.3)) {
+      nwTab.classList.add('week-tab-drop');
+    }
+
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const cell = el?.closest?.('.grid-cell');
+    if (cell) {
+      const td = +cell.dataset.day, tr = +cell.dataset.room, ts = +cell.dataset.slot;
+      const end = ts + dragState.slotLength;
+      if (end <= TOTAL_SLOTS) {
+        const conflict = hasAnyConflict(td, tr, ts, end, dragState.lesson.id, dragState.lesson.teacher_id);
+        for (let s = ts; s < end; s++) {
+          const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
+          if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
+        }
+        addTimeRangeHighlight(grid, ts, end);
+      }
+    }
+  }
+}
+
+function onGridTouchMove(e) {
+  // Block native scroll while in an active long-press gesture (so finger drag drives our UI, not page scroll)
+  if (touchGesture && touchGesture.longPress && (touchGesture.mode === 'select' || touchGesture.mode === 'move')) {
+    e.preventDefault();
+  }
+}
+
+function onGridPointerUp(e) {
+  if (e.pointerType !== 'touch') return;
+  const g = touchGesture; if (!g || g.pointerId !== e.pointerId) return;
+  clearTimeout(g.timer);
+  lastTouchTime = Date.now();
+
+  if (!g.longPress) {
+    // Tap
+    if (g.card) {
+      e.preventDefault();
+      const lesson = state.lessons.find(l => l.id === g.card.dataset.lessonId);
+      if (lesson) {
+        if (state.profile.role !== 'admin' && lesson.teacher_id !== state.user.id) {
+          showToast('Нельзя редактировать чужие занятия', 'error');
+        } else {
+          openEditLessonModal(lesson);
+        }
+      }
+    }
+    // Tap on empty cell does nothing (no 30-min tariff)
+    touchGesture = null;
+    return;
+  }
+
+  if (g.mode === 'select') {
+    selecting = false; clearSelectionHighlight(); removeDurationLabel();
+    if (!selStart) { touchGesture = null; return; }
+    const sf = Math.min(selStart.slot, selEnd.slot), st = Math.max(selStart.slot, selEnd.slot) + 1;
+    const durationMin = (st - sf) * SLOT_MINUTES;
+    if (!hasAnyPricingForDuration(durationMin)) {
+      showToast(`Нет тарифов для ${durationMin} мин`, 'error');
+      selStart = null; selEnd = null; touchGesture = null; return;
+    }
+    if (state.profile.role !== 'admin') {
+      if (hasLocalConflict(selStart.day, selStart.room, sf, st, null, state.user.id)) {
+        showToast('Кабинет уже занят в это время', 'error');
+        selStart = null; selEnd = null; touchGesture = null; return;
+      }
+      if (hasTeacherDiffRoomConflict(selStart.day, selStart.room, sf, st, state.user.id, null)) {
+        showToast('У вас уже есть занятие в это время', 'error');
+        selStart = null; selEnd = null; touchGesture = null; return;
+      }
+    }
+    openLessonModal({ day: selStart.day, room: selStart.room, slotFrom: sf, slotTo: st });
+  } else if (g.mode === 'move') {
+    document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
+    const nwTab = getNextWeekTab();
+    if (nwTab && isInsideExpandedRect(e.clientX, e.clientY, nwTab.getBoundingClientRect(), 0.3)) {
+      startNextWeekTransfer(dragState.lesson);
+      g.card?.classList.remove('lesson-card-dragging');
+      document.getElementById('schedule-grid')?.classList.remove('grid-dragging');
+      clearDragState(); dragStarted = false;
+      touchGesture = null; return;
+    }
+    clearDragHighlight();
+    g.card?.classList.remove('lesson-card-dragging');
+    document.getElementById('schedule-grid')?.classList.remove('grid-dragging');
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const cell = el?.closest?.('.grid-cell');
+    if (cell) finishDrag(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+    else { clearDragState(); dragStarted = false; }
+  }
+  // tooltip mode: leave tooltipTimer running (3s auto-dismiss)
+  touchGesture = null;
+}
+
+function onGridPointerCancel(e) {
+  if (e.pointerType !== 'touch') return;
+  const g = touchGesture; if (!g) return;
+  clearTimeout(g.timer);
+  if (g.mode === 'select') {
+    selecting = false; selStart = null; selEnd = null;
+    clearSelectionHighlight(); removeDurationLabel();
+  } else if (g.mode === 'move') {
+    clearDragHighlight();
+    g.card?.classList.remove('lesson-card-dragging');
+    document.getElementById('schedule-grid')?.classList.remove('grid-dragging');
+    clearDragState(); dragStarted = false;
+  } else if (g.mode === 'tooltip') {
+    if (touchTooltipTimer) { clearTimeout(touchTooltipTimer); touchTooltipTimer = null; }
+    clearLessonTooltip();
+  }
+  touchGesture = null;
+}
+
+// Show tooltip with student list for a given lesson card (for touch long-press).
+function showLessonTooltipForCard(card) {
+  const lesson = state.lessons.find(l => l.id === card.dataset.lessonId);
+  if (!lesson) return;
+  clearLessonTooltip();
+  const names = (lesson.lesson_students || [])
+    .filter(s => s.student)
+    .map(s => `${s.student.first_name} ${s.student.last_name}`);
+  if (names.length === 0) return;
+  lessonTooltip = document.createElement('div');
+  lessonTooltip.className = 'lesson-tooltip lesson-tooltip-touch';
+  lessonTooltip.innerHTML = names.join('<br>');
+  document.body.appendChild(lessonTooltip);
+  const rect = card.getBoundingClientRect();
+  const tw = lessonTooltip.offsetWidth, th = lessonTooltip.offsetHeight;
+  let left = rect.right + 8;
+  if (left + tw > window.innerWidth - 16) left = rect.left - tw - 8;
+  if (left < 8) left = 8;
+  let top = rect.top;
+  if (top + th > window.innerHeight - 16) top = window.innerHeight - th - 16;
+  if (top < 8) top = 8;
+  lessonTooltip.style.left = `${left}px`;
+  lessonTooltip.style.top = `${top}px`;
+}
+
+// ===== Z-CYCLE FOR OVERLAPPING CARDS =====
+// Cycles z-order in a stack of overlapping cards. Picks "top card" deterministically.
+function cycleZForCard(card) {
+  if (!card) return;
+  const isRecurring = !!card.closest('#recurring-grid');
+  const gridSel = isRecurring ? '#recurring-grid' : '#schedule-grid';
+  const col = card.style.gridColumn;
+  const allCards = [...document.querySelectorAll(`${gridSel} .lesson-card`)].filter(c => c.style.gridColumn === col);
+  if (allCards.length <= 1) return;
+  const cs = parseInt(card.style.gridRow.split('/')[0].trim());
+  const ce = parseInt(card.style.gridRow.split('/')[1].trim());
+  const overlapping = allCards.filter(c => {
+    const s = parseInt(c.style.gridRow.split('/')[0].trim());
+    const e2 = parseInt(c.style.gridRow.split('/')[1].trim());
+    return s < ce && e2 > cs;
+  });
+  if (overlapping.length <= 1) return;
+  const sorted = overlapping.sort((a, b) => (parseInt(b.style.zIndex) || 2) - (parseInt(a.style.zIndex) || 2));
+  const zValues = sorted.map(c => parseInt(c.style.zIndex) || 2);
+  const last = zValues.shift(); zValues.push(last);
+  sorted.forEach((c, i) => { c.style.zIndex = zValues[i]; });
+  decorateZCycleButtons(gridSel);
+}
+
+// After cards are rendered, add ↕ button to the topmost card of every overlap group.
+function decorateZCycleButtons(gridSel) {
+  const grid = document.querySelector(gridSel || '#schedule-grid');
+  if (!grid) return;
+  grid.querySelectorAll('.lc-zcycle').forEach(b => b.remove());
+  // Group by column
+  const byCol = {};
+  grid.querySelectorAll('.lesson-card').forEach(c => {
+    const col = c.style.gridColumn;
+    if (!byCol[col]) byCol[col] = [];
+    byCol[col].push(c);
+  });
+  Object.values(byCol).forEach(cards => {
+    if (cards.length < 2) return;
+    // Find overlap groups
+    cards.forEach(card => {
+      const cs = parseInt(card.style.gridRow.split('/')[0].trim());
+      const ce = parseInt(card.style.gridRow.split('/')[1].trim());
+      const overlapping = cards.filter(c => {
+        if (c === card) return true;
+        const s = parseInt(c.style.gridRow.split('/')[0].trim());
+        const e2 = parseInt(c.style.gridRow.split('/')[1].trim());
+        return s < ce && e2 > cs;
+      });
+      if (overlapping.length <= 1) return;
+      // Add ↕ button only to the topmost (highest zIndex) of the group
+      const top = overlapping.reduce((a, b) =>
+        (parseInt(a.style.zIndex) || 2) >= (parseInt(b.style.zIndex) || 2) ? a : b);
+      if (top === card && !card.querySelector('.lc-zcycle')) {
+        const btn = document.createElement('button');
+        btn.className = 'lc-zcycle';
+        btn.type = 'button';
+        btn.title = 'Сменить верхнюю карточку';
+        btn.innerHTML = '↕';
+        // Stop propagation on all input events so it doesn't trigger card-edit / drag / long-press
+        btn.addEventListener('mousedown', (ev) => ev.stopPropagation());
+        btn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+        btn.addEventListener('click', (ev) => { ev.stopPropagation(); cycleZForCard(card); });
+        card.appendChild(btn);
+      }
+    });
+  });
+}
+
 // ===== DRAG & DROP =====
 async function finishDrag(targetDay, targetRoom, targetSlot) {
   const lesson = dragState.lesson; const end = targetSlot + dragState.slotLength;
@@ -708,6 +1078,10 @@ function showPlacingBanner() {
     b.innerHTML = '<span>Выберите место для занятия</span><button id="btn-cancel-placing">Отмена</button>';
     document.getElementById('screen-schedule').insertBefore(b, document.getElementById('schedule-grid'));
     document.getElementById('btn-cancel-placing').addEventListener('click', cancelPlacing);
+  } else {
+    // Reset to default text in case a previous session customized it (e.g., touch student-move)
+    const span = b.querySelector('span');
+    if (span) span.textContent = 'Выберите место для занятия';
   }
   b.style.display = 'flex';
 }
@@ -716,6 +1090,7 @@ function hidePlacingBanner() { const b = document.getElementById('placing-banner
 function cancelPlacing() {
   const origOffset = state.placingLesson?.originalWeekOffset ?? state.placingStudent?.originalWeekOffset;
   state.placingLesson = null; state.placingStudent = null; state.placingTruant = null;
+  if (studentDragState) cancelStudentDrag();
   hidePlacingBanner(); clearDragHighlight();
   document.querySelectorAll('.lesson-card-drop-target, .grid-cell-available').forEach(c => c.classList.remove('lesson-card-drop-target', 'grid-cell-available'));
   if (origOffset !== undefined) {
@@ -1378,14 +1753,29 @@ function renderCurrentStudents() {
     });
     if (m.mode === 'edit' || m.mode === 'rec-edit') {
       ct.querySelectorAll('.cs-drag-handle').forEach(handle => {
-        handle.addEventListener('mousedown', (e) => {
+        handle.addEventListener('pointerdown', (e) => {
+          // Skip synthetic mouse events that may follow a touch
+          if (e.pointerType === 'mouse' && isShortlyAfterTouch()) return;
           e.preventDefault(); e.stopPropagation();
           const row = handle.closest('.current-student-row');
           const sid = row.dataset.studentId;
           const sd = allTeacherStudents.find(s => s.id === sid);
           if (!sd) return;
           const lessonSlots = m.slotTo - m.slotFrom;
-          startStudentDrag(sd, m.lessonId, m.teacherId, lessonSlots);
+          if (e.pointerType === 'touch') {
+            lastTouchTime = Date.now();
+            startStudentDrag(sd, m.lessonId, m.teacherId, lessonSlots);
+            // No follow-cursor banner on touch — show placing-banner with cancel instead
+            const dragBanner = document.getElementById('student-drag-banner');
+            if (dragBanner) dragBanner.style.display = 'none';
+            document.body.style.cursor = '';
+            showPlacingBanner();
+            const banner = document.getElementById('placing-banner');
+            const span = banner?.querySelector('span');
+            if (span) span.textContent = `Куда переносим ученика: ${sd.first_name} ${sd.last_name}`;
+          } else {
+            startStudentDrag(sd, m.lessonId, m.teacherId, lessonSlots);
+          }
         });
       });
     }
