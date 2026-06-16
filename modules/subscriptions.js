@@ -95,9 +95,9 @@ async function openSubscriptionActivation(studentId) {
       <div class="sub-act-option-body">
         <div class="sub-act-option-title">${hStr} · ${lessons} занятий</div>
         <div class="sub-act-option-meta">
-          <span>Стоимость: <b>${o.student_price} ₽</b></span>
-          <span>Преподавателю: <b>${o.teacher_profit} ₽</b></span>
-          <span>Центру: <b>${o.commission} ₽</b></span>
+          <span>Стоимость: <b>${o.student_price} ₽</b></span>
+          <span>Преподавателю: <b>${o.teacher_profit} ₽</b></span>
+          <span>Центру: <b>${o.commission} ₽</b></span>
           <span>Переносов: <b>${transfers}</b></span>
         </div>
       </div>
@@ -435,11 +435,11 @@ function renderSubscriptionPanelHTML(sub, studentId) {
       <div class="sub-panel-head">
         <span class="sub-badge sub-badge-refunded">Возврат оформлен</span>
         <span class="sub-panel-type">${total} занятий${durLabel ? ' · ' + durLabel : ''}</span>
-        <span class="sub-panel-amount">${sub.paid_amount} ₽ <span class="sub-refund-tag">после пересчёта</span></span>
+        <span class="sub-panel-amount">${sub.paid_amount} ₽ <span class="sub-refund-tag">после пересчёта</span></span>
         <button class="sub-panel-delete" id="btn-delete-sub" data-sub-id="${sub.id}" title="Удалить запись">✕</button>
       </div>
       <div class="sub-panel-meta">
-        <span>Закрыт с возвратом ${sub.refund_amount || 0} ₽ ученику</span>
+        <span>Закрыт с возвратом ${sub.refund_amount || 0} ₽ ученику</span>
         <span>Засчитано занятий: ${used}</span>
       </div>
       <div class="sub-empty-text" style="margin-top:8px">Можно активировать новый абонемент.</div>
@@ -453,7 +453,7 @@ function renderSubscriptionPanelHTML(sub, studentId) {
       <div class="sub-panel-head">
         <span class="sub-badge sub-badge-expired">Истёк</span>
         <span class="sub-panel-type">${total} занятий${durLabel ? ' · ' + durLabel : ''}</span>
-        <span class="sub-panel-amount">${sub.paid_amount} ₽</span>
+        <span class="sub-panel-amount">${sub.paid_amount} ₽</span>
         <button class="sub-panel-refund" id="btn-refund-sub" data-sub-id="${sub.id}" title="Закрыть с возвратом">⤺</button>
         <button class="sub-panel-delete" id="btn-delete-sub" data-sub-id="${sub.id}" title="Удалить абонемент">✕</button>
       </div>
@@ -473,7 +473,7 @@ function renderSubscriptionPanelHTML(sub, studentId) {
     <div class="sub-panel-head">
       <span class="sub-badge sub-badge-active">Абонемент</span>
       <span class="sub-panel-type">${total} занятий${durLabel ? ' · ' + durLabel : ''}</span>
-      <span class="sub-panel-amount">${sub.paid_amount} ₽</span>
+      <span class="sub-panel-amount">${sub.paid_amount} ₽</span>
       <button class="sub-panel-refund" id="btn-refund-sub" data-sub-id="${sub.id}" title="Закрыть с возвратом">⤺</button>
       <button class="sub-panel-delete" id="btn-delete-sub" data-sub-id="${sub.id}" title="Удалить абонемент">✕</button>
     </div>
@@ -546,7 +546,7 @@ async function openSubscriptionRefund(subscriptionId) {
     <div class="sub-refund-row"><span class="sub-refund-label">Ученик:</span><span class="sub-refund-value">${refundCtx.studentName}</span></div>
     <div class="sub-refund-row"><span class="sub-refund-label">Абонемент:</span><span class="sub-refund-value">${subFresh.total_lessons} занятий · ${hStr}${isOnline ? ' · онлайн' : ''}${isInd && !isOnline ? ' · индивидуальное' : ''}</span></div>
     <div class="sub-refund-row"><span class="sub-refund-label">Срок:</span><span class="sub-refund-value">${fmt(subFresh.start_date)} — ${fmt(subFresh.end_date)}</span></div>
-    <div class="sub-refund-row"><span class="sub-refund-label">Оплачено:</span><span class="sub-refund-value"><b>${subFresh.paid_amount} ₽</b></span></div>
+    <div class="sub-refund-row"><span class="sub-refund-label">Оплачено:</span><span class="sub-refund-value"><b>${subFresh.paid_amount} ₽</b></span></div>
   `;
 
   // Default used = current used_lessons. Cap at total_lessons.
@@ -601,20 +601,20 @@ function refreshRefundCalc() {
 
   const calc = document.getElementById('sub-refund-calc');
   const roundedNote = refund !== refundExact
-    ? `<div class="sub-refund-row sub-refund-row-sub"><span>округлено вверх до 50 ₽ (было ${refundExact} ₽)</span><span></span></div>`
+    ? `<div class="sub-refund-row sub-refund-row-sub"><span>округлено вверх до 50 ₽ (было ${refundExact} ₽)</span><span></span></div>`
     : '';
   calc.innerHTML = `
     <div class="sub-refund-section">
       <div class="sub-refund-section-title">Пересчёт по разовой цене</div>
-      <div class="sub-refund-row"><span>${used} × ${sp.student_price} ₽</span><span><b>${newPaidExact} ₽</b></span></div>
-      <div class="sub-refund-row sub-refund-row-sub"><span>├─ Преподавателю: ${used} × ${sp.teacher_profit}</span><span>${newTeacher} ₽</span></div>
-      <div class="sub-refund-row sub-refund-row-sub"><span>└─ Центру: ${used} × ${sp.commission}</span><span>${newCenter} ₽</span></div>
+      <div class="sub-refund-row"><span>${used} × ${sp.student_price} ₽</span><span><b>${newPaidExact} ₽</b></span></div>
+      <div class="sub-refund-row sub-refund-row-sub"><span>├─ Преподавателю: ${used} × ${sp.teacher_profit}</span><span>${newTeacher} ₽</span></div>
+      <div class="sub-refund-row sub-refund-row-sub"><span>└─ Центру: ${used} × ${sp.commission}</span><span>${newCenter} ₽</span></div>
     </div>
     <div class="sub-refund-section sub-refund-section-total">
-      <div class="sub-refund-row"><span class="sub-refund-label-strong">К возврату ученику</span><span class="sub-refund-amount-big">${refund} ₽</span></div>
+      <div class="sub-refund-row"><span class="sub-refund-label-strong">К возврату ученику</span><span class="sub-refund-amount-big">${refund} ₽</span></div>
       ${roundedNote}
-      <div class="sub-refund-row sub-refund-row-sub"><span>├─ Из доли преподавателя</span><span>${refundFromTeacher} ₽</span></div>
-      <div class="sub-refund-row sub-refund-row-sub"><span>└─ Из доли центра</span><span>${refundFromCenter} ₽</span></div>
+      <div class="sub-refund-row sub-refund-row-sub"><span>├─ Из доли преподавателя</span><span>${refundFromTeacher} ₽</span></div>
+      <div class="sub-refund-row sub-refund-row-sub"><span>└─ Из доли центра</span><span>${refundFromCenter} ₽</span></div>
     </div>
     ${refundExact < 0 ? '<div class="sub-refund-warning">Возврат отрицательный — ученик использовал больше слотов, чем мог. Проверьте число пройденных занятий.</div>' : ''}
   `;
@@ -646,7 +646,7 @@ async function confirmSubscriptionRefund() {
 
     invalidateSubscriptionCache(sub.student_id);
     closeSubscriptionRefund();
-    showToast(`Возврат оформлен: ${refund} ₽ ученику`, 'success');
+    showToast(`Возврат оформлен: ${refund} ₽ ученику`, 'success');
 
     if (typeof openStudentDetail === 'function') {
       const studentDetailEl = document.getElementById('student-detail-overlay');

@@ -484,7 +484,7 @@ async function openStudentDetail(studentId) {
       const mm = (d.getMonth()+1).toString().padStart(2,'0');
       const methodLabel = p.payment_method === 'cash' ? 'Наличными' : 'Переводом';
       html += `<div class="sd-payment-row">
-        <span class="sd-pay-info">${dd}.${mm} · ${p.amount} ₽ · ${methodLabel}</span>
+        <span class="sd-pay-info">${dd}.${mm} · ${p.amount} ₽ · ${methodLabel}</span>
         <div class="sd-pay-actions">
           <button class="btn-sm btn-primary" data-approve="${p.id}">Подтвердить</button>
           <button class="btn-sm btn-danger" data-reject="${p.id}">Отклонить</button>

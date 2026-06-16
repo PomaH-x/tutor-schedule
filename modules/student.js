@@ -223,7 +223,7 @@ async function renderStudentSchedule() {
   summaryEl.innerHTML = `
     <div class="student-stat"><span class="student-stat-num">${planned}</span><span class="student-stat-label">Запланировано</span></div>
     <div class="student-stat"><span class="student-stat-num">${completed}</span><span class="student-stat-label">Проведено</span></div>
-    <div class="student-stat"><span class="student-stat-num">${toPay} ₽</span><span class="student-stat-label">К оплате</span></div>
+    <div class="student-stat"><span class="student-stat-num">${toPay} ₽</span><span class="student-stat-label">К оплате</span></div>
     <div class="student-stat"><span class="student-stat-num">${attendance}%</span><span class="student-stat-label">Посещаемость</span></div>
   `;
 
@@ -327,7 +327,7 @@ async function renderStudentSchedule() {
         ${roomLine}
         <div class="student-card-row">
           <span class="student-card-label">Стоимость:</span>
-          <span class="student-card-value student-card-cost">${it.cost} ₽</span>
+          <span class="student-card-value student-card-cost">${it.cost} ₽</span>
         </div>
       </div>
       <div class="student-card-footer">
@@ -434,7 +434,7 @@ async function renderStudentHistory() {
       <td><span class="teacher-color-dot" style="background:${it.teacherColor}"></span>${it.teacherName}</td>
       <td>${roomStr}</td>
       <td>${statusHTML}</td>
-      <td>${it.cost} ₽</td>
+      <td>${it.cost} ₽</td>
       <td>${payHTML}</td>
     </tr>`;
   }).join('');
@@ -448,7 +448,7 @@ function openPaymentModal(lessonId, amount, teacherId) {
   pendingPaymentLessonId = lessonId;
   pendingPaymentAmount = amount;
   pendingPaymentTeacherId = teacherId;
-  document.getElementById('payment-amount').textContent = amount + ' ₽';
+  document.getElementById('payment-amount').textContent = amount + ' ₽';
   document.querySelectorAll('input[name="payment-method"]').forEach(r => r.checked = false);
   document.getElementById('payment-overlay').classList.add('active');
 }

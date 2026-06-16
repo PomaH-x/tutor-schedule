@@ -166,7 +166,7 @@ async function loadOnlineStudents() {
   list.innerHTML = onlineStudents.map(s => {
     const sel = onlineSelectedStudentId === s.id;
     return `<label class="lesson-student-row${sel ? ' checked' : ''}">
-      <span class="lesson-student-name">${s.first_name} ${s.last_name}<span class="lesson-online-badge">Онл.</span></span>
+      <span class="lesson-student-name">${s.first_name} ${s.last_name}</span>
       <input type="radio" name="online-student" class="lesson-checkbox" data-id="${s.id}" ${sel ? 'checked' : ''}>
     </label>`;
   }).join('') || '<div class="lesson-no-students">Нет онлайн-учеников</div>';

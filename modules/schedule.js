@@ -498,6 +498,7 @@ function onGridMouseMove(e) {
           const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
           if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
         }
+        addTimeRangeHighlight(grid, ts, end);
       }
     }
     return;
@@ -518,6 +519,7 @@ function onGridMouseMove(e) {
           const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
           if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
         }
+        addTimeRangeHighlight(grid, ts, end);
       }
     }
     // Also highlight if on a lesson card
@@ -546,6 +548,7 @@ function onGridMouseMove(e) {
           const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
           if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
         }
+        addTimeRangeHighlight(grid, ts, end);
       }
     }
     return;
@@ -646,6 +649,16 @@ function onGridMouseUp(e) {
 // ===== DRAG HIGHLIGHTS =====
 function clearDragHighlight() {
   document.querySelectorAll('.grid-cell-drop-ok, .grid-cell-conflict').forEach(c => c.classList.remove('grid-cell-drop-ok', 'grid-cell-conflict'));
+  document.querySelectorAll('.grid-time-active').forEach(t => t.classList.remove('grid-time-active'));
+}
+
+// Highlight the left-side time labels for slots [slotFrom..slotToInclusive].
+// Used during cell selection and during drag/placing for clarity of the time range.
+function addTimeRangeHighlight(grid, slotFrom, slotToInclusive) {
+  for (let s = slotFrom; s <= slotToInclusive; s++) {
+    const t = grid.querySelector(`.grid-time[data-slot="${s}"]`);
+    if (t) t.classList.add('grid-time-active');
+  }
 }
 
 // ===== DRAG & DROP =====
@@ -1136,6 +1149,8 @@ function updateSelectionHighlight() {
     const c = grid.querySelector(`.grid-cell[data-day="${selStart.day}"][data-room="${selStart.room}"][data-slot="${s}"]`);
     if (c) c.classList.add('grid-cell-selected');
   }
+  // Highlight time labels: from start slot to end-time slot (st+1) inclusive
+  addTimeRangeHighlight(grid, sf, st + 1);
   const last = grid.querySelector(`.grid-cell[data-day="${selStart.day}"][data-room="${selStart.room}"][data-slot="${st}"]`);
   if (last && count > 0) {
     durationLabel = document.createElement('div');
@@ -1148,7 +1163,10 @@ function updateSelectionHighlight() {
   }
 }
 
-function clearSelectionHighlight() { document.querySelectorAll('.grid-cell-selected').forEach(c => c.classList.remove('grid-cell-selected')); }
+function clearSelectionHighlight() {
+  document.querySelectorAll('.grid-cell-selected').forEach(c => c.classList.remove('grid-cell-selected'));
+  document.querySelectorAll('.grid-time-active').forEach(t => t.classList.remove('grid-time-active'));
+}
 function removeDurationLabel() { if (durationLabel) { durationLabel.remove(); durationLabel = null; } }
 
 // ===== LESSONS CRUD =====
@@ -1739,6 +1757,7 @@ function initSchedule() {
             const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
             if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
           }
+          addTimeRangeHighlight(grid, ts, end);
         }
       }
     }
@@ -1769,6 +1788,7 @@ function initSchedule() {
             const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
             if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
           }
+          addTimeRangeHighlight(grid, ts, end);
         }
       }
     }

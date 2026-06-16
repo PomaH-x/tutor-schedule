@@ -220,7 +220,7 @@ function renderTeachers() {
       </div>
       <div class="teacher-info">
         <span class="teacher-name">${t.full_name}</span>
-        <span class="teacher-role">${roleLabel[t.role] || t.role} · ${t.short_name || ''}</span>
+        <span class="teacher-role">${roleLabel[t.role] || t.role}</span>
       </div>
       <button class="btn-teacher-subjects" data-id="${t.id}" data-name="${t.full_name}" title="Предметы">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>

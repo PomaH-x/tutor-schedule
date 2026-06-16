@@ -147,7 +147,6 @@ input, textarea, select {
   color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
-  margin-bottom: 20px;
   padding: 4px 0;
   transition: color 0.15s;
 }
@@ -653,6 +652,13 @@ input, textarea, select {
   font-size: 10px;
   color: var(--text);
   font-weight: 500;
+  transition: background 0.1s, color 0.1s;
+}
+
+.grid-time-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .grid-cell {
@@ -1179,6 +1185,11 @@ input, textarea, select {
   font-size: 12px;
   color: white;
   font-weight: 700;
+}
+
+/* Override .form-group input { width: 100% } that would stretch these custom-styled boxes */
+.form-group .lesson-checkbox {
+  width: 18px;
 }
 
 .lesson-check-mark {
@@ -1887,14 +1898,6 @@ input, textarea, select {
 }
 
 @media (max-width: 520px) {
-  .truant-detail-row {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  .truant-detail-row .truant-actions {
-    width: 100%;
-    justify-content: flex-end;
-  }
   .truant-info {
     width: 100%;
   }
@@ -2436,6 +2439,7 @@ input, textarea, select {
 
   .students-controls {
     flex-direction: column;
+    align-items: stretch;
   }
 
   .profile-content {
@@ -2454,8 +2458,38 @@ input, textarea, select {
     display: none;
   }
   .btn-schedule-type {
-    padding: 6px 8px;
+    padding: 11px 11px;
     margin-left: 6px;
+    gap: 0;
+  }
+
+  /* Online "+ Добавить" button keeps text — needs its own padding/size */
+  .btn-online-add {
+    padding: 8px 14px;
+    font-size: 16px;
+  }
+
+  /* Profile: avatar + name/role row, telegram block on its own row below */
+  .profile-info {
+    flex-wrap: wrap;
+  }
+  .profile-telegram {
+    flex-basis: 100%;
+  }
+
+  /* Stack content in these blocks instead of side-by-side */
+  .sd-link-banner,
+  .sub-panel-empty {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  /* Copy-recurring button: hide text label, square icon-only */
+  .btn-copy-recurring .btn-label {
+    display: none;
+  }
+  .btn-copy-recurring {
+    padding: 13px 13px;
     gap: 0;
   }
 
@@ -4813,4 +4847,84 @@ input, textarea, select {
   font-size: 11px;
   color: var(--text-muted);
   line-height: 1.35;
+}
+/* ===== MOBILE FIXES (kept at file end to win source-order over later desktop rules) ===== */
+@media (max-width: 600px) {
+  /* Fix: align-items: center on these blocks is set later in the file and must be overridden here */
+  .students-controls,
+  .sd-link-banner,
+  .sub-panel-empty {
+    align-items: stretch;
+  }
+
+  /* Активировать абонемент — компактный размер как у Привязать аккаунт */
+  #btn-activate-sub {
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  /* Бейдж активного абонемента — на свою строку */
+  .sub-badge-active {
+    margin-right: 100%;
+  }
+
+  /* Уменьшаем .btn-primary до размера .btn-danger (Удалить) */
+  .btn-primary {
+    padding: 10px 18px;
+    font-size: 14px;
+  }
+
+  /* В форме закрытия абонемента с возвратом кнопки делаем ещё компактнее */
+  #subscription-refund-overlay .btn-primary,
+  #subscription-refund-overlay .btn-secondary {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  /* Активация абонемента: Предмет и Тип занятия — в столбик, по 1 в ряд */
+  .sub-act-info-grid {
+    grid-template-columns: 1fr;
+  }
+  /* Радио-кнопки выбора тарифа — скрыть (выделение остаётся через :has(input:checked)) */
+  .sub-act-option input[type=radio] {
+    display: none;
+  }
+
+  /* Статистика: панели выручка/прибыль/комиссия — компактнее, чтобы числа влезали */
+  .payroll-total {
+    padding: 10px;
+    gap: 6px;
+  }
+  .payroll-total .payroll-stat {
+    padding: 8px 6px;
+  }
+  .payroll-summary {
+    gap: 6px;
+  }
+  .payroll-summary .payroll-stat {
+    padding: 8px 6px;
+  }
+  .payroll-num {
+    font-size: 15px;
+  }
+  .payroll-label {
+    font-size: 10px;
+    letter-spacing: 0.3px;
+  }
+
+  /* Скрыть подписи «Отменено» / «Платная отмена» — статус виден по цвету фона строки */
+  .ps-cancel-status {
+    display: none;
+  }
+
+  /* Админ-панель — карточка преподавателя: цвет+имя/роль на первой строке,
+     остальные контролы (Предметы, Макс, ↑/↓, удалить) — на второй строке */
+  .teacher-card {
+    flex-wrap: wrap;
+  }
+  .teacher-info {
+    flex: 1 1 calc(100% - 60px);
+    min-width: 0;
+  }
 }

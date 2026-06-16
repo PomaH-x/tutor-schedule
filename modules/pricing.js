@@ -561,16 +561,16 @@ function renderPayrollHTML(isAdmin) {
         ${cancelBadge ? `<div class="payroll-teacher-header">${cancelBadge}</div>` : ''}`;
     }
     html += `<div class="payroll-summary">
-      <div class="payroll-stat"><span class="payroll-label">Выручка</span><span class="payroll-num">${data.revenue} ₽</span></div>
-      <div class="payroll-stat"><span class="payroll-label">Прибыль</span><span class="payroll-num payroll-num-profit">${data.profit} ₽</span></div>
-      <div class="payroll-stat"><span class="payroll-label">Комиссия</span><span class="payroll-num">${data.commission} ₽</span></div>
+      <div class="payroll-stat"><span class="payroll-label">Выручка</span><span class="payroll-num">${data.revenue} ₽</span></div>
+      <div class="payroll-stat"><span class="payroll-label">Прибыль</span><span class="payroll-num payroll-num-profit">${data.profit} ₽</span></div>
+      <div class="payroll-stat"><span class="payroll-label">Комиссия</span><span class="payroll-num">${data.commission} ₽</span></div>
     </div>`;
 
     // Breakdown row: one-off vs subscriptions
     if (data.subProfit > 0 || data.soldSubs.length > 0) {
       html += `<div class="payroll-breakdown">
-        <div class="payroll-breakdown-item"><span>С разовых: <b>${data.oneOffProfit} ₽</b></span></div>
-        <div class="payroll-breakdown-item"><span>С абонементов: <b>${data.subProfit} ₽</b></span></div>
+        <div class="payroll-breakdown-item"><span>С разовых: <b>${data.oneOffProfit} ₽</b></span></div>
+        <div class="payroll-breakdown-item"><span>С абонементов: <b>${data.subProfit} ₽</b></span></div>
       </div>`;
     }
 
@@ -584,7 +584,7 @@ function renderPayrollHTML(isAdmin) {
     });
     // 2. One-off conducted lessons
     oneOffStudents.forEach(s => {
-      html += `<div class="payroll-student"><span class="ps-name">${s.name}</span><span class="ps-count">${s.count} зан.</span><span class="ps-amount">${s.amount} ₽</span></div>`;
+      html += `<div class="payroll-student"><span class="ps-name">${s.name}</span><span class="ps-count">${s.count} зан.</span><span class="ps-amount">${s.amount} ₽</span></div>`;
     });
     // 3. Paid one-off cancellations (yellow)
     data.cancelledStudents.filter(cs => cs.isPaid && !cs.fromSubscription).forEach(cs => {
@@ -602,7 +602,7 @@ function renderPayrollHTML(isAdmin) {
         html += `<div class="payroll-student payroll-student-sub">
           <span class="ps-name">${s.name} <span class="ps-sub-meta">· Абон ${s.subType}${durStr}</span></span>
           <span class="ps-count">${s.count} зан.</span>
-          <span class="ps-amount">${s.amount} ₽</span>
+          <span class="ps-amount">${s.amount} ₽</span>
         </div>`;
       });
       // Subscription-linked cancellations (red unpaid + yellow paid) — they still consume the slot
@@ -622,8 +622,8 @@ function renderPayrollHTML(isAdmin) {
         const durStr = ss.duration ? ` · ${ss.duration === 90 ? '1,5 ч' : ss.duration === 120 ? '2 ч' : ss.duration === 180 ? '3 ч' : (ss.duration + ' мин')}` : '';
         html += `<div class="payroll-student payroll-student-sold">
           <span class="ps-name">${ss.studentName} <span class="ps-sub-meta">· Абон ${ss.subType}${durStr}</span></span>
-          <span class="ps-count">${ss.paidAmount} ₽</span>
-          <span class="ps-amount">центру ${ss.centerShare} ₽</span>
+          <span class="ps-count">${ss.paidAmount} ₽</span>
+          <span class="ps-amount">центру ${ss.centerShare} ₽</span>
         </div>`;
       });
       html += `</div></div>`;
@@ -638,8 +638,8 @@ function renderPayrollHTML(isAdmin) {
         const durStr = rs.duration ? ` · ${rs.duration === 90 ? '1,5 ч' : rs.duration === 120 ? '2 ч' : rs.duration === 180 ? '3 ч' : (rs.duration + ' мин')}` : '';
         html += `<div class="payroll-student payroll-student-refund">
           <span class="ps-name">${rs.studentName} <span class="ps-sub-meta">· Абон ${rs.subType}${durStr}</span></span>
-          <span class="ps-count">возврат ${rs.refundAmount} ₽</span>
-          <span class="ps-amount">центру −${rs.centerPart} ₽</span>
+          <span class="ps-count">возврат ${rs.refundAmount} ₽</span>
+          <span class="ps-amount">центру −${rs.centerPart} ₽</span>
         </div>`;
       });
       html += `</div></div>`;
@@ -671,9 +671,9 @@ function updatePayrollTotals() {
   const el = document.getElementById('payroll-total');
   if (el) {
     el.innerHTML = `
-      <div class="payroll-stat"><span class="payroll-label">Общая выручка</span><span class="payroll-num">${rev} ₽</span></div>
-      <div class="payroll-stat"><span class="payroll-label">Прибыль преподавателей</span><span class="payroll-num">${prof} ₽</span></div>
-      <div class="payroll-stat"><span class="payroll-label">Комиссия центра</span><span class="payroll-num">${comm} ₽</span></div>
+      <div class="payroll-stat"><span class="payroll-label">Общая выручка</span><span class="payroll-num">${rev} ₽</span></div>
+      <div class="payroll-stat"><span class="payroll-label">Прибыль преподавателей</span><span class="payroll-num">${prof} ₽</span></div>
+      <div class="payroll-stat"><span class="payroll-label">Комиссия центра</span><span class="payroll-num">${comm} ₽</span></div>
     `;
   }
 }
@@ -762,7 +762,7 @@ function renderCancellationRow(cs, colorClass, isAdmin) {
     <span class="ps-name">${cs.name}</span>
     <span class="ps-reason">${btn}</span>
     <span class="ps-cancel-status">${statusLabel}</span>
-    <span class="ps-amount">${cs.amount} ₽</span>
+    <span class="ps-amount">${cs.amount} ₽</span>
   </div>`;
 }
 
