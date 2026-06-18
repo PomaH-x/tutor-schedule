@@ -16,6 +16,9 @@ const TOUCH_TOOLTIP_MS = 3000;
 let touchGesture = null;
 let lastTouchTime = 0;
 let touchTooltipTimer = null;
+let touchLastCardTapId = null;
+let touchLastCardTapAt = 0;
+let touchEditTimer = null;
 function isShortlyAfterTouch() { return Date.now() - lastTouchTime < 600; }
 
 let selecting = false;
@@ -694,6 +697,9 @@ function isInsideExpandedRect(x, y, r, pct) {
 
 function onGridPointerDown(e) {
   if (e.pointerType !== 'touch') return;
+  // If a touch gesture is already in progress and a second finger arrives,
+  // ignore it — let the browser handle multi-touch (pinch-zoom).
+  if (touchGesture && touchGesture.pointerId !== e.pointerId) return;
   lastTouchTime = Date.now();
   if (state.profile.role === 'student') return;
 
@@ -864,12 +870,34 @@ function onGridPointerUp(e) {
     if (g.card) {
       e.preventDefault();
       const lesson = state.lessons.find(l => l.id === g.card.dataset.lessonId);
-      if (lesson) {
-        if (state.profile.role !== 'admin' && lesson.teacher_id !== state.user.id) {
-          showToast('Нельзя редактировать чужие занятия', 'error');
-        } else {
-          openEditLessonModal(lesson);
-        }
+      if (!lesson) { touchGesture = null; return; }
+      const canEdit = state.profile.role === 'admin' || lesson.teacher_id === state.user.id;
+      const inOverlap = g.card.classList.contains('lesson-card-overlap');
+      const cardId = g.card.dataset.lessonId;
+      const now = Date.now();
+
+      // Double-tap on a card in an overlap stack → cycle z-order
+      if (inOverlap && touchLastCardTapId === cardId && now - touchLastCardTapAt < 350) {
+        if (touchEditTimer) { clearTimeout(touchEditTimer); touchEditTimer = null; }
+        touchLastCardTapId = null;
+        cycleZForCard(g.card);
+        touchGesture = null;
+        return;
+      }
+
+      const openEdit = () => {
+        if (canEdit) openEditLessonModal(lesson);
+        else showToast('Нельзя редактировать чужие занятия', 'error');
+      };
+
+      if (inOverlap) {
+        // Delay edit modal so we can detect a possible second tap
+        touchLastCardTapId = cardId;
+        touchLastCardTapAt = now;
+        if (touchEditTimer) clearTimeout(touchEditTimer);
+        touchEditTimer = setTimeout(() => { touchEditTimer = null; openEdit(); }, 280);
+      } else {
+        openEdit();
       }
     }
     // Tap on empty cell does nothing (no 30-min tariff)
@@ -932,8 +960,7 @@ function onGridPointerCancel(e) {
     document.getElementById('schedule-grid')?.classList.remove('grid-dragging');
     clearDragState(); dragStarted = false;
   } else if (g.mode === 'tooltip') {
-    if (touchTooltipTimer) { clearTimeout(touchTooltipTimer); touchTooltipTimer = null; }
-    clearLessonTooltip();
+    // Leave tooltip and its 3s timer alone — pinch-zoom or scroll shouldn't dismiss it
   }
   touchGesture = null;
 }
@@ -987,12 +1014,14 @@ function cycleZForCard(card) {
   decorateZCycleButtons(gridSel);
 }
 
-// After cards are rendered, add ↕ button to the topmost card of every overlap group.
+// After cards are rendered, mark all cards in overlap groups so tap-handler can detect them.
+// Z-cycle is invoked via right-click on desktop, or via double-tap on touch (handled in pointerup).
 function decorateZCycleButtons(gridSel) {
   const grid = document.querySelector(gridSel || '#schedule-grid');
   if (!grid) return;
-  grid.querySelectorAll('.lc-zcycle').forEach(b => b.remove());
-  // Group by column
+  grid.querySelectorAll('.lc-zcycle').forEach(b => b.remove());           // strip any old ↕ buttons
+  grid.querySelectorAll('.lesson-card-overlap').forEach(c => c.classList.remove('lesson-card-overlap'));
+
   const byCol = {};
   grid.querySelectorAll('.lesson-card').forEach(c => {
     const col = c.style.gridColumn;
@@ -1001,32 +1030,16 @@ function decorateZCycleButtons(gridSel) {
   });
   Object.values(byCol).forEach(cards => {
     if (cards.length < 2) return;
-    // Find overlap groups
     cards.forEach(card => {
       const cs = parseInt(card.style.gridRow.split('/')[0].trim());
       const ce = parseInt(card.style.gridRow.split('/')[1].trim());
       const overlapping = cards.filter(c => {
-        if (c === card) return true;
+        if (c === card) return false;
         const s = parseInt(c.style.gridRow.split('/')[0].trim());
         const e2 = parseInt(c.style.gridRow.split('/')[1].trim());
         return s < ce && e2 > cs;
       });
-      if (overlapping.length <= 1) return;
-      // Add ↕ button only to the topmost (highest zIndex) of the group
-      const top = overlapping.reduce((a, b) =>
-        (parseInt(a.style.zIndex) || 2) >= (parseInt(b.style.zIndex) || 2) ? a : b);
-      if (top === card && !card.querySelector('.lc-zcycle')) {
-        const btn = document.createElement('button');
-        btn.className = 'lc-zcycle';
-        btn.type = 'button';
-        btn.title = 'Сменить верхнюю карточку';
-        btn.innerHTML = '↕';
-        // Stop propagation on all input events so it doesn't trigger card-edit / drag / long-press
-        btn.addEventListener('mousedown', (ev) => ev.stopPropagation());
-        btn.addEventListener('pointerdown', (ev) => ev.stopPropagation());
-        btn.addEventListener('click', (ev) => { ev.stopPropagation(); cycleZForCard(card); });
-        card.appendChild(btn);
-      }
+      if (overlapping.length > 0) card.classList.add('lesson-card-overlap');
     });
   });
 }
@@ -1034,13 +1047,32 @@ function decorateZCycleButtons(gridSel) {
 // ===== DRAG & DROP =====
 async function finishDrag(targetDay, targetRoom, targetSlot) {
   const lesson = dragState.lesson; const end = targetSlot + dragState.slotLength;
-  if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); return; }
+  if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); clearDragState(); dragStarted = false; return; }
+
+  // Authoritative client-side conflict check — UI showed red, must block regardless of role
+  if (hasAnyConflict(targetDay, targetRoom, targetSlot, end, lesson.id, lesson.teacher_id)) {
+    showToast('Кабинет занят или превышен лимит', 'error');
+    clearDragState(); dragStarted = false; return;
+  }
+
   const ct = await checkConflictServer(targetDay, targetRoom, targetSlot, end, lesson.id, lesson.teacher_id);
-  if (ct) { conflictToast(ct); return; }
+  if (ct) { conflictToast(ct); clearDragState(); dragStarted = false; return; }
 
   const dates = getWeekDates(state.currentWeekStart); const date = dates[targetDay];
   const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(targetSlot * SLOT_MINUTES / 60), (targetSlot * SLOT_MINUTES) % 60, 0, 0);
   const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
+
+  // Optimistic local update — render immediately, server roundtrip in background
+  const movedLesson = state.lessons.find(l => l.id === lesson.id);
+  const snapshot = movedLesson ? { room: movedLesson.room, start_time: movedLesson.start_time, end_time: movedLesson.end_time, week_start: movedLesson.week_start } : null;
+  if (movedLesson) {
+    movedLesson.room = targetRoom;
+    movedLesson.start_time = sTime.toISOString();
+    movedLesson.end_time = eTime.toISOString();
+    movedLesson.week_start = formatDate(state.currentWeekStart);
+  }
+  renderLessons();
+  clearDragState(); dragStarted = false;
 
   const updateData = {
     room: targetRoom,
@@ -1048,10 +1080,20 @@ async function finishDrag(targetDay, targetRoom, targetSlot) {
     end_time: eTime.toISOString(),
     week_start: formatDate(state.currentWeekStart)
   };
-
   const { error } = await db.from('lessons').update(updateData).eq('id', lesson.id);
-  if (error) { showToast('Ошибка переноса', 'error'); return; }
-  showToast('Занятие перенесено', 'success'); await loadLessons();
+  if (error) {
+    // Revert on failure
+    if (movedLesson && snapshot) {
+      movedLesson.room = snapshot.room;
+      movedLesson.start_time = snapshot.start_time;
+      movedLesson.end_time = snapshot.end_time;
+      movedLesson.week_start = snapshot.week_start;
+      renderLessons();
+    }
+    showToast('Ошибка переноса', 'error');
+    return;
+  }
+  showToast('Занятие перенесено', 'success');
 }
 
 // ===== NEXT WEEK TRANSFER =====
@@ -1651,7 +1693,7 @@ async function openEditLessonModal(lesson) {
   // Edit lock: refuse if someone else is editing this lesson
   const key = 'lesson:' + lesson.id;
   if (typeof checkLockedAndToast === 'function' && checkLockedAndToast(key)) return;
-  if (typeof acquireLock === 'function') await acquireLock(key);
+  if (typeof acquireLock === 'function') acquireLock(key);  // fire-and-forget so modal opens instantly
 
   const start = new Date(lesson.start_time); const end = new Date(lesson.end_time);
   const dates = getWeekDates(state.currentWeekStart);
@@ -1665,11 +1707,16 @@ async function openEditLessonModal(lesson) {
   document.getElementById('lesson-student-search').parentElement.style.display = canEdit ? 'block' : 'none';
   const selectedIds = new Set((lesson.lesson_students || []).map(ls => ls.student_id));
   state.lessonModal = { mode: 'edit', lessonId: lesson.id, teacherId: lesson.teacher_id, day: di, room: lesson.room, slotFrom: ss, slotTo: es, selectedIds };
+  // Show overlay immediately (no wait for DB load) — populate lists once loaded
+  document.getElementById('lesson-overlay').classList.add('active');
+  document.getElementById('lesson-student-search').value = '';
+  document.getElementById('lesson-current-students').innerHTML = '<div style="padding:14px;color:var(--text-muted);font-size:13px">Загрузка…</div>';
+  document.getElementById('lesson-students-list').innerHTML = '';
   loadTeacherStudentsForModal(lesson.teacher_id).then(() => {
+    // Make sure modal hasn't been closed/switched in the meantime
+    if (state.lessonModal?.lessonId !== lesson.id) return;
     renderCurrentStudents();
     renderLessonStudentsList('');
-    document.getElementById('lesson-overlay').classList.add('active');
-    document.getElementById('lesson-student-search').value = '';
   });
 }
 

@@ -21,6 +21,9 @@ let recTooltip = null;
 let recTouchGesture = null;
 let recLastTouchTime = 0;
 let recTouchTooltipTimer = null;
+let recTouchLastCardTapId = null;
+let recTouchLastCardTapAt = 0;
+let recTouchEditTimer = null;
 function recIsShortlyAfterTouch() { return Date.now() - recLastTouchTime < 600; }
 
 async function loadRecurringLessons() {
@@ -416,6 +419,7 @@ async function onRecGridMouseUp(e) {
 // Same logic as schedule.js but without next-week transfer.
 function onRecGridPointerDown(e) {
   if (e.pointerType !== 'touch') return;
+  if (recTouchGesture && recTouchGesture.pointerId !== e.pointerId) return;
   recLastTouchTime = Date.now();
   if (state.profile.role === 'student') return;
 
@@ -540,7 +544,25 @@ async function onRecGridPointerUp(e) {
     if (g.card) {
       e.preventDefault();
       const lesson = recurringLessons.find(l => l.id === g.card.dataset.lessonId);
-      if (lesson) openRecurringEditModal(lesson);
+      if (!lesson) { recTouchGesture = null; return; }
+      const inOverlap = g.card.classList.contains('lesson-card-overlap');
+      const cardId = g.card.dataset.lessonId;
+      const now = Date.now();
+      if (inOverlap && recTouchLastCardTapId === cardId && now - recTouchLastCardTapAt < 350) {
+        if (recTouchEditTimer) { clearTimeout(recTouchEditTimer); recTouchEditTimer = null; }
+        recTouchLastCardTapId = null;
+        cycleZForCard(g.card);
+        recTouchGesture = null;
+        return;
+      }
+      if (inOverlap) {
+        recTouchLastCardTapId = cardId;
+        recTouchLastCardTapAt = now;
+        if (recTouchEditTimer) clearTimeout(recTouchEditTimer);
+        recTouchEditTimer = setTimeout(() => { recTouchEditTimer = null; openRecurringEditModal(lesson); }, 280);
+      } else {
+        openRecurringEditModal(lesson);
+      }
     }
     recTouchGesture = null;
     return;
@@ -585,8 +607,7 @@ function onRecGridPointerCancel(e) {
     document.getElementById('recurring-grid')?.classList.remove('grid-dragging');
     clearRecDragState(); recDragStarted = false;
   } else if (g.mode === 'tooltip') {
-    if (recTouchTooltipTimer) { clearTimeout(recTouchTooltipTimer); recTouchTooltipTimer = null; }
-    clearRecLessonTooltip();
+    // Leave tooltip and its 3s timer alone
   }
   recTouchGesture = null;
 }
@@ -1008,17 +1029,31 @@ async function deleteRecurringLesson() {
 async function finishRecDrag(targetDay, targetRoom, targetSlot) {
   const lesson = recDragState.lesson;
   const end = targetSlot + recDragState.slotLength;
-  if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); return; }
+  if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); clearRecDragState(); recDragStarted = false; return; }
   const conflict = hasRecConflict(targetDay, targetRoom, targetSlot, end, lesson.id, lesson.teacher_id);
-  if (conflict === 'room') { showToast('Кабинет уже занят в это время', 'error'); return; }
-  if (conflict === 'teacher') { showToast('У вас уже есть занятие в это время', 'error'); return; }
+  if (conflict === 'room') { showToast('Кабинет уже занят в это время', 'error'); clearRecDragState(); recDragStarted = false; return; }
+  if (conflict === 'teacher') { showToast('У вас уже есть занятие в это время', 'error'); clearRecDragState(); recDragStarted = false; return; }
+
+  // Optimistic local update
+  const newStart = recSlotToTimeStr(targetSlot);
+  const newEnd = recSlotToTimeStr(end);
+  const snapshot = { room: lesson.room, day_of_week: lesson.day_of_week, start_time: lesson.start_time, end_time: lesson.end_time };
+  lesson.room = targetRoom; lesson.day_of_week = targetDay;
+  lesson.start_time = newStart; lesson.end_time = newEnd;
+  renderRecurringLessons();
+  clearRecDragState(); recDragStarted = false;
+
   const { error } = await db.from('recurring_lessons').update({
     room: targetRoom, day_of_week: targetDay,
-    start_time: recSlotToTimeStr(targetSlot), end_time: recSlotToTimeStr(end)
+    start_time: newStart, end_time: newEnd
   }).eq('id', lesson.id);
-  if (error) { showToast('Ошибка', 'error'); return; }
+  if (error) {
+    // Revert
+    Object.assign(lesson, snapshot);
+    renderRecurringLessons();
+    showToast('Ошибка', 'error'); return;
+  }
   showToast('Занятие перенесено', 'success');
-  await loadRecurringLessons();
   syncRecurringToWeeks();
 }
 
