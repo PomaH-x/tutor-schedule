@@ -390,9 +390,11 @@ function renderLessons() {
           ? 0.06 + (clamped / 4) * 0.30
           : 0.05 + (clamped / 4) * 0.25;
         const slotBg = `rgba(${r},${g},${b},${alpha.toFixed(2)})`;
+        // Light theme: always use the teacher color (good contrast on the light tinted bg).
+        // Dark theme: switch to white at high counts because the bg is darker.
         const textColor = isDark
           ? (clamped >= 3 ? 'rgba(255,255,255,0.85)' : `rgba(${r},${g},${b},0.7)`)
-          : (clamped >= 3 ? 'rgba(255,255,255,0.9)' : `rgba(${r},${g},${b},0.75)`);
+          : `rgba(${r},${g},${b},0.95)`;
         const showCount = slotClaimed[s] === lesson.id;
         const countHTML = showCount ? `<span class="lc-slot-count" style="color:${textColor}">${total}</span>` : '';
         slotsHTML += `<div class="lc-slot" style="background:${slotBg}">${countHTML}</div>`;
@@ -726,8 +728,11 @@ function clearDragHighlight() {
 
 // Highlight the left-side time labels for slots [slotFrom..slotToInclusive].
 // Used during cell selection and during drag/placing for clarity of the time range.
-function addTimeRangeHighlight(grid, slotFrom, slotToInclusive) {
-  for (let s = slotFrom; s <= slotToInclusive; s++) {
+// Highlight time-labels for slots [slotFrom, slotToExclusive). Exclusive on the right —
+// the label for `slotToExclusive` (the end-time mark) is NOT highlighted, matching what
+// the user expects: a 3-slot lesson lights up exactly 3 time labels, not 4.
+function addTimeRangeHighlight(grid, slotFrom, slotToExclusive) {
+  for (let s = slotFrom; s < slotToExclusive; s++) {
     const t = grid.querySelector(`.grid-time[data-slot="${s}"]`);
     if (t) t.classList.add('grid-time-active');
   }
@@ -743,6 +748,82 @@ function isInsideExpandedRect(x, y, r, pct) {
   return x >= r.left - xp && x <= r.right + xp && y >= r.top - yp && y <= r.bottom + yp;
 }
 
+// ===== AUTO-SCROLL =====
+// During an active touch lesson-drag, scroll the grid horizontally AND vertically when
+// the finger approaches an edge — so users can drag to far-away days or distant times
+// without running out of screen. Runs only while pointer is inside an edge zone.
+const AUTOSCROLL_EDGE_PX = 50;
+const AUTOSCROLL_MAX_SPEED = 14;
+const AUTOSCROLL_TOP_HEADER_PX = 64;  // sticky day-header (40px) + room-label (24px)
+let autoScrollGridId = null;
+let autoScrollDirX = 0;
+let autoScrollSpeedX = 0;
+let autoScrollDirY = 0;
+let autoScrollSpeedY = 0;
+let autoScrollRAF = null;
+
+function updateAutoScrollX(grid, clientX, clientY) {
+  if (!grid) return;
+  const r = grid.getBoundingClientRect();
+  // Horizontal axis
+  const leftDist = clientX - r.left;
+  const rightDist = r.right - clientX;
+  if (leftDist < AUTOSCROLL_EDGE_PX && leftDist >= 0) {
+    autoScrollDirX = -1;
+    autoScrollSpeedX = Math.max(2, AUTOSCROLL_MAX_SPEED * (1 - leftDist / AUTOSCROLL_EDGE_PX));
+  } else if (rightDist < AUTOSCROLL_EDGE_PX && rightDist >= 0) {
+    autoScrollDirX = 1;
+    autoScrollSpeedX = Math.max(2, AUTOSCROLL_MAX_SPEED * (1 - rightDist / AUTOSCROLL_EDGE_PX));
+  } else {
+    autoScrollDirX = 0;
+    autoScrollSpeedX = 0;
+  }
+  // Vertical axis — top zone starts BELOW the sticky day/room headers so the user can
+  // trigger an upward scroll only when they're actually near data rows, not on the
+  // header itself (where scrolling up does nothing).
+  if (typeof clientY === 'number') {
+    const topDist = clientY - (r.top + AUTOSCROLL_TOP_HEADER_PX);
+    const botDist = r.bottom - clientY;
+    if (topDist < AUTOSCROLL_EDGE_PX && topDist >= 0) {
+      autoScrollDirY = -1;
+      autoScrollSpeedY = Math.max(2, AUTOSCROLL_MAX_SPEED * (1 - topDist / AUTOSCROLL_EDGE_PX));
+    } else if (botDist < AUTOSCROLL_EDGE_PX && botDist >= 0) {
+      autoScrollDirY = 1;
+      autoScrollSpeedY = Math.max(2, AUTOSCROLL_MAX_SPEED * (1 - botDist / AUTOSCROLL_EDGE_PX));
+    } else {
+      autoScrollDirY = 0;
+      autoScrollSpeedY = 0;
+    }
+  }
+  // Start/stop the RAF loop based on whether any axis is active
+  if (autoScrollDirX !== 0 || autoScrollDirY !== 0) {
+    if (!autoScrollRAF) startAutoScrollLoop(grid.id);
+  } else {
+    stopAutoScroll();
+  }
+}
+
+function startAutoScrollLoop(gridId) {
+  autoScrollGridId = gridId;
+  const tick = () => {
+    const g = document.getElementById(autoScrollGridId);
+    if (!g || (autoScrollDirX === 0 && autoScrollDirY === 0)) { autoScrollRAF = null; return; }
+    if (autoScrollDirX !== 0) g.scrollLeft += autoScrollDirX * autoScrollSpeedX;
+    if (autoScrollDirY !== 0) g.scrollTop  += autoScrollDirY * autoScrollSpeedY;
+    autoScrollRAF = requestAnimationFrame(tick);
+  };
+  autoScrollRAF = requestAnimationFrame(tick);
+}
+
+function stopAutoScroll() {
+  if (autoScrollRAF) { cancelAnimationFrame(autoScrollRAF); autoScrollRAF = null; }
+  autoScrollDirX = 0;
+  autoScrollSpeedX = 0;
+  autoScrollDirY = 0;
+  autoScrollSpeedY = 0;
+  autoScrollGridId = null;
+}
+
 function onGridPointerDown(e) {
   if (e.pointerType !== 'touch') return;
   // If a touch gesture is already in progress and a second finger arrives,
@@ -751,29 +832,17 @@ function onGridPointerDown(e) {
   lastTouchTime = Date.now();
   if (state.profile.role === 'student') return;
 
-  // Student-move (touch): tap-to-place
-  if (studentDragState) {
-    const cardEl = e.target.closest('.lesson-card');
-    const cellEl = e.target.closest('.grid-cell');
-    if (cardEl) { e.preventDefault(); hidePlacingBanner(); placeStudentOnLesson(cardEl.dataset.lessonId); return; }
-    if (cellEl) { e.preventDefault(); hidePlacingBanner(); placeStudentOnCell(+cellEl.dataset.day, +cellEl.dataset.room, +cellEl.dataset.slot); return; }
-    return;
-  }
-
-  // Placing mode: tap to place (delegate to mouse-handler placing logic)
-  if (state.placingLesson || state.placingStudent || state.placingTruant) {
-    const cell = e.target.closest('.grid-cell');
-    const card = e.target.closest('.lesson-card');
-    if (card && (state.placingStudent || state.placingTruant)) {
-      e.preventDefault();
-      if (state.placingStudent) placeTransferredStudentOnLesson(card.dataset.lessonId);
-      else placeTruantOnLesson(card.dataset.lessonId);
-    } else if (cell) {
-      e.preventDefault();
-      if (state.placingLesson) placeTransferredLesson(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-      else if (state.placingStudent) placeTransferredStudent(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-      else placeTruantOnCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-    }
+  // Student-move OR any placing-flow: defer placement to pointerup, and let the
+  // browser scroll if the finger moves (so user can navigate to far-away days).
+  if (studentDragState || state.placingLesson || state.placingStudent || state.placingTruant) {
+    touchGesture = {
+      pointerId: e.pointerId,
+      startX: e.clientX, startY: e.clientY,
+      mode: 'place',
+      moved: false
+    };
+    // DO NOT preventDefault — that would block native scroll. We only commit a placement
+    // on pointerup if the finger didn't move (i.e., it was a real tap, not a scroll gesture).
     return;
   }
 
@@ -870,6 +939,14 @@ function onGridPointerMove(e) {
   if (e.pointerType !== 'touch') return;
   const g = touchGesture; if (!g || g.pointerId !== e.pointerId) return;
 
+  // Placement (student transfer / truant / etc.) — track whether the finger has moved
+  // significantly. If yes, it's a scroll, not a tap → don't place on release.
+  if (g.mode === 'place') {
+    const dx = Math.abs(e.clientX - g.startX), dy = Math.abs(e.clientY - g.startY);
+    if (dx > 10 || dy > 10) g.moved = true;
+    return;
+  }
+
   if (!g.longPress) {
     const dx = e.clientX - g.startX, dy = e.clientY - g.startY;
     if (Math.sqrt(dx * dx + dy * dy) > TOUCH_MOVE_THRESHOLD) {
@@ -889,6 +966,8 @@ function onGridPointerMove(e) {
     }
   } else if (g.mode === 'move') {
     const grid = document.getElementById('schedule-grid');
+    // Auto-scroll horizontally when finger nears the left/right edge of the grid
+    updateAutoScrollX(grid, e.clientX, e.clientY);
     clearDragHighlight();
     document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
 
@@ -926,6 +1005,31 @@ function onGridPointerUp(e) {
   const g = touchGesture; if (!g || g.pointerId !== e.pointerId) return;
   clearTimeout(g.timer);
   lastTouchTime = Date.now();
+  stopAutoScroll();
+
+  // Placement (student / truant / transferred-lesson): commit only if finger barely moved.
+  // If finger moved more than ~10px, treat it as a scroll gesture and DO NOTHING — the
+  // placing state remains active, banner stays, user can scroll/zoom freely.
+  if (g.mode === 'place') {
+    touchGesture = null;
+    if (g.moved) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const card = el?.closest?.('.lesson-card');
+    const cell = el?.closest?.('.grid-cell');
+    if (studentDragState) {
+      if (card) { hidePlacingBanner(); placeStudentOnLesson(card.dataset.lessonId); }
+      else if (cell) { hidePlacingBanner(); placeStudentOnCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot); }
+      return;
+    }
+    if (state.placingStudent && card) { placeTransferredStudentOnLesson(card.dataset.lessonId); return; }
+    if (state.placingTruant && card)  { placeTruantOnLesson(card.dataset.lessonId); return; }
+    if (cell) {
+      if (state.placingLesson) placeTransferredLesson(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+      else if (state.placingStudent) placeTransferredStudent(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+      else if (state.placingTruant) placeTruantOnCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+    }
+    return;
+  }
 
   if (!g.longPress) {
     // Tap
@@ -1015,7 +1119,10 @@ function onGridPointerCancel(e) {
   if (e.pointerType !== 'touch') return;
   const g = touchGesture; if (!g) return;
   clearTimeout(g.timer);
-  if (g.mode === 'select') {
+  stopAutoScroll();
+  if (g.mode === 'place') {
+    // Pinch/multi-touch — placing state stays so user can try again with another tap
+  } else if (g.mode === 'select') {
     selecting = false; selStart = null; selEnd = null;
     clearSelectionHighlight(); removeDurationLabel();
   } else if (g.mode === 'move') {
@@ -1031,23 +1138,71 @@ function onGridPointerCancel(e) {
 
 // Show tooltip with student list for a given lesson card (for touch long-press).
 function showLessonTooltipForCard(card) {
+  // Same semantics as the desktop hover tooltip (handleLessonTooltip):
+  // looks at the HALF-HOUR slot under the finger and lists all students who have
+  // a lesson covering that slot in that room (across overlapping lesson cards).
+  // Transferred students (those not in the recurring template for this slot) are
+  // wrapped in .tooltip-transferred so they get the yellow/brown highlight.
+  clearLessonTooltip();
   const lesson = state.lessons.find(l => l.id === card.dataset.lessonId);
   if (!lesson) return;
-  clearLessonTooltip();
-  const names = (lesson.lesson_students || [])
-    .filter(s => s.student)
-    .map(s => `${s.student.first_name} ${s.student.last_name}`);
+
+  // Resolve the slot under the finger from the touch gesture's startY
+  const g = touchGesture;
+  const r = card.getBoundingClientRect();
+  const sStart = new Date(lesson.start_time);
+  const ssGlobal = (sStart.getHours() * 60 + sStart.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+  const eEnd = new Date(lesson.end_time);
+  const esGlobal = (eEnd.getHours() * 60 + eEnd.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+  const slotCount = Math.max(1, esGlobal - ssGlobal);
+  const slotPx = r.height / slotCount;
+  const fingerY = g ? g.startY : (r.top + r.height / 2);
+  const relSlot = Math.max(0, Math.min(slotCount - 1, Math.floor((fingerY - r.top) / slotPx)));
+  const slot = ssGlobal + relSlot;
+
+  // Day + room from the lesson (cards are positioned by day/room, so this is unambiguous)
+  const dates = getWeekDates(state.currentWeekStart);
+  const day = dates.findIndex(d =>
+    d.getFullYear() === sStart.getFullYear() &&
+    d.getMonth() === sStart.getMonth() &&
+    d.getDate() === sStart.getDate());
+  if (day === -1) return;
+  const room = lesson.room;
+
+  const slotStartMin = START_HOUR * 60 + slot * SLOT_MINUTES;
+  const slotEndMin = slotStartMin + SLOT_MINUTES;
+  const date = dates[day];
+
+  const names = [];
+  state.lessons.forEach(l => {
+    if (l.room !== room) return;
+    const ls = new Date(l.start_time);
+    if (ls.getDate() !== date.getDate() || ls.getMonth() !== date.getMonth() || ls.getFullYear() !== date.getFullYear()) return;
+    const lS = ls.getHours() * 60 + ls.getMinutes();
+    const le = new Date(l.end_time);
+    const lE = le.getHours() * 60 + le.getMinutes();
+    if (slotStartMin >= lE || slotEndMin <= lS) return;
+    const startHHMM = `${ls.getHours().toString().padStart(2,'0')}:${ls.getMinutes().toString().padStart(2,'0')}`;
+    const endHHMM = `${le.getHours().toString().padStart(2,'0')}:${le.getMinutes().toString().padStart(2,'0')}`;
+    const dayOfWeek = ls.getDay() === 0 ? 6 : ls.getDay() - 1;
+    (l.lesson_students || []).forEach(s => {
+      if (!s.student) return;
+      const inRecurring = recurringByStudent ? isStudentInRecurringSlot(s.student_id, dayOfWeek, startHHMM, endHHMM, l.room) : true;
+      const name = `${s.student.first_name} ${s.student.last_name}`;
+      names.push(inRecurring ? name : `<span class="tooltip-transferred">${name}</span>`);
+    });
+  });
   if (names.length === 0) return;
+
   lessonTooltip = document.createElement('div');
   lessonTooltip.className = 'lesson-tooltip lesson-tooltip-touch';
   lessonTooltip.innerHTML = names.join('<br>');
   document.body.appendChild(lessonTooltip);
-  const rect = card.getBoundingClientRect();
   const tw = lessonTooltip.offsetWidth, th = lessonTooltip.offsetHeight;
-  let left = rect.right + 8;
-  if (left + tw > window.innerWidth - 16) left = rect.left - tw - 8;
+  let left = r.right + 8;
+  if (left + tw > window.innerWidth - 16) left = r.left - tw - 8;
   if (left < 8) left = 8;
-  let top = rect.top;
+  let top = r.top;
   if (top + th > window.innerHeight - 16) top = window.innerHeight - th - 16;
   if (top < 8) top = 8;
   lessonTooltip.style.left = `${left}px`;
@@ -1677,15 +1832,29 @@ function updateSelectionHighlight() {
   }
   // Highlight time labels: from start slot to end-time slot (st+1) inclusive
   addTimeRangeHighlight(grid, sf, st + 1);
-  const last = grid.querySelector(`.grid-cell[data-day="${selStart.day}"][data-room="${selStart.room}"][data-slot="${st}"]`);
-  if (last && count > 0) {
+  const isMobile = window.matchMedia('(max-width: 600px)').matches;
+  const anchorCell = isMobile
+    ? grid.querySelector(`.grid-cell[data-day="${selStart.day}"][data-room="${selStart.room}"][data-slot="${sf}"]`)
+    : grid.querySelector(`.grid-cell[data-day="${selStart.day}"][data-room="${selStart.room}"][data-slot="${st}"]`);
+  if (anchorCell && count > 0) {
     durationLabel = document.createElement('div');
     durationLabel.className = 'selection-duration-label';
     durationLabel.textContent = slotsToLabel(count);
-    const rect = last.getBoundingClientRect(); const gr = grid.getBoundingClientRect();
-    durationLabel.style.left = `${rect.left + rect.width / 2 - gr.left}px`;
-    durationLabel.style.top = `${rect.bottom - gr.top + 4}px`;
     grid.appendChild(durationLabel);
+    // The label is `position: absolute` inside the scroll container — its top/left are
+    // CONTENT coordinates (not viewport), so we add the container's scroll offset
+    // when translating from viewport-based getBoundingClientRect() to content space.
+    const rect = anchorCell.getBoundingClientRect(); const gr = grid.getBoundingClientRect();
+    const cellLeft = rect.left - gr.left + grid.scrollLeft;
+    const cellTop = rect.top - gr.top + grid.scrollTop;
+    durationLabel.style.left = `${cellLeft + rect.width / 2}px`;
+    if (isMobile) {
+      // Always sits directly ABOVE the first cell regardless of scroll position
+      durationLabel.style.top = `${cellTop - durationLabel.offsetHeight - 4}px`;
+    } else {
+      // Desktop: below the last cell
+      durationLabel.style.top = `${cellTop + rect.height + 4}px`;
+    }
   }
 }
 

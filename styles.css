@@ -1684,6 +1684,70 @@ input, textarea, select {
   background: var(--accent-hover);
 }
 
+/* ===== BOOKING MODE ===== */
+.btn-booking-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-left: 8px;
+}
+.btn-booking-mode:hover { background: var(--bg-hover); }
+.btn-booking-mode.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Booking block — looks like a lesson card but with dashed border and no count */
+.booking-block {
+  position: relative;
+  border-radius: var(--radius-sm);
+  border: 1.5px dashed;
+  margin: 1px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: default;
+  pointer-events: auto;
+  overflow: hidden;
+}
+.booking-block .booking-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  opacity: 0.85;
+  text-transform: uppercase;
+  padding: 0 4px;
+  text-align: center;
+}
+.booking-mode-on .booking-block { cursor: pointer; }
+.booking-mode-on .booking-block:hover {
+  filter: brightness(1.15);
+}
+
+/* In booking mode, dim normal lesson cards so the user clearly sees they're not interactive */
+.booking-mode-on .lesson-card {
+  opacity: 0.55;
+  pointer-events: none;
+}
+@media (max-width: 600px) {
+  .btn-booking-mode .btn-label { display: none; }
+  .btn-booking-mode { padding: 11px 11px; }
+}
+
 .copy-teacher-list {
   display: flex;
   flex-direction: column;
@@ -2495,8 +2559,29 @@ input, textarea, select {
     display: none;
   }
   .btn-copy-recurring {
-    padding: 13px 13px;
+    padding: 11px 11px;
     gap: 0;
+    margin-left: 0;
+  }
+  /* Bring booking button to the same compact size as the rest on mobile */
+  .btn-booking-mode {
+    padding: 11px 11px;
+    margin-left: 0;
+  }
+  /* Tighten the top-bar to fit 3 icon buttons + theme + avatar on narrow phones */
+  #screen-recurring .top-bar-left {
+    gap: 6px;
+  }
+  #screen-recurring .top-bar-left h2 {
+    font-size: 15px;
+    margin-right: 2px;
+    max-width: 90px;
+    white-space: pre-wrap;
+    line-height: 1.1;
+  }
+  /* Hide the recurring-warning banner inline tip (keep it on the row but smaller) */
+  .recurring-warning {
+    display: none;
   }
 
   /* Week tabs: swap full labels for short ones via data-short */

@@ -1,4 +1,6 @@
 let recurringLessons = [];
+let recurringBookings = [];
+let bookingMode = false;
 let recurringInited = false;
 let recSelecting = false;
 let recSelStart = null;
@@ -28,16 +30,21 @@ function recIsShortlyAfterTouch() { return Date.now() - recLastTouchTime < 600; 
 
 async function loadRecurringLessons() {
   // Everyone (admin + teacher) sees ALL recurring lessons — needed for conflict prevention
-  const { data, error } = await db.from('recurring_lessons')
-    .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), recurring_lesson_students(student_id, student:students(first_name, last_name, subject, is_individual))');
-  if (error) {
-    console.error('loadRecurringLessons error:', error);
+  const [lessonsRes, bookingsRes] = await Promise.all([
+    db.from('recurring_lessons')
+      .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), recurring_lesson_students(student_id, student:students(first_name, last_name, subject, is_individual))'),
+    db.from('time_bookings')
+      .select('*, teacher:profiles!teacher_id(short_name, color, full_name)')
+  ]);
+  if (lessonsRes.error) {
+    console.error('loadRecurringLessons error:', lessonsRes.error);
     showToast('Ошибка загрузки', 'error');
     return;
   }
-  recurringLessons = data || [];
+  recurringLessons = lessonsRes.data || [];
+  // If `time_bookings` table doesn't exist yet (migration not applied), just silently skip.
+  recurringBookings = bookingsRes.error ? [] : (bookingsRes.data || []);
   renderRecurringLessons();
-  // Defensive: occasionally the first render races with grid setup — verify and retry once.
   setTimeout(() => {
     if (recurringLessons.length === 0) return;
     const visible = document.querySelectorAll('#recurring-grid .lesson-card').length;
@@ -109,7 +116,7 @@ function recLessonSlots(lesson) {
 
 function renderRecurringLessons() {
   const grid = document.getElementById('recurring-grid');
-  grid.querySelectorAll('.lesson-card').forEach(el => el.remove());
+  grid.querySelectorAll('.lesson-card, .booking-block').forEach(el => el.remove());
   const isDark = document.documentElement.dataset.theme === 'dark';
 
   const groups = {};
@@ -171,9 +178,11 @@ function renderRecurringLessons() {
         const clamped = Math.min(total, 4);
         const alpha = isDark ? 0.06 + (clamped / 4) * 0.30 : 0.05 + (clamped / 4) * 0.25;
         const slotBg = `rgba(${r},${g},${b},${alpha.toFixed(2)})`;
+        // Light theme: always use the teacher color (good contrast on the light tinted bg).
+        // Dark theme: switch to white at high counts because the bg is darker.
         const textColor = isDark
           ? (clamped >= 3 ? 'rgba(255,255,255,0.85)' : `rgba(${r},${g},${b},0.7)`)
-          : (clamped >= 3 ? 'rgba(255,255,255,0.9)' : `rgba(${r},${g},${b},0.75)`);
+          : `rgba(${r},${g},${b},0.95)`;
         const showCount = slotClaimed[s] === lesson.id;
         const countHTML = showCount ? `<span class="lc-slot-count" style="color:${textColor}">${total}</span>` : '';
         slotsHTML += `<div class="lc-slot" style="background:${slotBg}">${countHTML}</div>`;
@@ -189,8 +198,38 @@ function renderRecurringLessons() {
       grid.appendChild(card);
     });
   });
+  // Append booking blocks on top of empty cells
+  renderRecurringBookings(grid);
   if (typeof applyLockVisuals === 'function') applyLockVisuals();
   if (typeof decorateZCycleButtons === 'function') decorateZCycleButtons('#recurring-grid');
+}
+
+function renderRecurringBookings(grid) {
+  if (!grid || !Array.isArray(recurringBookings)) return;
+  const isDark = (typeof state !== 'undefined' && state.theme === 'dark') || document.documentElement.getAttribute('data-theme') === 'dark';
+  recurringBookings.forEach(b => {
+    const color = b.teacher?.color || '#1e6fe8';
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const bl = parseInt(color.slice(5, 7), 16);
+    const sp = (b.start_time || '00:00').split(':'); const ep = (b.end_time || '00:00').split(':');
+    const ss = (+sp[0] * 60 + +sp[1] - START_HOUR * 60) / SLOT_MINUTES;
+    const es = (+ep[0] * 60 + +ep[1] - START_HOUR * 60) / SLOT_MINUTES;
+    if (ss < 0 || es <= ss) return;
+
+    const el = document.createElement('div');
+    el.className = 'booking-block';
+    el.dataset.bookingId = b.id;
+    el.dataset.teacherId = b.teacher_id;
+    el.style.gridColumn = `${b.day_of_week * 3 + b.room + 1}`;
+    el.style.gridRow = `${rowForSlot(ss)} / ${rowForSlot(es)}`;
+    const bgAlpha = isDark ? 0.18 : 0.13;
+    el.style.background = `rgba(${r},${g},${bl},${bgAlpha})`;
+    el.style.borderColor = `rgba(${r},${g},${bl},${isDark ? 0.7 : 0.6})`;
+    el.style.color = `rgba(${r},${g},${bl},${isDark ? 0.95 : 0.85})`;
+    el.innerHTML = `<span class="booking-label">${(b.teacher?.short_name || '').replace(/\./g, '')}</span>`;
+    grid.appendChild(el);
+  });
 }
 
 // ===== RECURRING GRID EVENTS =====
@@ -295,6 +334,7 @@ function onRecGridMouseMove(e) {
           const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
           if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
         }
+        if (typeof addTimeRangeHighlight === 'function') addTimeRangeHighlight(grid, ts, end);
       }
     }
     return;
@@ -333,6 +373,7 @@ function onRecGridMouseMove(e) {
           const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
           if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
         }
+        if (typeof addTimeRangeHighlight === 'function') addTimeRangeHighlight(grid, ts, end);
       }
     }
     return;
@@ -393,7 +434,12 @@ async function onRecGridMouseUp(e) {
     recSelecting = false; clearRecSelection();
     if (!recSelStart) return;
     const sf = Math.min(recSelStart.slot, recSelEnd.slot);
-    const st = Math.max(recSelStart.slot, recSelEnd.slot) + 1;
+    const stInc = Math.max(recSelStart.slot, recSelEnd.slot);
+    const st = stInc + 1;
+    if (bookingMode) {
+      await createBookingFromSelection(recSelStart.day, recSelStart.room, sf, stInc);
+      return;
+    }
     const ownTid = state.profile.role === 'admin' ? null : state.user.id;
     if (hasRecRoomConflict(recSelStart.day, recSelStart.room, sf, st, null, ownTid)) {
       showToast('Кабинет уже занят в это время', 'error');
@@ -415,12 +461,14 @@ function onRecGridPointerDown(e) {
   recLastTouchTime = Date.now();
   if (state.profile.role === 'student') return;
 
-  // Student-from-modal placing → tap-to-place
+  // Student-from-modal placing → defer to pointerup, allow free scrolling
   if (studentDragState) {
-    const cardEl = e.target.closest('.lesson-card');
-    if (cardEl) { e.preventDefault(); hidePlacingBanner(); placeStudentOnRecurringLesson(cardEl.dataset.lessonId); return; }
-    const cellEl = e.target.closest('.grid-cell');
-    if (cellEl) { e.preventDefault(); hidePlacingBanner(); placeStudentOnRecurringCell(+cellEl.dataset.day, +cellEl.dataset.room, +cellEl.dataset.slot); return; }
+    recTouchGesture = {
+      pointerId: e.pointerId,
+      startX: e.clientX, startY: e.clientY,
+      mode: 'place',
+      moved: false
+    };
     return;
   }
 
@@ -499,6 +547,13 @@ function onRecGridPointerMove(e) {
   if (e.pointerType !== 'touch') return;
   const g = recTouchGesture; if (!g || g.pointerId !== e.pointerId) return;
 
+  // Placement (student from modal) — track scroll vs tap
+  if (g.mode === 'place') {
+    const dx = Math.abs(e.clientX - g.startX), dy = Math.abs(e.clientY - g.startY);
+    if (dx > 10 || dy > 10) g.moved = true;
+    return;
+  }
+
   if (!g.longPress) {
     const dx = e.clientX - g.startX, dy = e.clientY - g.startY;
     if (Math.sqrt(dx * dx + dy * dy) > 10) {
@@ -515,6 +570,8 @@ function onRecGridPointerMove(e) {
     }
   } else if (g.mode === 'move') {
     const grid = document.getElementById('recurring-grid');
+    // Auto-scroll horizontally for far-day moves (uses helper from schedule.js)
+    if (typeof updateAutoScrollX === 'function') updateAutoScrollX(grid, e.clientX, e.clientY);
     clearRecDragHighlight();
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const cell = el?.closest?.('.grid-cell');
@@ -527,6 +584,7 @@ function onRecGridPointerMove(e) {
           const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
           if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
         }
+        if (typeof addTimeRangeHighlight === 'function') addTimeRangeHighlight(grid, ts, end);
       }
     }
   }
@@ -543,6 +601,19 @@ async function onRecGridPointerUp(e) {
   const g = recTouchGesture; if (!g || g.pointerId !== e.pointerId) return;
   clearTimeout(g.timer);
   recLastTouchTime = Date.now();
+  if (typeof stopAutoScroll === 'function') stopAutoScroll();
+
+  // Placement (student-from-modal): commit only if finger barely moved.
+  if (g.mode === 'place') {
+    recTouchGesture = null;
+    if (g.moved) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const card = el?.closest?.('.lesson-card');
+    const cell = el?.closest?.('.grid-cell');
+    if (card) { hidePlacingBanner(); placeStudentOnRecurringLesson(card.dataset.lessonId); return; }
+    if (cell) { hidePlacingBanner(); placeStudentOnRecurringCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot); return; }
+    return;
+  }
 
   if (!g.longPress) {
     if (g.card) {
@@ -576,7 +647,12 @@ async function onRecGridPointerUp(e) {
     recSelecting = false; clearRecSelection();
     if (!recSelStart) { recTouchGesture = null; return; }
     const sf = Math.min(recSelStart.slot, recSelEnd.slot);
-    const st = Math.max(recSelStart.slot, recSelEnd.slot) + 1;
+    const stInc = Math.max(recSelStart.slot, recSelEnd.slot);
+    const st = stInc + 1;
+    if (bookingMode) {
+      await createBookingFromSelection(recSelStart.day, recSelStart.room, sf, stInc);
+      recTouchGesture = null; return;
+    }
     const ownTid = state.profile.role === 'admin' ? null : state.user.id;
     if (hasRecRoomConflict(recSelStart.day, recSelStart.room, sf, st, null, ownTid)) {
       showToast('Кабинет уже занят в это время', 'error');
@@ -604,7 +680,10 @@ function onRecGridPointerCancel(e) {
   if (e.pointerType !== 'touch') return;
   const g = recTouchGesture; if (!g) return;
   clearTimeout(g.timer);
-  if (g.mode === 'select') {
+  if (typeof stopAutoScroll === 'function') stopAutoScroll();
+  if (g.mode === 'place') {
+    // Pinch/multi-touch — placing state stays
+  } else if (g.mode === 'select') {
     recSelecting = false; recSelStart = null; recSelEnd = null; clearRecSelection();
   } else if (g.mode === 'move') {
     clearRecDragHighlight();
@@ -725,28 +804,41 @@ function updateRecSelection() {
     const c = grid.querySelector(`.grid-cell[data-day="${recSelStart.day}"][data-room="${recSelStart.room}"][data-slot="${s}"]`);
     if (c) c.classList.add('grid-cell-selected');
   }
-  const last = grid.querySelector(`.grid-cell[data-day="${recSelStart.day}"][data-room="${recSelStart.room}"][data-slot="${st}"]`);
-  if (last && count > 0) {
+  // Time labels: same exclusive-end convention as schedule.js (off-by-one fix)
+  if (typeof addTimeRangeHighlight === 'function') addTimeRangeHighlight(grid, sf, st + 1);
+  const isMobile = window.matchMedia('(max-width: 600px)').matches;
+  const anchorCell = isMobile
+    ? grid.querySelector(`.grid-cell[data-day="${recSelStart.day}"][data-room="${recSelStart.room}"][data-slot="${sf}"]`)
+    : grid.querySelector(`.grid-cell[data-day="${recSelStart.day}"][data-room="${recSelStart.room}"][data-slot="${st}"]`);
+  if (anchorCell && count > 0) {
     recDurationLabel = document.createElement('div');
     recDurationLabel.className = 'selection-duration-label';
     recDurationLabel.textContent = slotsToLabel(count);
-    const rect = last.getBoundingClientRect(); const gr = grid.getBoundingClientRect();
-    recDurationLabel.style.left = `${rect.left + rect.width / 2 - gr.left}px`;
-    recDurationLabel.style.top = `${rect.bottom - gr.top + 4}px`;
     grid.appendChild(recDurationLabel);
+    // Convert viewport coords → content coords by adding the grid's scroll offset
+    const rect = anchorCell.getBoundingClientRect(); const gr = grid.getBoundingClientRect();
+    const cellLeft = rect.left - gr.left + grid.scrollLeft;
+    const cellTop = rect.top - gr.top + grid.scrollTop;
+    recDurationLabel.style.left = `${cellLeft + rect.width / 2}px`;
+    if (isMobile) {
+      recDurationLabel.style.top = `${cellTop - recDurationLabel.offsetHeight - 4}px`;
+    } else {
+      recDurationLabel.style.top = `${cellTop + rect.height + 4}px`;
+    }
   }
 }
 
 function clearRecSelection() {
   const grid = document.getElementById('recurring-grid');
-  if (grid) grid.querySelectorAll('.grid-cell-selected').forEach(c => c.classList.remove('grid-cell-selected'));
+  if (grid) grid.querySelectorAll('.grid-cell-selected, .grid-time-active')
+    .forEach(c => c.classList.remove('grid-cell-selected', 'grid-time-active'));
   if (recDurationLabel) { recDurationLabel.remove(); recDurationLabel = null; }
 }
 function clearRecDragHighlight() {
   const grid = document.getElementById('recurring-grid');
   if (!grid) return;
-  grid.querySelectorAll('.grid-cell-drop-ok, .grid-cell-conflict')
-    .forEach(c => c.classList.remove('grid-cell-drop-ok', 'grid-cell-conflict'));
+  grid.querySelectorAll('.grid-cell-drop-ok, .grid-cell-conflict, .grid-time-active')
+    .forEach(c => c.classList.remove('grid-cell-drop-ok', 'grid-cell-conflict', 'grid-time-active'));
 }
 
 // Room conflict: another teacher's lesson overlaps in the same room.
@@ -1169,6 +1261,74 @@ function initRecurring() {
   document.getElementById('copy-overlay').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeCopyOverlay();
   });
+
+  // Booking-mode toggle
+  const bookingBtn = document.getElementById('btn-booking-mode');
+  if (bookingBtn) {
+    bookingBtn.addEventListener('click', toggleBookingMode);
+  }
+
+  // Click on a booking-block (in booking mode) deletes it — only one's own.
+  document.getElementById('recurring-grid')?.addEventListener('click', async (e) => {
+    if (!bookingMode) return;
+    const block = e.target.closest('.booking-block');
+    if (!block) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const bookingId = block.dataset.bookingId;
+    const ownerId = block.dataset.teacherId;
+    if (ownerId !== state.user.id && state.profile.role !== 'admin') {
+      showToast('Можно удалять только свои бронирования', 'error');
+      return;
+    }
+    const { error } = await db.from('time_bookings').delete().eq('id', bookingId);
+    if (error) { showToast('Ошибка', 'error'); return; }
+    recurringBookings = recurringBookings.filter(b => b.id !== bookingId);
+    renderRecurringLessons();
+    showToast('Бронь удалена', 'success');
+  });
+}
+
+function toggleBookingMode() {
+  bookingMode = !bookingMode;
+  const btn = document.getElementById('btn-booking-mode');
+  const screen = document.getElementById('screen-recurring');
+  if (btn) btn.classList.toggle('active', bookingMode);
+  if (screen) screen.classList.toggle('booking-mode-on', bookingMode);
+  // Drop any in-flight gestures so the new mode starts clean
+  recSelecting = false; clearRecSelection();
+  if (recDragState) clearRecDragState();
+  recDragStarted = false;
+  recPendingClick = null;
+  removeRecTooltip();
+  clearRecDragHighlight();
+}
+
+async function createBookingFromSelection(day, room, slotFrom, slotToInclusive) {
+  const startSlot = slotFrom;
+  const endSlot = slotToInclusive + 1;
+  const teacherId = state.user.id;
+  // Don't allow overlapping an existing booking from the SAME teacher in the same room/day
+  const overlap = (recurringBookings || []).some(b => {
+    if (b.teacher_id !== teacherId || b.day_of_week !== day || b.room !== room) return false;
+    const sp = (b.start_time || '00:00').split(':'); const ep = (b.end_time || '00:00').split(':');
+    const bS = (+sp[0] * 60 + +sp[1] - START_HOUR * 60) / SLOT_MINUTES;
+    const bE = (+ep[0] * 60 + +ep[1] - START_HOUR * 60) / SLOT_MINUTES;
+    return startSlot < bE && endSlot > bS;
+  });
+  if (overlap) { showToast('Уже забронировано пересекающееся время', 'error'); return; }
+
+  const { data, error } = await db.from('time_bookings').insert({
+    teacher_id: teacherId,
+    day_of_week: day,
+    room: room,
+    start_time: recSlotToTimeStr(startSlot),
+    end_time: recSlotToTimeStr(endSlot)
+  }).select('*, teacher:profiles!teacher_id(short_name, color, full_name)').single();
+  if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
+  recurringBookings.push(data);
+  renderRecurringLessons();
+  showToast('Бронь добавлена', 'success');
 }
 
 async function syncRecurringToWeeksManual(teacherFilter) {
