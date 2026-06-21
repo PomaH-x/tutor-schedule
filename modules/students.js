@@ -319,9 +319,9 @@ let studentDetailId = null;
 
 async function openStudentDetail(studentId) {
   studentDetailId = studentId;
-  // Fire the three independent reads in parallel — they don't depend on each other.
+  // Fire the four independent reads in parallel — they don't depend on each other.
   // Saves ~2 round-trips on slow connections.
-  const [studentRes, lessonsRes, paymentsRes] = await Promise.all([
+  const [studentRes, lessonsRes, paymentsRes, missedRes] = await Promise.all([
     db.from('students')
       .select('*, teacher:profiles!teacher_id(full_name, color)')
       .eq('id', studentId).single(),
@@ -333,19 +333,57 @@ async function openStudentDetail(studentId) {
     db.from('payments')
       .select('id, lesson_id, amount, payment_method, status, submitted_at')
       .eq('student_id', studentId)
-      .order('submitted_at', { ascending: false })
+      .order('submitted_at', { ascending: false }),
+    db.from('cancellations')
+      .select('id, week_start, lesson_start_time, lesson_end_time, recurring_lesson_id, recurring_lesson:recurring_lessons(start_time, end_time, day_of_week, subject)')
+      .eq('student_id', studentId)
+      .eq('status', 'missed')
+      .order('week_start', { ascending: false })
   ]);
   const student = studentRes.data;
   if (!student) { showToast('Ученик не найден', 'error'); return; }
   const lessons = lessonsRes.data;
   const payments = paymentsRes.data;
 
+  // Convert missed cancellations into synthetic "missed" lesson rows. They participate
+  // in the same per-subject grouping and attendance counters as the real lesson rows.
+  const missedRows = (missedRes.data || []).map(c => {
+    // Prefer the cancellation's own captured time (set when the lesson was concrete).
+    // Otherwise compute the date from week_start + day_of_week + time on the recurring template.
+    let startISO = c.lesson_start_time || null;
+    let endISO = c.lesson_end_time || null;
+    let subj = null;
+    if (c.recurring_lesson) subj = c.recurring_lesson.subject || null;
+    if (!startISO && c.recurring_lesson && c.week_start) {
+      const monday = new Date(c.week_start);
+      const dow = c.recurring_lesson.day_of_week;
+      const date = new Date(monday); date.setDate(monday.getDate() + dow);
+      const sp = (c.recurring_lesson.start_time || '00:00').split(':');
+      const ep = (c.recurring_lesson.end_time || '00:00').split(':');
+      const s = new Date(date); s.setHours(+sp[0], +sp[1], 0, 0);
+      const e = new Date(date); e.setHours(+ep[0], +ep[1], 0, 0);
+      startISO = s.toISOString();
+      endISO = e.toISOString();
+    }
+    if (!startISO) return null; // can't render without a time
+    return {
+      id: 'missed-' + c.id,
+      _missedCancellationId: c.id,
+      start_time: startISO,
+      end_time: endISO,
+      status: 'missed',
+      subject: subj,
+      week_start: c.week_start
+    };
+  }).filter(Boolean);
+
   const pendingPayments = (payments || []).filter(p => p.status === 'pending');
   const paymentsByLesson = {};
   (payments || []).forEach(p => { paymentsByLesson[p.lesson_id] = p; });
 
-  // Group lessons by subject
-  const lessonList = lessons || [];
+  // Group lessons by subject (including synthetic missed rows)
+  const lessonList = [...(lessons || []), ...missedRows]
+    .sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
   const subjectGroups = {};
   lessonList.forEach(l => {
     const subj = l.subject || student.subject || 'Без предмета';
@@ -414,15 +452,20 @@ async function openStudentDetail(studentId) {
     const now = new Date();
     const completed = group.filter(l => l.status === 'active' && new Date(l.end_time) < now).length;
     const cancelled = group.filter(l => l.status === 'cancelled').length;
-    const upcoming = group.filter(l => l.status === 'active' && new Date(l.end_time) >= now).length;
-    const att = (completed + cancelled) > 0 ? Math.round(completed / (completed + cancelled) * 100) : null;
+    const missed    = group.filter(l => l.status === 'missed').length;
+    const upcoming  = group.filter(l => l.status === 'active' && new Date(l.end_time) >= now).length;
+    // Attendance: completed vs (completed + missed). Pending cancellations are not yet final
+    // misses (they can still be made up), so they don't drag the number down — only the
+    // permanent 'missed' status does, mirroring how the truants list works.
+    const att = (completed + missed) > 0 ? Math.round(completed / (completed + missed) * 100) : null;
 
     let t = `<div class="sd-subject-stats">`;
     t += `<span>Всего: <b>${group.length}</b></span>`;
     t += `<span>Проведено: <b>${completed}</b></span>`;
-    if (cancelled > 0) t += `<span>Пропущено: <b>${cancelled}</b></span>`;
-    if (upcoming > 0) t += `<span>Предстоит: <b>${upcoming}</b></span>`;
-    if (att !== null) t += `<span>Посещаемость: <b>${att}%</b></span>`;
+    if (cancelled > 0) t += `<span>Отменено: <b>${cancelled}</b></span>`;
+    if (missed > 0)    t += `<span>Прогулов: <b>${missed}</b></span>`;
+    if (upcoming > 0)  t += `<span>Предстоит: <b>${upcoming}</b></span>`;
+    if (att !== null)  t += `<span>Посещаемость: <b>${att}%</b></span>`;
     t += `</div>`;
 
     t += `<div class="sd-table-wrap"><table class="sd-table">
@@ -437,16 +480,26 @@ async function openStudentDetail(studentId) {
       const day = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][dayIdx];
       const time = `${s.getHours().toString().padStart(2,'0')}:${s.getMinutes().toString().padStart(2,'0')}`;
       const past = e < now;
-      const statusStr = l.status === 'cancelled'
-        ? '<span class="history-status history-cancelled">Отм.</span>'
-        : past ? '<span class="history-status history-completed">✓</span>'
-        : '<span class="history-status history-planned">⏳</span>';
+      let statusStr;
+      if (l.status === 'missed') {
+        statusStr = '<span class="history-status history-missed">Прогул</span>';
+      } else if (l.status === 'cancelled') {
+        statusStr = '<span class="history-status history-cancelled">Отм.</span>';
+      } else if (past) {
+        statusStr = '<span class="history-status history-completed">✓</span>';
+      } else {
+        statusStr = '<span class="history-status history-planned">⏳</span>';
+      }
       const p = paymentsByLesson[l.id];
-      const payStr = !past ? '—'
+      const payStr = (l.status === 'missed' || !past) ? '—'
         : p?.status === 'approved' ? '<span class="pay-paid">✓</span>'
         : p?.status === 'pending' ? '<span class="pay-pending">⏳</span>'
         : '<span class="pay-unpaid">✕</span>';
-      const delBtn = `<button class="btn-delete-lesson-row" data-lesson-id="${l.id}" title="Удалить запись">✕</button>`;
+      // No delete button for synthetic missed rows — they're derived from cancellations
+      // and represent confirmed truancy that shouldn't be casually erased.
+      const delBtn = l.status === 'missed'
+        ? ''
+        : `<button class="btn-delete-lesson-row" data-lesson-id="${l.id}" title="Удалить запись">✕</button>`;
       t += `<tr><td>${dd}.${mm} ${day}</td><td>${time}</td><td>${dur}</td><td>${statusStr}</td><td>${payStr}</td><td class="sd-table-actions">${delBtn}</td></tr>`;
     });
 
@@ -563,20 +616,22 @@ async function openStudentDetail(studentId) {
     }
   })();
 
-  // Delete lesson row in history table
+  // Delete this student's record from a lesson (NEVER deletes the lesson itself — even if this was the only student)
   body.querySelectorAll('.btn-delete-lesson-row').forEach(btn => {
     btn.addEventListener('click', async () => {
       const lessonId = btn.dataset.lessonId;
-      showConfirm('Удалить это занятие? Запись будет удалена для всех учеников этого занятия. Это действие нельзя отменить.', async () => {
-        // Remember linked subscriptions before delete to recompute them after
-        const { data: links } = await db.from('lesson_students')
-          .select('subscription_id').eq('lesson_id', lessonId);
-        const subIds = new Set((links || []).map(r => r.subscription_id).filter(Boolean));
+      showConfirm('Удалить запись этого ученика на занятие? Другие ученики этого занятия останутся. Это действие нельзя отменить.', async () => {
+        // Capture subscription id of THIS student's link (if any) so we can recompute it after delete
+        const { data: link } = await db.from('lesson_students')
+          .select('subscription_id').eq('lesson_id', lessonId).eq('student_id', studentId).maybeSingle();
+        const subId = link?.subscription_id || null;
 
-        const { error } = await db.from('lessons').delete().eq('id', lessonId);
+        const { error } = await db.from('lesson_students')
+          .delete().eq('lesson_id', lessonId).eq('student_id', studentId);
         if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
-        for (const id of subIds) await recomputeSubscriptionUsage(id);
-        showToast('Занятие удалено', 'success');
+
+        if (subId) await recomputeSubscriptionUsage(subId);
+        showToast('Ученик удалён из занятия', 'success');
         await openStudentDetail(studentId);
       }, 'Удалить');
     });
@@ -679,12 +734,13 @@ function confirmLinkStudent(profileId) {
 
 async function performLinkStudent(fakeStudentId, profileId, teacherId) {
   try {
-    // Load the fake record's subject for matching
+    // Load ALL trial student fields — we'll copy them to the real student record
     const { data: fakeStudent } = await db.from('students')
-      .select('subject')
+      .select('*')
       .eq('id', fakeStudentId)
       .single();
-    const fakeSubject = fakeStudent?.subject || null;
+    if (!fakeStudent) throw new Error('Тестовая карточка не найдена');
+    const fakeSubject = fakeStudent.subject || null;
 
     // For this teacher, the real profile may have several students-records (different subjects).
     // We treat them as the SAME if the subject matches. No subject → first record.
@@ -725,13 +781,29 @@ async function performLinkStudent(fakeStudentId, profileId, teacherId) {
         }
       }
 
-      // Transfer all remaining references
+      // Transfer all remaining references to the real student id
       await db.from('lesson_students').update({ student_id: realId }).eq('student_id', fakeStudentId);
       await db.from('recurring_lesson_students').update({ student_id: realId }).eq('student_id', fakeStudentId);
       await db.from('cancellations').update({ student_id: realId }).eq('student_id', fakeStudentId);
       await db.from('payments').update({ student_id: realId }).eq('student_id', fakeStudentId);
+      // Subscriptions also belong to a student — move them too so the trial's active subscription survives
+      await db.from('subscriptions').update({ student_id: realId }).eq('student_id', fakeStudentId);
 
-      // Delete the fake record
+      // Copy ALL profile fields from trial to real, so the data entered on the trial card is preserved.
+      // We do NOT touch profile_id of the real (it's already correct).
+      await db.from('students').update({
+        subject: fakeStudent.subject,
+        grade: fakeStudent.grade,
+        is_individual: fakeStudent.is_individual,
+        is_online: fakeStudent.is_online,
+        price_type: fakeStudent.price_type,
+        source: fakeStudent.source,
+        parent_name: fakeStudent.parent_name,
+        parent_phone: fakeStudent.parent_phone,
+        notes: fakeStudent.notes
+      }).eq('id', realId);
+
+      // Delete the trial record — all its data now lives under the real id
       const { error: delErr } = await db.from('students').delete().eq('id', fakeStudentId);
       if (delErr) throw delErr;
     } else {
@@ -758,15 +830,14 @@ async function computeStudentAttendance(studentId) {
     .eq('lesson_students.student_id', studentId)
     .lte('start_time', new Date().toISOString())
     .eq('status', 'active');
-  // Denominator addition: outstanding misses (any reason — paid or unpaid)
-  // lessons with status='cancelled' are NOT queried separately to avoid double-counting:
-  // computeAndSyncCancellations creates a cancellations record for each cancelled lesson.
-  const { data: pendingCancellations } = await db.from('cancellations')
+  // Denominator addition: confirmed misses ('missed') — pending ones are not final yet
+  // since they can still be made up before the 3-week boundary expires.
+  const { data: missedCancellations } = await db.from('cancellations')
     .select('id')
     .eq('student_id', studentId)
-    .eq('status', 'pending');
+    .eq('status', 'missed');
   const completed = (completedLessons || []).length;
-  const missed = (pendingCancellations || []).length;
+  const missed = (missedCancellations || []).length;
   const total = completed + missed;
   if (total === 0) return 0;
   return Math.round((completed / total) * 100);

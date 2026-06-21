@@ -12,7 +12,7 @@ const DRAG_THRESHOLD = 5;
 // Touch gesture support (mobile)
 const TOUCH_LONG_PRESS_MS = 450;
 const TOUCH_MOVE_THRESHOLD = 10;
-const TOUCH_TOOLTIP_MS = 3000;
+const TOUCH_TOOLTIP_MS = 2000;
 let touchGesture = null;
 let lastTouchTime = 0;
 let touchTooltipTimer = null;
@@ -73,6 +73,59 @@ function hasLocalConflict(day, room, slotFrom, slotTo, excludeId, teacherId) {
     if (startMin >= lE || endMin <= lS) return false;
     return teacherId ? l.teacher_id !== teacherId : true;
   });
+}
+
+// Strict same-room overlap check — used by drag (blocks ANY overlap regardless of teacher).
+function hasRoomOverlapAny(day, room, slotFrom, slotTo, excludeId) {
+  const dates = getWeekDates(state.currentWeekStart);
+  const date = dates[day]; if (!date) return false;
+  const startMin = START_HOUR * 60 + slotFrom * SLOT_MINUTES;
+  const endMin = START_HOUR * 60 + slotTo * SLOT_MINUTES;
+  return state.lessons.some(l => {
+    if (l.id === excludeId || l.room !== room) return false;
+    const ls = new Date(l.start_time);
+    if (ls.getDate() !== date.getDate() || ls.getMonth() !== date.getMonth() || ls.getFullYear() !== date.getFullYear()) return false;
+    const lS = ls.getHours() * 60 + ls.getMinutes();
+    const lE = new Date(l.end_time).getHours() * 60 + new Date(l.end_time).getMinutes();
+    return startMin < lE && endMin > lS;
+  });
+}
+
+// Drag-specific conflict — returns 'room' | 'teacher' | 'students' | 'individual' | null.
+// Different-teacher same-room overlap = 'room' (hard block).
+// Same-teacher overlap allowed IF combined student count fits and no individual mixing.
+function getDragConflictType(day, room, slotFrom, slotTo, excludeId, teacherId) {
+  // Different-teacher in same room — block
+  if (hasLocalConflict(day, room, slotFrom, slotTo, excludeId, teacherId)) return 'room';
+  // Same teacher in DIFFERENT room same time — block
+  if (hasTeacherDiffRoomConflict(day, room, slotFrom, slotTo, teacherId, excludeId)) return 'teacher';
+
+  // Same-teacher same-room overlap — check capacity / individual mixing
+  const dates = getWeekDates(state.currentWeekStart);
+  const date = dates[day]; if (!date) return null;
+  const startMin = START_HOUR * 60 + slotFrom * SLOT_MINUTES;
+  const endMin = START_HOUR * 60 + slotTo * SLOT_MINUTES;
+  const overlapping = state.lessons.filter(l => {
+    if (l.id === excludeId || l.room !== room) return false;
+    const ls = new Date(l.start_time);
+    if (ls.getDate() !== date.getDate() || ls.getMonth() !== date.getMonth() || ls.getFullYear() !== date.getFullYear()) return false;
+    const lS = ls.getHours() * 60 + ls.getMinutes();
+    const lE = new Date(l.end_time).getHours() * 60 + new Date(l.end_time).getMinutes();
+    return startMin < lE && endMin > lS;
+  });
+  if (overlapping.length === 0) return null;
+
+  const movingLesson = state.lessons.find(l => l.id === excludeId);
+  const movingStudents = movingLesson?.lesson_students || [];
+  const movingCount = movingStudents.length;
+  const movingHasIndividual = movingStudents.some(ls => ls.student?.is_individual);
+  const overlappingStudents = overlapping.flatMap(l => l.lesson_students || []);
+  const overlappingCount = overlappingStudents.length;
+  const overlappingHasIndividual = overlappingStudents.some(ls => ls.student?.is_individual);
+  const maxGroup = getMaxGroup(teacherId);
+  if (overlappingCount + movingCount > maxGroup) return 'students';
+  if ((movingHasIndividual && overlappingCount > 0) || (overlappingHasIndividual && movingCount > 0)) return 'individual';
+  return null;
 }
 
 function hasTeacherDiffRoomConflict(day, room, slotFrom, slotTo, teacherId, excludeId) {
@@ -416,6 +469,9 @@ function onGridMouseDown(e) {
   if (isShortlyAfterTouch()) return;
   if (state.profile.role === 'student') return;
 
+  // Student drag in progress — let document-level handlers do the placement, don't set pendingClick.
+  if (studentDragState) return;
+
   // Placing mode
   if (state.placingLesson || state.placingStudent || state.placingTruant) {
     const cell = e.target.closest('.grid-cell');
@@ -516,7 +572,7 @@ function onGridMouseMove(e) {
       const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
       const end = ts + dragState.slotLength;
       if (end <= TOTAL_SLOTS) {
-        const conflict = hasAnyConflict(td, tr, ts, end, dragState.lesson.id, dragState.lesson.teacher_id);
+        const conflict = !!getDragConflictType(td, tr, ts, end, dragState.lesson.id, dragState.lesson.teacher_id);
         for (let s = ts; s < end; s++) {
           const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
           if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
@@ -591,6 +647,8 @@ function onGridMouseMove(e) {
 
 function onGridMouseUp(e) {
   if (isShortlyAfterTouch()) return;
+  // Student drag in progress — let document-level mouseup handle placement, don't open any modal here.
+  if (studentDragState) { pendingClick = null; return; }
   // Pending click → it was a click (not drag) → open edit if on card
   if (pendingClick) {
     const pc = pendingClick;
@@ -604,20 +662,8 @@ function onGridMouseUp(e) {
         return;
       }
       openEditLessonModal(lesson);
-    } else {
-      // Admin can place over anyone; teacher — only over their own (state.user.id passed as exclusion)
-      if (state.profile.role !== 'admin') {
-        if (hasLocalConflict(pc.day, pc.room, pc.slot, pc.slot + 1, null, state.user.id)) {
-          showToast('Кабинет уже занят в это время', 'error');
-          return;
-        }
-        if (hasTeacherDiffRoomConflict(pc.day, pc.room, pc.slot, pc.slot + 1, state.user.id, null)) {
-          showToast('У вас уже есть занятие в это время', 'error');
-          return;
-        }
-      }
-      openLessonModal({ day: pc.day, room: pc.room, slotFrom: pc.slot, slotTo: pc.slot + 1 });
     }
+    // Click on empty cell does nothing — new lessons are created via range-select drag.
     return;
   }
 
@@ -672,8 +718,10 @@ function onGridMouseUp(e) {
 
 // ===== DRAG HIGHLIGHTS =====
 function clearDragHighlight() {
-  document.querySelectorAll('.grid-cell-drop-ok, .grid-cell-conflict').forEach(c => c.classList.remove('grid-cell-drop-ok', 'grid-cell-conflict'));
-  document.querySelectorAll('.grid-time-active').forEach(t => t.classList.remove('grid-time-active'));
+  const grid = document.getElementById('schedule-grid');
+  if (!grid) return;
+  grid.querySelectorAll('.grid-cell-drop-ok, .grid-cell-conflict, .grid-time-active')
+    .forEach(c => c.classList.remove('grid-cell-drop-ok', 'grid-cell-conflict', 'grid-time-active'));
 }
 
 // Highlight the left-side time labels for slots [slotFrom..slotToInclusive].
@@ -741,7 +789,21 @@ function onGridPointerDown(e) {
   const cell = e.target.closest('.grid-cell');
   if (!card && !cell) return;
 
-  const handleHit = !!e.target.closest('.lc-drag-handle');
+  // On mobile we removed the visible drag-handle. The TOP slot of the card is the drag zone.
+  let handleHit = false;
+  if (card) {
+    const r = card.getBoundingClientRect();
+    const lessonObj = state.lessons.find(l => l.id === card.dataset.lessonId);
+    if (lessonObj) {
+      const st = new Date(lessonObj.start_time), et = new Date(lessonObj.end_time);
+      const ss = (st.getHours() * 60 + st.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+      const es = (et.getHours() * 60 + et.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+      const slotCount = Math.max(1, es - ss);
+      // Top-slot height in pixels
+      const slotPx = r.height / slotCount;
+      handleHit = (e.clientY - r.top) < slotPx;
+    }
+  }
 
   // Capture pointer to keep receiving events even if finger moves outside grid
   try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
@@ -841,7 +903,7 @@ function onGridPointerMove(e) {
       const td = +cell.dataset.day, tr = +cell.dataset.room, ts = +cell.dataset.slot;
       const end = ts + dragState.slotLength;
       if (end <= TOTAL_SLOTS) {
-        const conflict = hasAnyConflict(td, tr, ts, end, dragState.lesson.id, dragState.lesson.teacher_id);
+        const conflict = !!getDragConflictType(td, tr, ts, end, dragState.lesson.id, dragState.lesson.teacher_id);
         for (let s = ts; s < end; s++) {
           const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
           if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
@@ -935,11 +997,13 @@ function onGridPointerUp(e) {
       clearDragState(); dragStarted = false;
       touchGesture = null; return;
     }
+    // Resolve target cell FIRST — while grid-dragging is still active and cards are pointer-events:none
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const cell = el?.closest?.('.grid-cell');
+    // Now safe to drop visual drag state
     clearDragHighlight();
     g.card?.classList.remove('lesson-card-dragging');
     document.getElementById('schedule-grid')?.classList.remove('grid-dragging');
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const cell = el?.closest?.('.grid-cell');
     if (cell) finishDrag(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
     else { clearDragState(); dragStarted = false; }
   }
@@ -1049,11 +1113,12 @@ async function finishDrag(targetDay, targetRoom, targetSlot) {
   const lesson = dragState.lesson; const end = targetSlot + dragState.slotLength;
   if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); clearDragState(); dragStarted = false; return; }
 
-  // Authoritative client-side conflict check — UI showed red, must block regardless of role
-  if (hasAnyConflict(targetDay, targetRoom, targetSlot, end, lesson.id, lesson.teacher_id)) {
-    showToast('Кабинет занят или превышен лимит', 'error');
-    clearDragState(); dragStarted = false; return;
-  }
+  // Strict client conflict (drag must never create unsafe overlaps)
+  const conflictType = getDragConflictType(targetDay, targetRoom, targetSlot, end, lesson.id, lesson.teacher_id);
+  if (conflictType === 'room')       { showToast('Кабинет уже занят в это время', 'error');         clearDragState(); dragStarted = false; return; }
+  if (conflictType === 'teacher')    { showToast('У вас уже есть занятие в это время', 'error');    clearDragState(); dragStarted = false; return; }
+  if (conflictType === 'students')   { showToast('Превышен лимит учеников в группе', 'error');      clearDragState(); dragStarted = false; return; }
+  if (conflictType === 'individual') { showToast('Нельзя смешивать индивидуальные и групповые', 'error'); clearDragState(); dragStarted = false; return; }
 
   const ct = await checkConflictServer(targetDay, targetRoom, targetSlot, end, lesson.id, lesson.teacher_id);
   if (ct) { conflictToast(ct); clearDragState(); dragStarted = false; return; }
@@ -1382,7 +1447,51 @@ async function placeStudentOnLesson(targetLessonId) {
   if (!tl) { cancelStudentDrag(); return; }
   if (tl.teacher_id !== s.teacherId) { showToast('Можно добавить только к своему преподавателю', 'error'); cancelStudentDrag(); return; }
 
-  // Fetch student data to check individual flag
+  // Compute target lesson's duration in slots
+  const tStart = new Date(tl.start_time), tEnd = new Date(tl.end_time);
+  const targetSlots = Math.round((tEnd.getTime() - tStart.getTime()) / (SLOT_MINUTES * 60 * 1000));
+
+  // If the dragged student's original duration differs from the target group's duration,
+  // we must NOT silently shrink/extend the student to the group's time. Instead, create
+  // a separate lesson at the target's room+start with the student's original duration.
+  if (targetSlots !== s.slotLength) {
+    const dates = getWeekDates(state.currentWeekStart);
+    const di = dates.findIndex(d =>
+      d.getFullYear() === tStart.getFullYear() &&
+      d.getMonth() === tStart.getMonth() &&
+      d.getDate() === tStart.getDate());
+    if (di === -1) { showToast('Ошибка даты', 'error'); cancelStudentDrag(); return; }
+
+    const startSlot = (tStart.getHours() * 60 + tStart.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+    const endSlot = startSlot + s.slotLength;
+    if (endSlot > TOTAL_SLOTS) { showToast('Длительность ученика не помещается в этот слот', 'error'); cancelStudentDrag(); return; }
+
+    const ct = await checkConflictServer(di, tl.room, startSlot, endSlot, null, s.teacherId);
+    if (ct) { conflictToast(ct, cancelStudentDrag); return; }
+
+    if (!(await checkTransferLimit([s.studentId]))) { cancelStudentDrag(); return; }
+
+    const sTime = new Date(tStart);
+    const eTime = new Date(tStart.getTime() + s.slotLength * SLOT_MINUTES * 60 * 1000);
+
+    const { data, error } = await db.from('lessons').insert({
+      teacher_id: s.teacherId, room: tl.room, week_start: formatDate(state.currentWeekStart),
+      start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+    }).select().single();
+    if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
+
+    await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
+    await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
+    await attachActiveSubscriptionIfAny(data.id, s.studentId, s.teacherId);
+    await recomputeSubscriptionsByLesson(s.lessonId);
+    await cleanEmptyLesson(s.lessonId);
+    cancelStudentDrag();
+    showToast('Ученик перенесён в отдельное занятие (своя длительность)', 'success');
+    await loadLessons();
+    return;
+  }
+
+  // Same duration — merge into the existing group lesson
   const { data: draggedStudent } = await db.from('students').select('is_individual').eq('id', s.studentId).single();
   const isInd = draggedStudent?.is_individual;
   const targetStudents = tl.lesson_students || [];
@@ -1581,8 +1690,10 @@ function updateSelectionHighlight() {
 }
 
 function clearSelectionHighlight() {
-  document.querySelectorAll('.grid-cell-selected').forEach(c => c.classList.remove('grid-cell-selected'));
-  document.querySelectorAll('.grid-time-active').forEach(t => t.classList.remove('grid-time-active'));
+  const grid = document.getElementById('schedule-grid');
+  if (!grid) return;
+  grid.querySelectorAll('.grid-cell-selected, .grid-time-active')
+    .forEach(c => c.classList.remove('grid-cell-selected', 'grid-time-active'));
 }
 function removeDurationLabel() { if (durationLabel) { durationLabel.remove(); durationLabel = null; } }
 
@@ -2188,7 +2299,7 @@ function initSchedule() {
         const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
         const end = ts + dragState.slotLength;
         if (end <= TOTAL_SLOTS) {
-          const conflict = hasAnyConflict(td, tr, ts, end, dragState.lesson.id, dragState.lesson.teacher_id);
+          const conflict = !!getDragConflictType(td, tr, ts, end, dragState.lesson.id, dragState.lesson.teacher_id);
           const grid = document.getElementById('schedule-grid');
           for (let s = ts; s < end; s++) {
             const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);

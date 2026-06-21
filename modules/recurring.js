@@ -29,7 +29,7 @@ function recIsShortlyAfterTouch() { return Date.now() - recLastTouchTime < 600; 
 async function loadRecurringLessons() {
   // Everyone (admin + teacher) sees ALL recurring lessons — needed for conflict prevention
   const { data, error } = await db.from('recurring_lessons')
-    .select('*, teacher:profiles!teacher_id(short_name, color, full_name), recurring_lesson_students(student_id, student:students(first_name, last_name, subject))');
+    .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), recurring_lesson_students(student_id, student:students(first_name, last_name, subject, is_individual))');
   if (error) {
     console.error('loadRecurringLessons error:', error);
     showToast('Ошибка загрузки', 'error');
@@ -249,6 +249,9 @@ function onRecGridMouseDown(e) {
   if (recIsShortlyAfterTouch()) return;
   if (state.profile.role === 'student') return;
 
+  // Student drag in progress — let document-level handlers do the placement, don't set pendingClick.
+  if (studentDragState) return;
+
   const dragHandle = e.target.closest('.lc-drag-handle');
   if (dragHandle) {
     e.preventDefault();
@@ -325,7 +328,7 @@ function onRecGridMouseMove(e) {
       const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
       const end = ts + recDragState.slotLength;
       if (end <= TOTAL_SLOTS) {
-        const conflict = hasRecConflict(td, tr, ts, end, recDragState.lesson.id, recDragState.lesson.teacher_id);
+        const conflict = !!getRecDragConflictType(td, tr, ts, end, recDragState.lesson.id, recDragState.lesson.teacher_id);
         for (let s = ts; s < end; s++) {
           const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
           if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
@@ -350,6 +353,7 @@ async function onRecGridMouseUp(e) {
   if (recIsShortlyAfterTouch()) return;
   // Student drag (started from a lesson modal, modal was closed, banner shown)
   if (studentDragState) {
+    recPendingClick = null;
     const card = e.target.closest('.lesson-card');
     if (card) {
       placeStudentOnRecurringLesson(card.dataset.lessonId);
@@ -369,20 +373,8 @@ async function onRecGridMouseUp(e) {
     if (pc.lessonId) {
       const lesson = recurringLessons.find(l => l.id === pc.lessonId);
       if (lesson) openRecurringEditModal(lesson);
-    } else {
-      const ownTid = state.profile.role === 'admin' ? null : state.user.id;
-      // Conflict in same room (other teacher) — block, room is taken
-      if (hasRecRoomConflict(pc.day, pc.room, pc.slot, pc.slot + 1, null, ownTid)) {
-        showToast('Кабинет уже занят в это время', 'error');
-        return;
-      }
-      // Teacher already has a lesson at this time in another room
-      if (ownTid && hasRecTeacherDiffRoomConflict(pc.day, pc.room, pc.slot, pc.slot + 1, ownTid, null)) {
-        showToast('У вас уже есть занятие в это время', 'error');
-        return;
-      }
-      openRecurringCreateModal({ day: pc.day, room: pc.room, slotFrom: pc.slot, slotTo: pc.slot + 1 });
     }
+    // Click on empty cell does nothing — new recurring lessons are created via range-select drag.
     return;
   }
 
@@ -438,7 +430,19 @@ function onRecGridPointerDown(e) {
   const card = e.target.closest('.lesson-card');
   const cell = e.target.closest('.grid-cell');
   if (!card && !cell) return;
-  const handleHit = !!e.target.closest('.lc-drag-handle');
+
+  // Top slot of card is the drag zone (no visual handle on mobile)
+  let handleHit = false;
+  if (card) {
+    const r = card.getBoundingClientRect();
+    const lessonObj = recurringLessons.find(l => l.id === card.dataset.lessonId);
+    if (lessonObj) {
+      const { ss, es } = recLessonSlots(lessonObj);
+      const slotCount = Math.max(1, es - ss);
+      const slotPx = r.height / slotCount;
+      handleHit = (e.clientY - r.top) < slotPx;
+    }
+  }
 
   try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
 
@@ -479,7 +483,7 @@ function onRecTouchLongPress() {
       g.mode = 'tooltip';
       showRecLessonTooltipForCard(g.card);
       if (recTouchTooltipTimer) clearTimeout(recTouchTooltipTimer);
-      recTouchTooltipTimer = setTimeout(() => { clearRecLessonTooltip(); recTouchTooltipTimer = null; }, 3000);
+      recTouchTooltipTimer = setTimeout(() => { clearRecLessonTooltip(); recTouchTooltipTimer = null; }, 2000);
     }
   } else if (g.cell) {
     g.mode = 'select';
@@ -518,7 +522,7 @@ function onRecGridPointerMove(e) {
       const td = +cell.dataset.day, tr = +cell.dataset.room, ts = +cell.dataset.slot;
       const end = ts + recDragState.slotLength;
       if (end <= TOTAL_SLOTS) {
-        const conflict = hasRecConflict(td, tr, ts, end, recDragState.lesson.id, recDragState.lesson.teacher_id);
+        const conflict = !!getRecDragConflictType(td, tr, ts, end, recDragState.lesson.id, recDragState.lesson.teacher_id);
         for (let s = ts; s < end; s++) {
           const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
           if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-drop-ok');
@@ -584,11 +588,12 @@ async function onRecGridPointerUp(e) {
     }
     openRecurringCreateModal({ day: recSelStart.day, room: recSelStart.room, slotFrom: sf, slotTo: st });
   } else if (g.mode === 'move') {
+    // Resolve target cell FIRST — while grid-dragging is still active and cards are pointer-events:none
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const cell = el?.closest?.('.grid-cell');
     clearRecDragHighlight();
     g.card?.classList.remove('lesson-card-dragging');
     document.getElementById('recurring-grid')?.classList.remove('grid-dragging');
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const cell = el?.closest?.('.grid-cell');
     if (cell) await finishRecDrag(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
     else { clearRecDragState(); recDragStarted = false; }
   }
@@ -733,10 +738,16 @@ function updateRecSelection() {
 }
 
 function clearRecSelection() {
-  document.querySelectorAll('#recurring-grid .grid-cell-selected').forEach(c => c.classList.remove('grid-cell-selected'));
+  const grid = document.getElementById('recurring-grid');
+  if (grid) grid.querySelectorAll('.grid-cell-selected').forEach(c => c.classList.remove('grid-cell-selected'));
   if (recDurationLabel) { recDurationLabel.remove(); recDurationLabel = null; }
 }
-function clearRecDragHighlight() { document.querySelectorAll('#recurring-grid .grid-cell-drop-ok, #recurring-grid .grid-cell-conflict').forEach(c => c.classList.remove('grid-cell-drop-ok', 'grid-cell-conflict')); }
+function clearRecDragHighlight() {
+  const grid = document.getElementById('recurring-grid');
+  if (!grid) return;
+  grid.querySelectorAll('.grid-cell-drop-ok, .grid-cell-conflict')
+    .forEach(c => c.classList.remove('grid-cell-drop-ok', 'grid-cell-conflict'));
+}
 
 // Room conflict: another teacher's lesson overlaps in the same room.
 // If `excludeTeacherId` is provided, lessons belonging to that teacher are NOT counted as room conflicts
@@ -753,6 +764,48 @@ function hasRecRoomConflict(day, room, slotFrom, slotTo, excludeId, excludeTeach
     const lS = +sp[0] * 60 + +sp[1]; const lE = +ep[0] * 60 + +ep[1];
     return !(startMin >= lE || endMin <= lS);
   });
+}
+
+// Strict same-room overlap (any teacher) — used by drag to block ALL overlaps
+function hasRecRoomOverlapAny(day, room, slotFrom, slotTo, excludeId) {
+  const startMin = START_HOUR * 60 + slotFrom * SLOT_MINUTES;
+  const endMin = START_HOUR * 60 + slotTo * SLOT_MINUTES;
+  return recurringLessons.some(l => {
+    if (l.id === excludeId || l.day_of_week !== day || l.room !== room) return false;
+    const sp = l.start_time.split(':'); const ep = l.end_time.split(':');
+    const lS = +sp[0] * 60 + +sp[1]; const lE = +ep[0] * 60 + +ep[1];
+    return !(startMin >= lE || endMin <= lS);
+  });
+}
+
+function getRecDragConflictType(day, room, slotFrom, slotTo, excludeId, teacherId) {
+  // Different-teacher in same room — block
+  if (hasRecRoomConflict(day, room, slotFrom, slotTo, excludeId, teacherId)) return 'room';
+  // Same teacher in different room same time — block
+  if (hasRecTeacherDiffRoomConflict(day, room, slotFrom, slotTo, teacherId, excludeId)) return 'teacher';
+
+  // Same-teacher same-room overlap — check capacity / individual mixing
+  const startMin = START_HOUR * 60 + slotFrom * SLOT_MINUTES;
+  const endMin = START_HOUR * 60 + slotTo * SLOT_MINUTES;
+  const overlapping = recurringLessons.filter(l => {
+    if (l.id === excludeId || l.day_of_week !== day || l.room !== room) return false;
+    const sp = l.start_time.split(':'); const ep = l.end_time.split(':');
+    const lS = +sp[0] * 60 + +sp[1]; const lE = +ep[0] * 60 + +ep[1];
+    return startMin < lE && endMin > lS;
+  });
+  if (overlapping.length === 0) return null;
+
+  const movingLesson = recurringLessons.find(l => l.id === excludeId);
+  const movingStudents = movingLesson?.recurring_lesson_students || [];
+  const movingCount = movingStudents.length;
+  const movingHasIndividual = movingStudents.some(ls => ls.student?.is_individual);
+  const overlappingStudents = overlapping.flatMap(l => l.recurring_lesson_students || []);
+  const overlappingCount = overlappingStudents.length;
+  const overlappingHasIndividual = overlappingStudents.some(ls => ls.student?.is_individual);
+  const maxGroup = getMaxGroup(teacherId);
+  if (overlappingCount + movingCount > maxGroup) return 'students';
+  if ((movingHasIndividual && overlappingCount > 0) || (overlappingHasIndividual && movingCount > 0)) return 'individual';
+  return null;
 }
 
 // Teacher conflict: same teacher has another lesson at this time in a different room.
@@ -832,6 +885,45 @@ async function placeStudentOnRecurringLesson(targetLessonId) {
   const sourceRecId = await findSourceRecurringLessonId(s.studentId, s.teacherId);
   if (sourceRecId === targetLessonId) { cancelStudentDrag(); return; }
 
+  // Compute target lesson's duration in slots
+  const tsp = tl.start_time.split(':'); const tep = tl.end_time.split(':');
+  const tStartSlot = ((+tsp[0]) * 60 + (+tsp[1]) - START_HOUR * 60) / SLOT_MINUTES;
+  const tEndSlot = ((+tep[0]) * 60 + (+tep[1]) - START_HOUR * 60) / SLOT_MINUTES;
+  const targetSlots = tEndSlot - tStartSlot;
+
+  // Duration mismatch — create a parallel recurring lesson at target's room+day+start with student's original duration
+  if (targetSlots !== s.slotLength) {
+    const endSlot = tStartSlot + s.slotLength;
+    if (endSlot > TOTAL_SLOTS) { showToast('Длительность ученика не помещается в этот слот', 'error'); cancelStudentDrag(); return; }
+
+    const conflict = hasRecConflict(tl.day_of_week, tl.room, tStartSlot, endSlot, null, s.teacherId);
+    if (conflict === 'room') { showToast('Кабинет уже занят в это время', 'error'); cancelStudentDrag(); return; }
+    if (conflict === 'teacher') { showToast('У вас уже есть занятие в это время', 'error'); cancelStudentDrag(); return; }
+
+    const { data: newRec, error } = await db.from('recurring_lessons').insert({
+      teacher_id: s.teacherId, room: tl.room, day_of_week: tl.day_of_week,
+      start_time: recSlotToTimeStr(tStartSlot), end_time: recSlotToTimeStr(endSlot)
+    }).select().single();
+    if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
+
+    await db.from('recurring_lesson_students').insert({ recurring_lesson_id: newRec.id, student_id: s.studentId });
+
+    if (sourceRecId) {
+      await db.from('recurring_lesson_students').delete().eq('recurring_lesson_id', sourceRecId).eq('student_id', s.studentId);
+      const { data: remaining } = await db.from('recurring_lesson_students').select('student_id').eq('recurring_lesson_id', sourceRecId);
+      if (!remaining || remaining.length === 0) {
+        await db.from('recurring_lessons').delete().eq('id', sourceRecId);
+      }
+    }
+
+    cancelStudentDrag();
+    showToast('Ученик перенесён в отдельное занятие (своя длительность)', 'success');
+    await loadRecurringLessons();
+    syncRecurringToWeeks();
+    return;
+  }
+
+  // Same duration — merge into target group
   const targetStudents = tl.recurring_lesson_students || [];
   if (targetStudents.some(rs => rs.student_id === s.studentId)) {
     showToast('Ученик уже в этом занятии', 'error'); cancelStudentDrag(); return;
@@ -1030,9 +1122,11 @@ async function finishRecDrag(targetDay, targetRoom, targetSlot) {
   const lesson = recDragState.lesson;
   const end = targetSlot + recDragState.slotLength;
   if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); clearRecDragState(); recDragStarted = false; return; }
-  const conflict = hasRecConflict(targetDay, targetRoom, targetSlot, end, lesson.id, lesson.teacher_id);
-  if (conflict === 'room') { showToast('Кабинет уже занят в это время', 'error'); clearRecDragState(); recDragStarted = false; return; }
-  if (conflict === 'teacher') { showToast('У вас уже есть занятие в это время', 'error'); clearRecDragState(); recDragStarted = false; return; }
+  const conflictType = getRecDragConflictType(targetDay, targetRoom, targetSlot, end, lesson.id, lesson.teacher_id);
+  if (conflictType === 'room')       { showToast('Кабинет уже занят в это время', 'error');         clearRecDragState(); recDragStarted = false; return; }
+  if (conflictType === 'teacher')    { showToast('У вас уже есть занятие в это время', 'error');    clearRecDragState(); recDragStarted = false; return; }
+  if (conflictType === 'students')   { showToast('Превышен лимит учеников в группе', 'error');      clearRecDragState(); recDragStarted = false; return; }
+  if (conflictType === 'individual') { showToast('Нельзя смешивать индивидуальные и групповые', 'error'); clearRecDragState(); recDragStarted = false; return; }
 
   // Optimistic local update
   const newStart = recSlotToTimeStr(targetSlot);

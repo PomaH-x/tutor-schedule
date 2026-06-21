@@ -105,10 +105,21 @@ async function computeAndSyncCancellations() {
     }
   }
 
-  // Cleanup: delete cancellations older than 3 weeks
+  // Cancellations older than 3 weeks are no longer "pending make-up" — they become
+  // permanent misses ('missed' status). They stay in DB so they keep reducing the
+  // student's attendance metric and show up as «Прогул» in the student card.
+  // 'made_up' rows older than 3 weeks are also archived (deleted) to keep the table small.
   const threeWeeksAgo = new Date(currentMonday);
   threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 21);
-  await db.from('cancellations').delete().lt('week_start', formatDate(threeWeeksAgo));
+  const threeWeeksAgoStr = formatDate(threeWeeksAgo);
+  await db.from('cancellations')
+    .update({ status: 'missed' })
+    .lt('week_start', threeWeeksAgoStr)
+    .eq('status', 'pending');
+  await db.from('cancellations')
+    .delete()
+    .lt('week_start', threeWeeksAgoStr)
+    .eq('status', 'made_up');
 }
 
 
@@ -347,6 +358,59 @@ async function placeTruantOnLesson(targetLessonId) {
   if (!tl) { showToast('Занятие не найдено', 'error'); return; }
   if (tl.teacher_id !== t.teacherId) { showToast('Только к своему преподавателю', 'error'); return; }
 
+  // Compute target lesson's duration in slots
+  var tStart = new Date(tl.start_time), tEnd = new Date(tl.end_time);
+  var targetSlots = Math.round((tEnd.getTime() - tStart.getTime()) / (SLOT_MINUTES * 60 * 1000));
+
+  // Helper to close the cancellation row after a successful placement
+  async function closeCancellation() {
+    if (t.cancellationId) {
+      await db.from('cancellations').delete().eq('id', t.cancellationId);
+    } else {
+      var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
+      if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
+    }
+  }
+
+  // Duration mismatch — create a separate (parallel) lesson at the same room+start with the truant's
+  // original duration. This is the same rule we use for student DnD: the student's duration is
+  // never silently overwritten by the target group's duration.
+  if (targetSlots !== t.slotLength) {
+    var dates = getWeekDates(state.currentWeekStart);
+    var di = dates.findIndex(function(d) {
+      return d.getFullYear() === tStart.getFullYear() && d.getMonth() === tStart.getMonth() && d.getDate() === tStart.getDate();
+    });
+    if (di === -1) { showToast('Ошибка даты', 'error'); return; }
+
+    var startSlot = (tStart.getHours() * 60 + tStart.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
+    var endSlot = startSlot + t.slotLength;
+    if (endSlot > TOTAL_SLOTS) { showToast('Длительность ученика не помещается в этот слот', 'error'); return; }
+
+    var ct = await checkConflictServer(di, tl.room, startSlot, endSlot, null, t.teacherId);
+    if (ct === 'room') { showToast('Кабинет занят', 'error'); return; }
+    if (ct === 'teacher') { showToast('Преподаватель занят', 'error'); return; }
+    if (ct) { showToast('Конфликт', 'error'); return; }
+
+    var sTime = new Date(tStart);
+    var eTime = new Date(tStart.getTime() + t.slotLength * SLOT_MINUTES * 60 * 1000);
+
+    var ins = await db.from('lessons').insert({
+      teacher_id: t.teacherId, room: tl.room, week_start: formatDate(state.currentWeekStart),
+      start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+    }).select().single();
+    if (ins.error) { showToast('Ошибка', 'error'); return; }
+
+    await db.from('lesson_students').insert({ lesson_id: ins.data.id, student_id: t.studentId });
+    await attachActiveSubscriptionIfAny(ins.data.id, t.studentId, t.teacherId);
+    await closeCancellation();
+
+    state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
+    showToast('Размещён в отдельное занятие (своя длительность)', 'success');
+    await loadLessons();
+    return;
+  }
+
+  // Same duration — merge into target group as before
   var truantResult = await db.from('students').select('is_individual').eq('id', t.studentId).single();
   var isInd = truantResult.data ? truantResult.data.is_individual : false;
   var targetStudents = tl.lesson_students || [];
@@ -362,14 +426,7 @@ async function placeTruantOnLesson(targetLessonId) {
 
   await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: t.studentId });
   await attachActiveSubscriptionIfAny(targetLessonId, t.studentId, t.teacherId);
-
-  // Close the specific cancellation that was being placed (fallback: oldest pending)
-  if (t.cancellationId) {
-    await db.from('cancellations').delete().eq('id', t.cancellationId);
-  } else {
-    var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
-    if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
-  }
+  await closeCancellation();
 
   state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Ученик добавлен к занятию', 'success');

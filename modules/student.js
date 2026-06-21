@@ -355,18 +355,17 @@ async function computeAttendance(studentIds) {
     .lte('start_time', new Date().toISOString())
     .eq('status', 'active');
 
-  // Denominator addition: outstanding misses (any reason — paid or unpaid)
-  // lessons with status='cancelled' are NOT queried separately to avoid double-counting:
-  // computeAndSyncCancellations creates a cancellations record for each cancelled lesson.
-  const { data: pendingCancellations } = await db.from('cancellations')
+  // Denominator addition: confirmed misses ('missed') — pending cancellations are not
+  // final yet (they can still be made up within 3 weeks).
+  const { data: missedCancellations } = await db.from('cancellations')
     .select('id')
     .in('student_id', ids)
-    .eq('status', 'pending');
+    .eq('status', 'missed');
 
   // Unique lessons (one student may have several records, but lesson is the same entity)
   const uniqueLessons = new Set((completedLessons || []).map(l => l.id));
   const completed = uniqueLessons.size;
-  const missed = (pendingCancellations || []).length;
+  const missed = (missedCancellations || []).length;
   const total = completed + missed;
   if (total === 0) return 0;
   return Math.round((completed / total) * 100);
