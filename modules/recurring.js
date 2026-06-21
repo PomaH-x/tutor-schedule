@@ -28,6 +28,19 @@ let recTouchLastCardTapAt = 0;
 let recTouchEditTimer = null;
 function recIsShortlyAfterTouch() { return Date.now() - recLastTouchTime < 600; }
 
+function onRecPlaceLongPress() {
+  const g = recTouchGesture; if (!g) return;
+  if (g.moved) return;
+  g.mode = 'place-drag';
+  if (navigator.vibrate) { try { navigator.vibrate(20); } catch (_) {} }
+  const el = document.elementFromPoint(g.startX, g.startY);
+  const cell = el?.closest?.('.grid-cell');
+  if (cell && typeof showPlacementPreview === 'function') {
+    const slotLength = studentDragState?.slotLength || 2;
+    showPlacementPreview('recurring-grid', +cell.dataset.day, +cell.dataset.room, +cell.dataset.slot, slotLength);
+  }
+}
+
 async function loadRecurringLessons() {
   // Everyone (admin + teacher) sees ALL recurring lessons — needed for conflict prevention
   const [lessonsRes, bookingsRes] = await Promise.all([
@@ -42,6 +55,16 @@ async function loadRecurringLessons() {
     return;
   }
   recurringLessons = lessonsRes.data || [];
+  // Dedup recurring_lesson_students by student_id (physically impossible duplicates)
+  recurringLessons.forEach(l => {
+    if (!l.recurring_lesson_students || l.recurring_lesson_students.length < 2) return;
+    const seen = new Set();
+    l.recurring_lesson_students = l.recurring_lesson_students.filter(ls => {
+      if (seen.has(ls.student_id)) return false;
+      seen.add(ls.student_id);
+      return true;
+    });
+  });
   // If `time_bookings` table doesn't exist yet (migration not applied), just silently skip.
   recurringBookings = bookingsRes.error ? [] : (bookingsRes.data || []);
   renderRecurringLessons();
@@ -132,7 +155,7 @@ function renderRecurringLessons() {
     slotTotals[key] = {};
     lessons.forEach(lesson => {
       const { ss, es } = recLessonSlots(lesson);
-      const sc = lesson.recurring_lesson_students?.length || 0;
+      const sc = new Set((lesson.recurring_lesson_students || []).map(ls => ls.student_id)).size;
       for (let s = ss; s < es; s++) {
         slotTotals[key][s] = (slotTotals[key][s] || 0) + sc;
       }
@@ -461,13 +484,14 @@ function onRecGridPointerDown(e) {
   recLastTouchTime = Date.now();
   if (state.profile.role === 'student') return;
 
-  // Student-from-modal placing → defer to pointerup, allow free scrolling
+  // Student-from-modal placing → long-press for preview-drag (mirrors schedule.js)
   if (studentDragState) {
     recTouchGesture = {
       pointerId: e.pointerId,
       startX: e.clientX, startY: e.clientY,
       mode: 'place',
-      moved: false
+      moved: false,
+      timer: setTimeout(onRecPlaceLongPress, 450)
     };
     return;
   }
@@ -547,10 +571,26 @@ function onRecGridPointerMove(e) {
   if (e.pointerType !== 'touch') return;
   const g = recTouchGesture; if (!g || g.pointerId !== e.pointerId) return;
 
-  // Placement (student from modal) — track scroll vs tap
+  // Placement: track scroll vs long-press
   if (g.mode === 'place') {
     const dx = Math.abs(e.clientX - g.startX), dy = Math.abs(e.clientY - g.startY);
-    if (dx > 10 || dy > 10) g.moved = true;
+    if (dx > 10 || dy > 10) {
+      g.moved = true;
+      if (g.timer) { clearTimeout(g.timer); g.timer = null; }
+    }
+    return;
+  }
+  if (g.mode === 'place-drag') {
+    const grid = document.getElementById('recurring-grid');
+    if (typeof updateAutoScrollX === 'function') updateAutoScrollX(grid, e.clientX, e.clientY);
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const cell = el?.closest?.('.grid-cell');
+    if (cell && typeof showPlacementPreview === 'function') {
+      const slotLength = studentDragState?.slotLength || 2;
+      showPlacementPreview('recurring-grid', +cell.dataset.day, +cell.dataset.room, +cell.dataset.slot, slotLength);
+    } else if (typeof removePlacementPreview === 'function') {
+      removePlacementPreview();
+    }
     return;
   }
 
@@ -603,10 +643,16 @@ async function onRecGridPointerUp(e) {
   recLastTouchTime = Date.now();
   if (typeof stopAutoScroll === 'function') stopAutoScroll();
 
-  // Placement (student-from-modal): commit only if finger barely moved.
+  // 'place' = long-press never fired → no commit (just scroll/cancel)
   if (g.mode === 'place') {
+    if (g.timer) { clearTimeout(g.timer); g.timer = null; }
     recTouchGesture = null;
-    if (g.moved) return;
+    return;
+  }
+  // 'place-drag' = long-press fired → commit at finger's cell/card
+  if (g.mode === 'place-drag') {
+    if (typeof removePlacementPreview === 'function') removePlacementPreview();
+    recTouchGesture = null;
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const card = el?.closest?.('.lesson-card');
     const cell = el?.closest?.('.grid-cell');
@@ -681,8 +727,9 @@ function onRecGridPointerCancel(e) {
   const g = recTouchGesture; if (!g) return;
   clearTimeout(g.timer);
   if (typeof stopAutoScroll === 'function') stopAutoScroll();
-  if (g.mode === 'place') {
-    // Pinch/multi-touch — placing state stays
+  if (g.mode === 'place' || g.mode === 'place-drag') {
+    if (g.timer) { clearTimeout(g.timer); g.timer = null; }
+    if (typeof removePlacementPreview === 'function') removePlacementPreview();
   } else if (g.mode === 'select') {
     recSelecting = false; recSelStart = null; recSelEnd = null; clearRecSelection();
   } else if (g.mode === 'move') {

@@ -411,9 +411,12 @@ async function placeTruantOnLesson(targetLessonId) {
   }
 
   // Same duration — merge into target group as before
+  var targetStudents = tl.lesson_students || [];
+  if (targetStudents.some(function(ls) { return ls.student_id === t.studentId; })) {
+    showToast('Ученик уже в этом занятии', 'error'); return;
+  }
   var truantResult = await db.from('students').select('is_individual').eq('id', t.studentId).single();
   var isInd = truantResult.data ? truantResult.data.is_individual : false;
-  var targetStudents = tl.lesson_students || [];
   var targetHasIndividual = targetStudents.some(function(ls) { return ls.student && ls.student.is_individual; });
 
   if (isInd && targetStudents.length > 0) {

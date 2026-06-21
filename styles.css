@@ -62,6 +62,19 @@ html, body {
   -webkit-user-select: none;
 }
 
+/* iPhone safe-area: keep the top bar and side edges out of the notch / rounded corners.
+   The viewport meta uses viewport-fit=cover so content fills the screen; without these
+   paddings, the time labels and top buttons get clipped by the notch. */
+.top-bar {
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-left: max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
+}
+.screen {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
 #app {
   height: 100%;
 }
@@ -758,6 +771,22 @@ input, textarea, select {
   white-space: nowrap;
 }
 
+/* Green outline shown while the user is long-press-dragging during a placing flow.
+   Behaves as a regular grid item — gridColumn/gridRow expand it across slotLength cells.
+   (Earlier `position: absolute` here collapsed the box to a dot.) */
+.placing-preview {
+  pointer-events: none;
+  background: rgba(46, 168, 122, 0.22);
+  border: 2px solid var(--success);
+  border-radius: var(--radius-sm);
+  z-index: 8;
+  margin: 1px;
+}
+.placing-preview-conflict {
+  background: rgba(220, 53, 69, 0.22);
+  border-color: var(--danger);
+}
+
 /* removed week-nav-hover */
 
 /* Current students in edit modal */
@@ -779,10 +808,12 @@ input, textarea, select {
 
 .cs-drag-handle {
   cursor: grab;
-  opacity: 0.4;
-  font-size: 12px;
+  opacity: 0.65;
+  display: inline-flex;
+  align-items: center;
   user-select: none;
   transition: opacity 0.15s;
+  color: var(--accent);
 }
 
 .cs-drag-handle:hover {
@@ -2504,7 +2535,32 @@ input, textarea, select {
   }
 
   .schedule-grid {
-    grid-template-columns: 36px repeat(21, minmax(36px, 1fr)) !important;
+    grid-template-columns: 44px repeat(21, minmax(36px, 1fr)) !important;
+  }
+
+  /* Make sure the slot count digit doesn't sit right next to the teacher initials */
+  .lc-slot-count {
+    margin-left: 20px;
+  }
+
+  /* "Start" badge — small colored stripe at the top of every lesson card, so the user
+     immediately sees where the lesson begins. Doesn't overlap initials or slot count. */
+  .lesson-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: currentColor;
+    opacity: 0.85;
+    border-top-left-radius: var(--radius-sm);
+    border-top-right-radius: var(--radius-sm);
+    pointer-events: none;
+    z-index: 1;
+  }
+  .lc-header {
+    top: 5px;
   }
 
   .students-controls {

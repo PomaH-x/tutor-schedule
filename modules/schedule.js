@@ -335,7 +335,7 @@ function renderLessons() {
       const start = new Date(lesson.start_time); const end = new Date(lesson.end_time);
       const ss = (start.getHours() * 60 + start.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
       const es = (end.getHours() * 60 + end.getMinutes() - START_HOUR * 60) / SLOT_MINUTES;
-      const sc = lesson.lesson_students?.length || 0;
+      const sc = new Set((lesson.lesson_students || []).map(ls => ls.student_id)).size;
       for (let s = ss; s < es; s++) {
         slotTotals[key][s] = (slotTotals[key][s] || 0) + sc;
       }
@@ -824,6 +824,51 @@ function stopAutoScroll() {
   autoScrollGridId = null;
 }
 
+// ===== PLACING PREVIEW (long-press during student/truant placement) =====
+
+function getActivePlacingSlotLength() {
+  if (studentDragState) return studentDragState.slotLength || 2;
+  if (state.placingTruant) return state.placingTruant.slotLength || 2;
+  if (state.placingStudent) return state.placingStudent.slotLength || 2;
+  if (state.placingLesson) return state.placingLesson.slotLength || 2;
+  return 2;
+}
+
+function showPlacementPreview(gridId, day, room, slotFrom, slotLength) {
+  const grid = document.getElementById(gridId);
+  if (!grid) return;
+  removePlacementPreview();
+  const end = Math.min(slotFrom + slotLength, TOTAL_SLOTS);
+  if (end <= slotFrom) return;
+  // Conflict check uses the same drag-rules as a real lesson drag
+  let conflict = false;
+  if (typeof getDragConflictType === 'function' && (studentDragState || state.placingTruant || state.placingStudent)) {
+    const teacherId = studentDragState?.teacherId || state.placingTruant?.teacherId || state.placingStudent?.teacherId;
+    conflict = !!getDragConflictType(day, room, slotFrom, end, null, teacherId);
+  }
+  const preview = document.createElement('div');
+  preview.className = 'placing-preview' + (conflict ? ' placing-preview-conflict' : '');
+  preview.style.gridColumn = `${day * 3 + room + 1}`;
+  preview.style.gridRow = `${rowForSlot(slotFrom)} / ${rowForSlot(end)}`;
+  grid.appendChild(preview);
+}
+
+function removePlacementPreview() {
+  document.querySelectorAll('.placing-preview').forEach(el => el.remove());
+}
+
+function onPlaceLongPress() {
+  const g = touchGesture; if (!g) return;
+  if (g.moved) return;  // user already scrolled — long-press is invalid
+  g.mode = 'place-drag';
+  if (navigator.vibrate) { try { navigator.vibrate(20); } catch (_) {} }
+  const el = document.elementFromPoint(g.startX, g.startY);
+  const cell = el?.closest?.('.grid-cell');
+  if (cell) {
+    showPlacementPreview('schedule-grid', +cell.dataset.day, +cell.dataset.room, +cell.dataset.slot, getActivePlacingSlotLength());
+  }
+}
+
 function onGridPointerDown(e) {
   if (e.pointerType !== 'touch') return;
   // If a touch gesture is already in progress and a second finger arrives,
@@ -832,17 +877,21 @@ function onGridPointerDown(e) {
   lastTouchTime = Date.now();
   if (state.profile.role === 'student') return;
 
-  // Student-move OR any placing-flow: defer placement to pointerup, and let the
-  // browser scroll if the finger moves (so user can navigate to far-away days).
+  // Student-move OR any placing-flow: defer placement to long-press → preview-drag.
+  // Sequence on touch:
+  //   1. Quick tap → does NOTHING (so the user can freely scroll/zoom).
+  //   2. Long-press on a cell → green preview appears showing where the student/lesson will
+  //      land (slotLength tall). Finger keeps holding.
+  //   3. Drag the finger → preview follows.
+  //   4. Release → commits placement at the preview's position.
   if (studentDragState || state.placingLesson || state.placingStudent || state.placingTruant) {
     touchGesture = {
       pointerId: e.pointerId,
       startX: e.clientX, startY: e.clientY,
-      mode: 'place',
-      moved: false
+      mode: 'place',       // becomes 'place-drag' once long-press fires
+      moved: false,
+      timer: setTimeout(onPlaceLongPress, TOUCH_LONG_PRESS_MS)
     };
-    // DO NOT preventDefault — that would block native scroll. We only commit a placement
-    // on pointerup if the finger didn't move (i.e., it was a real tap, not a scroll gesture).
     return;
   }
 
@@ -939,11 +988,26 @@ function onGridPointerMove(e) {
   if (e.pointerType !== 'touch') return;
   const g = touchGesture; if (!g || g.pointerId !== e.pointerId) return;
 
-  // Placement (student transfer / truant / etc.) — track whether the finger has moved
-  // significantly. If yes, it's a scroll, not a tap → don't place on release.
+  // Placement: track scroll vs. waiting-for-long-press
   if (g.mode === 'place') {
     const dx = Math.abs(e.clientX - g.startX), dy = Math.abs(e.clientY - g.startY);
-    if (dx > 10 || dy > 10) g.moved = true;
+    if (dx > 10 || dy > 10) {
+      g.moved = true;
+      if (g.timer) { clearTimeout(g.timer); g.timer = null; }  // abort long-press — it's a scroll
+    }
+    return;
+  }
+  if (g.mode === 'place-drag') {
+    // The preview follows the finger; auto-scroll lets the user reach far-away cells.
+    const grid = document.getElementById('schedule-grid');
+    updateAutoScrollX(grid, e.clientX, e.clientY);
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const cell = el?.closest?.('.grid-cell');
+    if (cell) {
+      showPlacementPreview('schedule-grid', +cell.dataset.day, +cell.dataset.room, +cell.dataset.slot, getActivePlacingSlotLength());
+    } else {
+      removePlacementPreview();
+    }
     return;
   }
 
@@ -1007,12 +1071,18 @@ function onGridPointerUp(e) {
   lastTouchTime = Date.now();
   stopAutoScroll();
 
-  // Placement (student / truant / transferred-lesson): commit only if finger barely moved.
-  // If finger moved more than ~10px, treat it as a scroll gesture and DO NOTHING — the
-  // placing state remains active, banner stays, user can scroll/zoom freely.
+  // 'place' = the long-press never fired (quick tap or scroll). Either way, NOTHING
+  // is committed — the user has to explicitly long-press to start a placement drag.
   if (g.mode === 'place') {
+    if (g.timer) { clearTimeout(g.timer); g.timer = null; }
     touchGesture = null;
-    if (g.moved) return;
+    return;
+  }
+
+  // 'place-drag' = long-press fired, preview was shown. Commit at the cell under finger.
+  if (g.mode === 'place-drag') {
+    removePlacementPreview();
+    touchGesture = null;
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const card = el?.closest?.('.lesson-card');
     const cell = el?.closest?.('.grid-cell');
@@ -1120,8 +1190,10 @@ function onGridPointerCancel(e) {
   const g = touchGesture; if (!g) return;
   clearTimeout(g.timer);
   stopAutoScroll();
-  if (g.mode === 'place') {
-    // Pinch/multi-touch — placing state stays so user can try again with another tap
+  if (g.mode === 'place' || g.mode === 'place-drag') {
+    if (g.timer) { clearTimeout(g.timer); g.timer = null; }
+    removePlacementPreview();
+    // Placing state stays active so user can try again
   } else if (g.mode === 'select') {
     selecting = false; selStart = null; selEnd = null;
     clearSelectionHighlight(); removeDurationLabel();
@@ -1647,6 +1719,10 @@ async function placeStudentOnLesson(targetLessonId) {
   }
 
   // Same duration — merge into the existing group lesson
+  const targetStudents0 = tl.lesson_students || [];
+  if (targetStudents0.some(ls => ls.student_id === s.studentId)) {
+    showToast('Ученик уже в этом занятии', 'error'); cancelStudentDrag(); return;
+  }
   const { data: draggedStudent } = await db.from('students').select('is_individual').eq('id', s.studentId).single();
   const isInd = draggedStudent?.is_individual;
   const targetStudents = tl.lesson_students || [];
@@ -1873,6 +1949,18 @@ async function loadLessons() {
     .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), lesson_students(student_id, student:students(first_name, last_name, subject, is_individual, is_online, price_type)), original_start_time, original_end_time, transferred_from_id')
     .eq('week_start', ws).eq('status', 'active');
   if (error) { showToast('Ошибка загрузки', 'error'); return; }
+  // Deduplicate lesson_students by student_id — same student can't be in the same lesson
+  // twice (physically impossible). Any duplicates that slipped past historical inserts are
+  // collapsed here so counts, max-group checks, and rendering all see a clean set.
+  (data || []).forEach(l => {
+    if (!l.lesson_students || l.lesson_students.length < 2) return;
+    const seen = new Set();
+    l.lesson_students = l.lesson_students.filter(ls => {
+      if (seen.has(ls.student_id)) return false;
+      seen.add(ls.student_id);
+      return true;
+    });
+  });
   state.lessons = (data || []).filter(l => l.lesson_students?.length > 0 && l.room !== 0);
   const emptyIds = (data || []).filter(l => !l.lesson_students?.length).map(l => l.id);
   if (emptyIds.length > 0) db.from('lessons').delete().in('id', emptyIds);
@@ -2012,7 +2100,7 @@ function renderCurrentStudents() {
   ct.innerHTML = `<label class="lesson-label">Текущие ученики</label>` + selected.map(s => {
     const cancelBtn = canEdit && (m.mode === 'edit') ? `<button class="cs-cancel" data-student-id="${s.id}" title="Отменить ученика">✕</button>` : '';
     return `<div class="current-student-row" data-student-id="${s.id}">
-      ${canEdit && (m.mode === 'edit' || m.mode === 'rec-edit') ? '<span class="cs-drag-handle" title="Перенести">⠿</span>' : ''}
+      ${canEdit && (m.mode === 'edit' || m.mode === 'rec-edit') ? '<span class="cs-drag-handle" title="Перенести"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></span>' : ''}
       <span class="cs-name">${s.first_name} ${s.last_name} <span class="lesson-student-subject">${sl(s.subject)}</span>${s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : ''}</span>
       ${cancelBtn}
       ${canEdit ? `<button class="cs-remove" data-student-id="${s.id}" title="Убрать из списка"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>` : ''}
@@ -2397,7 +2485,10 @@ function getWeekByOffset(offset) {
 }
 
 function switchToWeekOffset(offset) {
-  if (state.placingLesson || state.placingStudent || state.placingTruant) { showToast('Сначала разместите или отмените перенос', 'error'); return; }
+  // Block week navigation for lesson/student transfers (they carry an originalWeekOffset)
+  // but allow it for TRUANT placing — the user explicitly asked to be able to flip
+  // weeks while choosing where to place a truant.
+  if (state.placingLesson || state.placingStudent) { showToast('Сначала разместите или отмените перенос', 'error'); return; }
   currentWeekOffset = offset;
   state.currentWeekStart = getWeekByOffset(offset);
   updateWeekLabel();
