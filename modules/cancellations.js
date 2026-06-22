@@ -315,48 +315,70 @@ function startTruantPlacing(studentId, name, duration, cancellationId, teacherId
     cancellationId: cancellationId || null
   };
   showScreen('screen-schedule');
-  showPlacingBanner();
+  showPlacingBanner(name ? `Выберите место для ${name}` : undefined);
   renderGrid();
 }
 
 async function placeTruantOnCell(day, room, slot) {
+  if (typeof placementInFlight !== 'undefined' && placementInFlight) return;
   var t = state.placingTruant; if (!t) return;
   var end = slot + t.slotLength;
   if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); return; }
-  var ct = await checkConflictServer(day, room, slot, end, null, t.teacherId);
-  if (ct === 'room') { showToast('Кабинет занят', 'error'); return; }
-  if (ct === 'teacher') { showToast('Преподаватель занят', 'error'); return; }
+  placementInFlight = true;
+  try {
+    var ct = await checkConflictServer(day, room, slot, end, null, t.teacherId);
+    if (ct === 'room') { showToast('Кабинет занят', 'error'); return; }
+    if (ct === 'teacher') { showToast('Преподаватель занят', 'error'); return; }
 
-  var dates = getWeekDates(state.currentWeekStart); var date = dates[day];
-  var sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
-  var eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
+    var dates = getWeekDates(state.currentWeekStart); var date = dates[day];
+    var sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
+    var eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
 
-  var result = await db.from('lessons').insert({
-    teacher_id: t.teacherId, room: room, week_start: formatDate(state.currentWeekStart),
-    start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
-  }).select().single();
-  if (result.error) { showToast('Ошибка', 'error'); return; }
-  await db.from('lesson_students').insert({ lesson_id: result.data.id, student_id: t.studentId });
-  await attachActiveSubscriptionIfAny(result.data.id, t.studentId, t.teacherId);
+    // Auto-merge: if a lesson with the exact same room/start/end already exists for this
+    // teacher, the user wants to JOIN that group, not stack a duplicate on top of it.
+    var sMs = sTime.getTime(), eMs = eTime.getTime();
+    var twin = state.lessons.find(function (l) {
+      return l.room === room && l.teacher_id === t.teacherId &&
+        new Date(l.start_time).getTime() === sMs &&
+        new Date(l.end_time).getTime() === eMs;
+    });
+    if (twin) {
+      placementInFlight = false;
+      showToast('Объединено с существующим занятием', 'success');
+      return placeTruantOnLesson(twin.id);
+    }
 
-  // Close the specific cancellation that was being placed (fallback: oldest pending)
-  if (t.cancellationId) {
-    await db.from('cancellations').delete().eq('id', t.cancellationId);
-  } else {
-    var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
-    if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
+    var result = await db.from('lessons').insert({
+      teacher_id: t.teacherId, room: room, week_start: formatDate(state.currentWeekStart),
+      start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+    }).select().single();
+    if (result.error) { showToast('Ошибка', 'error'); return; }
+    await db.from('lesson_students').insert({ lesson_id: result.data.id, student_id: t.studentId });
+    await attachActiveSubscriptionIfAny(result.data.id, t.studentId, t.teacherId);
+
+    if (t.cancellationId) {
+      await db.from('cancellations').delete().eq('id', t.cancellationId);
+    } else {
+      var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
+      if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
+    }
+
+    state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
+    showToast('Ученик размещён для отработки', 'success');
+    await loadLessons();
+  } finally {
+    placementInFlight = false;
   }
-
-  state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
-  showToast('Ученик размещён для отработки', 'success');
-  await loadLessons();
 }
 
 async function placeTruantOnLesson(targetLessonId) {
+  if (typeof placementInFlight !== 'undefined' && placementInFlight) return;
   var t = state.placingTruant; if (!t) return;
   var tl = state.lessons.find(function(l) { return l.id === targetLessonId; });
   if (!tl) { showToast('Занятие не найдено', 'error'); return; }
   if (tl.teacher_id !== t.teacherId) { showToast('Только к своему преподавателю', 'error'); return; }
+  placementInFlight = true;
+  try {
 
   // Compute target lesson's duration in slots
   var tStart = new Date(tl.start_time), tEnd = new Date(tl.end_time);
@@ -434,6 +456,9 @@ async function placeTruantOnLesson(targetLessonId) {
   state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Ученик добавлен к занятию', 'success');
   await loadLessons();
+  } finally {
+    placementInFlight = false;
+  }
 }
 
 function initCancellations() {}

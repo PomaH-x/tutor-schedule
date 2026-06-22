@@ -99,6 +99,36 @@ input, textarea, select {
   flex-direction: column;
 }
 
+/* ===== LOADING (initial app boot) ===== */
+/* Visible before we know whether the user is authenticated, so the auth form never
+   flashes on for already-logged-in users. */
+#screen-loading.active {
+  align-items: center;
+  justify-content: center;
+}
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.loading-spinner {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 4px solid var(--border);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+.loading-text {
+  font-size: 15px;
+  color: var(--text-secondary, var(--text));
+  font-weight: 500;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* ===== AUTH ===== */
 
 .auth-container {
@@ -808,16 +838,40 @@ input, textarea, select {
 
 .cs-drag-handle {
   cursor: grab;
-  opacity: 0.65;
-  display: inline-flex;
-  align-items: center;
+  opacity: 0.4;
+  font-size: 12px;
   user-select: none;
   transition: opacity 0.15s;
-  color: var(--accent);
 }
 
 .cs-drag-handle:hover {
   opacity: 1;
+}
+
+/* Transfer-student button — looks obviously tappable. A click/tap starts the same
+   placing flow that truant students use: banner appears, user picks a destination on the
+   grid, conflict check on release. */
+.cs-transfer-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.08s;
+  flex-shrink: 0;
+}
+.cs-transfer-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.cs-transfer-btn:active {
+  transform: scale(0.94);
 }
 
 .cs-name {
@@ -3023,6 +3077,7 @@ input, textarea, select {
 .modal-body textarea {
   resize: vertical;
   min-height: 48px;
+  max-height: 200px;  /* Prevent the «Примечание» field from ballooning down the modal */
 }
 
 .form-row {

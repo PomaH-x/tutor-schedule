@@ -162,27 +162,50 @@ async function saveStudent() {
   const priceType = document.getElementById('student-price-type').value;
   const notes = document.getElementById('student-notes').value.trim();
 
-  if (!firstName || !lastName) { showToast('Введите имя и фамилию', 'error'); return; }
-
-  const record = {
-    first_name: firstName, last_name: lastName, subject, grade,
-    is_individual: isIndividual, is_online: isOnline, price_type: priceType,
-    notes: notes || null, teacher_id: state.user.id
-  };
-
-  let error;
-  if (editingStudentId) {
-    ({ error } = await db.from('students').update(record).eq('id', editingStudentId));
-  } else {
-    ({ error } = await db.from('students').insert(record));
+  // ===== Validation =====
+  if (!firstName) { showToast('Введите имя', 'error'); return; }
+  if (!lastName)  { showToast('Введите фамилию', 'error'); return; }
+  if (firstName.length > 30 || lastName.length > 30) {
+    showToast('Имя/фамилия не длиннее 30 символов', 'error'); return;
   }
+  // Cyrillic / Latin letters, spaces, hyphens, apostrophes only
+  const nameRe = /^[A-Za-zА-Яа-яЁё\s\-']+$/;
+  if (!nameRe.test(firstName)) { showToast('Имя содержит недопустимые символы', 'error'); return; }
+  if (!nameRe.test(lastName))  { showToast('Фамилия содержит недопустимые символы', 'error'); return; }
+  if (!subject) { showToast('Укажите предмет', 'error'); return; }
+  if (!Number.isFinite(grade) || grade < 1 || grade > 11) {
+    showToast('Класс должен быть от 1 до 11', 'error'); return;
+  }
+  if (notes.length > 1000) { showToast('Примечание слишком длинное (макс 1000 символов)', 'error'); return; }
 
-  if (error) { showToast('Ошибка сохранения', 'error'); return; }
+  // Double-click guard for the save button
+  const btn = document.getElementById('btn-save-student');
+  if (btn.disabled) return;
+  btn.disabled = true;
 
-  const isEdit = !!editingStudentId;
-  closeStudentModal();
-  showToast(isEdit ? 'Ученик отредактирован' : 'Ученик добавлен', 'success');
-  await loadStudents();
+  try {
+    const record = {
+      first_name: firstName, last_name: lastName, subject, grade,
+      is_individual: isIndividual, is_online: isOnline, price_type: priceType,
+      notes: notes || null, teacher_id: state.user.id
+    };
+
+    let error;
+    if (editingStudentId) {
+      ({ error } = await db.from('students').update(record).eq('id', editingStudentId));
+    } else {
+      ({ error } = await db.from('students').insert(record));
+    }
+
+    if (error) { showToast('Ошибка сохранения', 'error'); return; }
+
+    const isEdit = !!editingStudentId;
+    closeStudentModal();
+    showToast(isEdit ? 'Ученик отредактирован' : 'Ученик добавлен', 'success');
+    await loadStudents();
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 let confirmCallback = null;
@@ -648,22 +671,47 @@ function closeStudentDetail() {
 async function saveStudentDetail() {
   if (!studentDetailId) return;
   const typeVal = document.getElementById('sd-type').value;
-  const update = {
-    subject: document.getElementById('sd-subject').value,
-    grade: parseInt(document.getElementById('sd-grade').value) || null,
-    is_individual: typeVal === 'true' || typeVal === 'online',
-    is_online: typeVal === 'online',
-    price_type: document.getElementById('sd-price-type').value,
-    source: document.getElementById('sd-source').value || null,
-    parent_name: document.getElementById('sd-parent-name').value.trim() || null,
-    parent_phone: document.getElementById('sd-parent-phone').value.trim() || null,
-    notes: document.getElementById('sd-note').value.trim() || null
-  };
-  const { error } = await db.from('students').update(update).eq('id', studentDetailId);
-  if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
-  showToast('Сохранено', 'success');
-  closeStudentDetail();
-  renderStudents(document.getElementById('student-search').value);
+  const grade = parseInt(document.getElementById('sd-grade').value);
+  const parentName = document.getElementById('sd-parent-name').value.trim();
+  const parentPhone = document.getElementById('sd-parent-phone').value.trim();
+  const notes = document.getElementById('sd-note').value.trim();
+
+  // ===== Validation =====
+  if (Number.isFinite(grade) && (grade < 1 || grade > 11)) {
+    showToast('Класс должен быть от 1 до 11', 'error'); return;
+  }
+  if (notes.length > 1000) { showToast('Примечание слишком длинное (макс 1000)', 'error'); return; }
+  if (parentName && parentName.length > 60) { showToast('ФИО родителя слишком длинное', 'error'); return; }
+  if (parentPhone) {
+    const digits = parentPhone.replace(/\D/g, '');
+    if (digits.length < 10 || digits.length > 12) {
+      showToast('Телефон родителя: 10–12 цифр', 'error'); return;
+    }
+  }
+
+  const btn = document.getElementById('btn-save-student-detail');
+  if (btn && btn.disabled) return;
+  if (btn) btn.disabled = true;
+  try {
+    const update = {
+      subject: document.getElementById('sd-subject').value,
+      grade: Number.isFinite(grade) ? grade : null,
+      is_individual: typeVal === 'true' || typeVal === 'online',
+      is_online: typeVal === 'online',
+      price_type: document.getElementById('sd-price-type').value,
+      source: document.getElementById('sd-source').value || null,
+      parent_name: parentName || null,
+      parent_phone: parentPhone || null,
+      notes: notes || null
+    };
+    const { error } = await db.from('students').update(update).eq('id', studentDetailId);
+    if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
+    showToast('Сохранено', 'success');
+    closeStudentDetail();
+    renderStudents(document.getElementById('student-search').value);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 // === Link unregistered (fake) student to a real registered account ===
 

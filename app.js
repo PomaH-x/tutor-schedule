@@ -14,11 +14,30 @@ document.addEventListener('DOMContentLoaded', async () => {
   initSubscriptions();
 
   document.getElementById('btn-save-telegram')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-save-telegram');
     const tg = document.getElementById('profile-telegram-input').value.trim().replace(/^@/, '');
-    const { error } = await db.from('profiles').update({ telegram: tg || null }).eq('id', state.user.id);
-    if (error) { showToast('Ошибка', 'error'); return; }
-    state.profile.telegram = tg || null;
-    showToast('Telegram сохранён', 'success');
+
+    // ===== Validation =====
+    // Empty is valid (clearing the telegram). Otherwise must look like a Telegram username.
+    if (tg) {
+      if (tg.length < 5) { showToast('Telegram: минимум 5 символов', 'error'); return; }
+      if (tg.length > 32) { showToast('Telegram: максимум 32 символа', 'error'); return; }
+      if (!/^[A-Za-z0-9_]+$/.test(tg)) { showToast('Telegram: только латиница, цифры и _', 'error'); return; }
+      if (!/^[A-Za-z]/.test(tg)) { showToast('Telegram должен начинаться с буквы', 'error'); return; }
+      if (tg.endsWith('_')) { showToast('Telegram не может заканчиваться на _', 'error'); return; }
+      if (/__/.test(tg)) { showToast('Telegram: нельзя несколько _ подряд', 'error'); return; }
+    }
+
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      const { error } = await db.from('profiles').update({ telegram: tg || null }).eq('id', state.user.id);
+      if (error) { showToast('Ошибка', 'error'); return; }
+      state.profile.telegram = tg || null;
+      showToast('Telegram сохранён', 'success');
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   document.getElementById('btn-profile').addEventListener('click', () => {
@@ -35,7 +54,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const { data: { session } } = await db.auth.getSession();
 
   if (session?.user) {
+    // onAuthSuccess will navigate to the appropriate screen (schedule / student)
     await onAuthSuccess(session.user);
+  } else {
+    // No session — show the auth form
+    showScreen('screen-auth');
   }
 
   db.auth.onAuthStateChange(async (event, session) => {

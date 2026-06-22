@@ -33,6 +33,11 @@ function onRecPlaceLongPress() {
   if (g.moved) return;
   g.mode = 'place-drag';
   if (navigator.vibrate) { try { navigator.vibrate(20); } catch (_) {} }
+  const grid = document.getElementById('recurring-grid');
+  if (grid) {
+    grid.style.touchAction = 'none';
+    try { grid.setPointerCapture(g.pointerId); } catch (_) {}
+  }
   const el = document.elementFromPoint(g.startX, g.startY);
   const cell = el?.closest?.('.grid-cell');
   if (cell && typeof showPlacementPreview === 'function') {
@@ -65,6 +70,57 @@ async function loadRecurringLessons() {
       return true;
     });
   });
+  // Collapse legacy duplicates: recurring lessons sharing teacher/day/room/start/end
+  // are folded into one visible card; redundant rows are cleaned up server-side async.
+  {
+    const groups = new Map();
+    for (const rl of recurringLessons) {
+      const key = `${rl.teacher_id}|${rl.day_of_week}|${rl.room}|${rl.start_time}|${rl.end_time}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(rl);
+    }
+    const collapsed = [];
+    const cleanups = [];
+    for (const grp of groups.values()) {
+      if (grp.length === 1) { collapsed.push(grp[0]); continue; }
+      const primary = grp[0];
+      const seen = new Set();
+      const merged = [];
+      for (const rl of grp) {
+        for (const rs of (rl.recurring_lesson_students || [])) {
+          if (seen.has(rs.student_id)) continue;
+          seen.add(rs.student_id);
+          merged.push(rs);
+        }
+      }
+      primary.recurring_lesson_students = merged;
+      collapsed.push(primary);
+      cleanups.push({
+        primaryId: primary.id,
+        secondaryIds: grp.slice(1).map(rl => rl.id),
+        studentIds: Array.from(seen)
+      });
+    }
+    recurringLessons = collapsed;
+    if (cleanups.length > 0) {
+      // Async best-effort cleanup
+      (async () => {
+        for (const t of cleanups) {
+          try {
+            if (t.studentIds.length > 0) {
+              await db.from('recurring_lesson_students').upsert(
+                t.studentIds.map(sid => ({ recurring_lesson_id: t.primaryId, student_id: sid })),
+                { onConflict: 'recurring_lesson_id,student_id', ignoreDuplicates: true }
+              );
+            }
+            if (t.secondaryIds.length > 0) {
+              await db.from('recurring_lessons').delete().in('id', t.secondaryIds);
+            }
+          } catch (_) { /* RLS may block — best effort */ }
+        }
+      })();
+    }
+  }
   // If `time_bookings` table doesn't exist yet (migration not applied), just silently skip.
   recurringBookings = bookingsRes.error ? [] : (bookingsRes.data || []);
   renderRecurringLessons();
@@ -484,7 +540,7 @@ function onRecGridPointerDown(e) {
   recLastTouchTime = Date.now();
   if (state.profile.role === 'student') return;
 
-  // Student-from-modal placing → long-press for preview-drag (mirrors schedule.js)
+  // Student-from-modal placing → same long-press preview-drag flow as truant (mirrors schedule.js)
   if (studentDragState) {
     recTouchGesture = {
       pointerId: e.pointerId,
@@ -583,12 +639,15 @@ function onRecGridPointerMove(e) {
   if (g.mode === 'place-drag') {
     const grid = document.getElementById('recurring-grid');
     if (typeof updateAutoScrollX === 'function') updateAutoScrollX(grid, e.clientX, e.clientY);
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const cell = el?.closest?.('.grid-cell');
+    const stack = document.elementsFromPoint(e.clientX, e.clientY);
+    const cell = stack.find(el => el.classList && el.classList.contains('grid-cell'));
     if (cell && typeof showPlacementPreview === 'function') {
       const slotLength = studentDragState?.slotLength || 2;
-      showPlacementPreview('recurring-grid', +cell.dataset.day, +cell.dataset.room, +cell.dataset.slot, slotLength);
+      const d = +cell.dataset.day, r = +cell.dataset.room, s = +cell.dataset.slot;
+      g.targetDay = d; g.targetRoom = r; g.targetSlot = s;
+      showPlacementPreview('recurring-grid', d, r, s, slotLength);
     } else if (typeof removePlacementPreview === 'function') {
+      g.targetDay = g.targetRoom = g.targetSlot = undefined;
       removePlacementPreview();
     }
     return;
@@ -652,12 +711,37 @@ async function onRecGridPointerUp(e) {
   // 'place-drag' = long-press fired → commit at finger's cell/card
   if (g.mode === 'place-drag') {
     if (typeof removePlacementPreview === 'function') removePlacementPreview();
+    const recGrid = document.getElementById('recurring-grid');
+    if (recGrid) {
+      recGrid.style.touchAction = '';
+      try { recGrid.releasePointerCapture(g.pointerId); } catch (_) {}
+    }
     recTouchGesture = null;
+
+    // Resolve the target slot from what the preview last showed (g.target*); fall back
+    // to elementsFromPoint in case the user released before any pointermove fired.
+    let day = g.targetDay, room = g.targetRoom, slot = g.targetSlot;
+    if (typeof slot !== 'number') {
+      const stack = document.elementsFromPoint(e.clientX, e.clientY);
+      const stackCell = stack.find(el => el.classList && el.classList.contains('grid-cell'));
+      if (stackCell) { day = +stackCell.dataset.day; room = +stackCell.dataset.room; slot = +stackCell.dataset.slot; }
+    }
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const card = el?.closest?.('.lesson-card');
-    const cell = el?.closest?.('.grid-cell');
-    if (card) { hidePlacingBanner(); placeStudentOnRecurringLesson(card.dataset.lessonId); return; }
-    if (cell) { hidePlacingBanner(); placeStudentOnRecurringCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot); return; }
+
+    // Client-side conflict check — match the red preview regardless of any card on top
+    if (typeof slot === 'number' && studentDragState && typeof getRecDragConflictType === 'function') {
+      const slotLength = studentDragState.slotLength || 2;
+      const end = slot + slotLength;
+      if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); cancelStudentDrag(); return; }
+      const ct = getRecDragConflictType(day, room, slot, end, null, studentDragState.teacherId);
+      if (ct) { showToast('Конфликт — это место занято', 'error'); return; }  // banner stays
+    }
+
+    if (card) { placeStudentOnRecurringLesson(card.dataset.lessonId); return; }
+    if (typeof slot === 'number') { placeStudentOnRecurringCell(day, room, slot); return; }
+    // Released over nowhere → drop the gesture
+    if (studentDragState) cancelStudentDrag();
     return;
   }
 
@@ -730,6 +814,12 @@ function onRecGridPointerCancel(e) {
   if (g.mode === 'place' || g.mode === 'place-drag') {
     if (g.timer) { clearTimeout(g.timer); g.timer = null; }
     if (typeof removePlacementPreview === 'function') removePlacementPreview();
+    const grid = document.getElementById('recurring-grid');
+    if (grid) {
+      grid.style.touchAction = '';
+      try { grid.releasePointerCapture(g.pointerId); } catch (_) {}
+    }
+    // Placing state stays — banner cancel button is the explicit exit
   } else if (g.mode === 'select') {
     recSelecting = false; recSelStart = null; recSelEnd = null; clearRecSelection();
   } else if (g.mode === 'move') {
@@ -981,6 +1071,7 @@ async function findSourceRecurringLessonId(studentId, teacherId) {
 }
 
 async function placeStudentOnRecurringCell(day, room, slot) {
+  if (typeof placementInFlight !== 'undefined' && placementInFlight) return;
   const s = studentDragState; if (!s) return;
   const end = slot + s.slotLength;
   if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); cancelStudentDrag(); return; }
@@ -989,33 +1080,51 @@ async function placeStudentOnRecurringCell(day, room, slot) {
   if (conflict === 'room') { showToast('Кабинет уже занят в это время', 'error'); cancelStudentDrag(); return; }
   if (conflict === 'teacher') { showToast('У вас уже есть занятие в это время', 'error'); cancelStudentDrag(); return; }
 
-  const sourceRecId = await findSourceRecurringLessonId(s.studentId, s.teacherId);
-
-  // Create new recurring lesson at target slot
-  const { data: newRec, error } = await db.from('recurring_lessons').insert({
-    teacher_id: s.teacherId, room, day_of_week: day,
-    start_time: recSlotToTimeStr(slot), end_time: recSlotToTimeStr(end)
-  }).select().single();
-  if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
-
-  await db.from('recurring_lesson_students').insert({ recurring_lesson_id: newRec.id, student_id: s.studentId });
-
-  // Remove student from source recurring lesson, delete it if empty
-  if (sourceRecId) {
-    await db.from('recurring_lesson_students').delete().eq('recurring_lesson_id', sourceRecId).eq('student_id', s.studentId);
-    const { data: remaining } = await db.from('recurring_lesson_students').select('student_id').eq('recurring_lesson_id', sourceRecId);
-    if (!remaining || remaining.length === 0) {
-      await db.from('recurring_lessons').delete().eq('id', sourceRecId);
+  placementInFlight = true;
+  try {
+    // Auto-merge: existing recurring lesson with same day/room/teacher/start/end → join it
+    const startStr = recSlotToTimeStr(slot), endStr = recSlotToTimeStr(end);
+    const twin = recurringLessons.find(rl =>
+      rl.teacher_id === s.teacherId && rl.day_of_week === day && rl.room === room &&
+      rl.start_time && rl.end_time &&
+      rl.start_time.slice(0, 5) === startStr.slice(0, 5) &&
+      rl.end_time.slice(0, 5) === endStr.slice(0, 5)
+    );
+    if (twin) {
+      placementInFlight = false;
+      showToast('Объединено с существующим занятием', 'success');
+      return placeStudentOnRecurringLesson(twin.id);
     }
-  }
 
-  cancelStudentDrag();
-  showToast('Ученик перенесён', 'success');
-  await loadRecurringLessons();
-  syncRecurringToWeeks();
+    const sourceRecId = await findSourceRecurringLessonId(s.studentId, s.teacherId);
+
+    const { data: newRec, error } = await db.from('recurring_lessons').insert({
+      teacher_id: s.teacherId, room, day_of_week: day,
+      start_time: startStr, end_time: endStr
+    }).select().single();
+    if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
+
+    await db.from('recurring_lesson_students').insert({ recurring_lesson_id: newRec.id, student_id: s.studentId });
+
+    if (sourceRecId) {
+      await db.from('recurring_lesson_students').delete().eq('recurring_lesson_id', sourceRecId).eq('student_id', s.studentId);
+      const { data: remaining } = await db.from('recurring_lesson_students').select('student_id').eq('recurring_lesson_id', sourceRecId);
+      if (!remaining || remaining.length === 0) {
+        await db.from('recurring_lessons').delete().eq('id', sourceRecId);
+      }
+    }
+
+    cancelStudentDrag();
+    showToast('Ученик перенесён', 'success');
+    await loadRecurringLessons();
+    syncRecurringToWeeks();
+  } finally {
+    placementInFlight = false;
+  }
 }
 
 async function placeStudentOnRecurringLesson(targetLessonId) {
+  if (typeof placementInFlight !== 'undefined' && placementInFlight) return;
   const s = studentDragState; if (!s) return;
   const tl = recurringLessons.find(l => l.id === targetLessonId);
   if (!tl) { cancelStudentDrag(); return; }
@@ -1023,6 +1132,8 @@ async function placeStudentOnRecurringLesson(targetLessonId) {
 
   const sourceRecId = await findSourceRecurringLessonId(s.studentId, s.teacherId);
   if (sourceRecId === targetLessonId) { cancelStudentDrag(); return; }
+  placementInFlight = true;
+  try {
 
   // Compute target lesson's duration in slots
   const tsp = tl.start_time.split(':'); const tep = tl.end_time.split(':');
@@ -1092,6 +1203,9 @@ async function placeStudentOnRecurringLesson(targetLessonId) {
   showToast('Ученик добавлен к занятию', 'success');
   await loadRecurringLessons();
   syncRecurringToWeeks();
+  } finally {
+    placementInFlight = false;
+  }
 }
 
 function recSlotToTimeStr(slot) {

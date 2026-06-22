@@ -43,6 +43,12 @@ let dragMouseStart = null;
 let dragStarted = false;
 let studentDragState = null;
 
+// Double-click / double-tap protection. Cleared in finally{} of every placement function
+// so a successful commit OR a thrown error both release the guard. Prevents creating
+// duplicate lessons when the user rapidly clicks/taps during a placing flow.
+// Declared with `var` so it's reachable from cancellations.js (cross-script access).
+var placementInFlight = false;
+
 function getWeekDates(mondayDate) {
   const dates = [];
   for (let i = 0; i < 7; i++) { const d = new Date(mondayDate); d.setDate(d.getDate() + i); dates.push(d); }
@@ -840,10 +846,12 @@ function showPlacementPreview(gridId, day, room, slotFrom, slotLength) {
   removePlacementPreview();
   const end = Math.min(slotFrom + slotLength, TOTAL_SLOTS);
   if (end <= slotFrom) return;
-  // Conflict check uses the same drag-rules as a real lesson drag
+  // Conflict check uses the same drag-rules as a real lesson drag, scoped to the right grid.
   let conflict = false;
-  if (typeof getDragConflictType === 'function' && (studentDragState || state.placingTruant || state.placingStudent)) {
-    const teacherId = studentDragState?.teacherId || state.placingTruant?.teacherId || state.placingStudent?.teacherId;
+  const teacherId = studentDragState?.teacherId || state.placingTruant?.teacherId || state.placingStudent?.teacherId;
+  if (gridId === 'recurring-grid' && typeof getRecDragConflictType === 'function') {
+    conflict = !!getRecDragConflictType(day, room, slotFrom, end, null, teacherId);
+  } else if (typeof getDragConflictType === 'function') {
     conflict = !!getDragConflictType(day, room, slotFrom, end, null, teacherId);
   }
   const preview = document.createElement('div');
@@ -862,10 +870,66 @@ function onPlaceLongPress() {
   if (g.moved) return;  // user already scrolled — long-press is invalid
   g.mode = 'place-drag';
   if (navigator.vibrate) { try { navigator.vibrate(20); } catch (_) {} }
+  // Stop native pan/scroll for this gesture — otherwise the browser eats the touchmove
+  // events and our pointermove handler stops firing (preview wouldn't follow the finger).
+  const grid = document.getElementById('schedule-grid');
+  if (grid) {
+    grid.style.touchAction = 'none';
+    try { grid.setPointerCapture(g.pointerId); } catch (_) {}
+  }
   const el = document.elementFromPoint(g.startX, g.startY);
   const cell = el?.closest?.('.grid-cell');
   if (cell) {
     showPlacementPreview('schedule-grid', +cell.dataset.day, +cell.dataset.room, +cell.dataset.slot, getActivePlacingSlotLength());
+  }
+}
+
+// Long-press on the ⠿ handle inside the lesson modal kicks off a continuous touch gesture:
+// modal closes, studentDragState is set, and we feed the grid's existing place-drag flow
+// (touchGesture with mode='place-drag') so the same finger continues into a real drag —
+// the green preview follows it, conflicts colour it red, release commits placement. This
+// mirrors lesson-card dragging: grab → drag → drop.
+function activateStudentTransferTouch(pointerId, sd, lessonId, teacherId, lessonSlots, x, y) {
+  lastTouchTime = Date.now();
+  if (navigator.vibrate) { try { navigator.vibrate(20); } catch (_) {} }
+  // startStudentDrag closes the modal internally and sets studentDragState.
+  // It also turns on #student-drag-banner with the student's name — for touch we re-position
+  // that banner as a fixed pill at the top so the user always sees who they're carrying.
+  startStudentDrag(sd, lessonId, teacherId, lessonSlots);
+  const dragBanner = document.getElementById('student-drag-banner');
+  if (dragBanner) {
+    dragBanner.textContent = `Куда переносим: ${sd.first_name} ${sd.last_name}`;
+    dragBanner.style.display = 'block';
+    dragBanner.dataset.touchMode = '1';
+    // Pin the banner at the top centre — overrides any cursor-follower coords from desktop drag
+    dragBanner.style.top = '70px';
+    dragBanner.style.left = '50%';
+    dragBanner.style.transform = 'translateX(-50%)';
+  }
+  hidePlacingBanner();  // belt-and-suspenders: nothing else should be showing at this point
+  document.body.style.cursor = '';
+
+  // Determine which grid is visible — schedule (#screen-schedule) or recurring (#screen-recurring)
+  const recScreen = document.getElementById('screen-recurring');
+  const onRecurring = recScreen && !recScreen.classList.contains('hidden');
+  const grid = document.getElementById(onRecurring ? 'recurring-grid' : 'schedule-grid');
+  if (!grid) return;
+
+  // Lock down panning + capture the pointer so subsequent pointermove keeps reaching the grid
+  grid.style.touchAction = 'none';
+  try { grid.setPointerCapture(pointerId); } catch (_) {}
+
+  // Seed the grid's touchGesture as if a long-press had just fired there.
+  // mode='place-drag' makes the existing pointermove/up handlers drive the preview + commit.
+  const gesture = { pointerId, startX: x, startY: y, mode: 'place-drag', moved: true, timer: null };
+  if (onRecurring) { recTouchGesture = gesture; }
+  else             { touchGesture    = gesture; }
+
+  // Show the preview at the finger's current position right away (don't wait for next move)
+  const el = document.elementFromPoint(x, y);
+  const cell = el?.closest?.('.grid-cell');
+  if (cell) {
+    showPlacementPreview(grid.id, +cell.dataset.day, +cell.dataset.room, +cell.dataset.slot, lessonSlots);
   }
 }
 
@@ -877,18 +941,16 @@ function onGridPointerDown(e) {
   lastTouchTime = Date.now();
   if (state.profile.role === 'student') return;
 
-  // Student-move OR any placing-flow: defer placement to long-press → preview-drag.
-  // Sequence on touch:
+  // All placing flows (student transfer / truant / transferred-lesson / transferred-student):
   //   1. Quick tap → does NOTHING (so the user can freely scroll/zoom).
-  //   2. Long-press on a cell → green preview appears showing where the student/lesson will
-  //      land (slotLength tall). Finger keeps holding.
-  //   3. Drag the finger → preview follows.
-  //   4. Release → commits placement at the preview's position.
+  //   2. Long-press → green preview appears for the slot range; finger keeps holding.
+  //   3. Drag → preview follows.
+  //   4. Release → commits placement (with conflict check).
   if (studentDragState || state.placingLesson || state.placingStudent || state.placingTruant) {
     touchGesture = {
       pointerId: e.pointerId,
       startX: e.clientX, startY: e.clientY,
-      mode: 'place',       // becomes 'place-drag' once long-press fires
+      mode: 'place',
       moved: false,
       timer: setTimeout(onPlaceLongPress, TOUCH_LONG_PRESS_MS)
     };
@@ -1001,11 +1063,16 @@ function onGridPointerMove(e) {
     // The preview follows the finger; auto-scroll lets the user reach far-away cells.
     const grid = document.getElementById('schedule-grid');
     updateAutoScrollX(grid, e.clientX, e.clientY);
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const cell = el?.closest?.('.grid-cell');
+    // elementsFromPoint returns the FULL stack at this point — so when the finger is
+    // hovering over a lesson card we can still find the grid-cell sitting underneath.
+    const stack = document.elementsFromPoint(e.clientX, e.clientY);
+    const cell = stack.find(el => el.classList && el.classList.contains('grid-cell'));
     if (cell) {
-      showPlacementPreview('schedule-grid', +cell.dataset.day, +cell.dataset.room, +cell.dataset.slot, getActivePlacingSlotLength());
+      const d = +cell.dataset.day, r = +cell.dataset.room, s = +cell.dataset.slot;
+      g.targetDay = d; g.targetRoom = r; g.targetSlot = s;  // remembered for the release-time conflict check
+      showPlacementPreview('schedule-grid', d, r, s, getActivePlacingSlotLength());
     } else {
+      g.targetDay = g.targetRoom = g.targetSlot = undefined;
       removePlacementPreview();
     }
     return;
@@ -1082,21 +1149,58 @@ function onGridPointerUp(e) {
   // 'place-drag' = long-press fired, preview was shown. Commit at the cell under finger.
   if (g.mode === 'place-drag') {
     removePlacementPreview();
+    const grid = document.getElementById('schedule-grid');
+    if (grid) {
+      grid.style.touchAction = '';  // restore native panning for next gesture
+      try { grid.releasePointerCapture(g.pointerId); } catch (_) {}
+    }
     touchGesture = null;
+    // Use the slot the preview was last shown at — that's the cell the user has been
+    // looking at while deciding to release. Falling back to elementsFromPoint handles
+    // the edge case where release fires before any pointermove updated g.target*.
+    let day = g.targetDay, room = g.targetRoom, slot = g.targetSlot;
+    if (typeof slot !== 'number') {
+      const stack = document.elementsFromPoint(e.clientX, e.clientY);
+      const stackCell = stack.find(el => el.classList && el.classList.contains('grid-cell'));
+      if (stackCell) { day = +stackCell.dataset.day; room = +stackCell.dataset.room; slot = +stackCell.dataset.slot; }
+    }
     const el = document.elementFromPoint(e.clientX, e.clientY);
     const card = el?.closest?.('.lesson-card');
-    const cell = el?.closest?.('.grid-cell');
+
+    // Client-side conflict check — MUST match the red preview the user saw, regardless of
+    // whether a lesson card happens to sit at the drop point. Uses the same args as
+    // showPlacementPreview, so red ↔ blocked is guaranteed.
+    if (typeof slot === 'number' && typeof getDragConflictType === 'function') {
+      const slotLength = getActivePlacingSlotLength();
+      const teacherId = studentDragState?.teacherId || state.placingTruant?.teacherId || state.placingStudent?.teacherId;
+      const end = slot + slotLength;
+      if (end > TOTAL_SLOTS) {
+        showToast('Не помещается', 'error');
+        if (studentDragState) cancelStudentDrag();
+        return;
+      }
+      const ct = getDragConflictType(day, room, slot, end, null, teacherId);
+      if (ct) {
+        // For studentDragState (button-triggered placing), keep the banner active so the
+        // user can immediately pick another spot — matches the truant flow. cancelPlacing
+        // / cancel button on banner is the only way out.
+        conflictToast(ct, null);
+        return;
+      }
+    }
+
     if (studentDragState) {
-      if (card) { hidePlacingBanner(); placeStudentOnLesson(card.dataset.lessonId); }
-      else if (cell) { hidePlacingBanner(); placeStudentOnCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot); }
+      if (card) placeStudentOnLesson(card.dataset.lessonId);
+      else if (typeof slot === 'number') placeStudentOnCell(day, room, slot);
+      else cancelStudentDrag();  // released over nowhere → drop the gesture cleanly
       return;
     }
     if (state.placingStudent && card) { placeTransferredStudentOnLesson(card.dataset.lessonId); return; }
     if (state.placingTruant && card)  { placeTruantOnLesson(card.dataset.lessonId); return; }
-    if (cell) {
-      if (state.placingLesson) placeTransferredLesson(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-      else if (state.placingStudent) placeTransferredStudent(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-      else if (state.placingTruant) placeTruantOnCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+    if (typeof slot === 'number') {
+      if (state.placingLesson) placeTransferredLesson(day, room, slot);
+      else if (state.placingStudent) placeTransferredStudent(day, room, slot);
+      else if (state.placingTruant) placeTruantOnCell(day, room, slot);
     }
     return;
   }
@@ -1193,7 +1297,13 @@ function onGridPointerCancel(e) {
   if (g.mode === 'place' || g.mode === 'place-drag') {
     if (g.timer) { clearTimeout(g.timer); g.timer = null; }
     removePlacementPreview();
-    // Placing state stays active so user can try again
+    const grid = document.getElementById('schedule-grid');
+    if (grid) {
+      grid.style.touchAction = '';
+      try { grid.releasePointerCapture(g.pointerId); } catch (_) {}
+    }
+    // Placing state stays active so user can long-press again. Cancel button on the
+    // banner is the explicit way out for both student transfer and truant placement.
   } else if (g.mode === 'select') {
     selecting = false; selStart = null; selEnd = null;
     clearSelectionHighlight(); removeDurationLabel();
@@ -1405,18 +1515,16 @@ function startNextWeekTransfer(lesson) {
   updateWeekLabel(); updateWeekTabs(); renderGrid(); loadLessons();
 }
 
-function showPlacingBanner() {
+function showPlacingBanner(customText) {
   let b = document.getElementById('placing-banner');
   if (!b) {
     b = document.createElement('div'); b.id = 'placing-banner';
     b.innerHTML = '<span>Выберите место для занятия</span><button id="btn-cancel-placing">Отмена</button>';
     document.getElementById('screen-schedule').insertBefore(b, document.getElementById('schedule-grid'));
     document.getElementById('btn-cancel-placing').addEventListener('click', cancelPlacing);
-  } else {
-    // Reset to default text in case a previous session customized it (e.g., touch student-move)
-    const span = b.querySelector('span');
-    if (span) span.textContent = 'Выберите место для занятия';
   }
+  const span = b.querySelector('span');
+  if (span) span.textContent = customText || 'Выберите место для занятия';
   b.style.display = 'flex';
 }
 function hidePlacingBanner() { const b = document.getElementById('placing-banner'); if (b) b.style.display = 'none'; }
@@ -1541,13 +1649,16 @@ async function checkTransferLimit(studentIds) {
 }
 
 async function placeTransferredLesson(day, room, slot) {
+  if (placementInFlight) return;
   const p = state.placingLesson; if (!p) return;
   const end = slot + p.slotLength;
   if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); return; }
-  const ct = await checkConflictServer(day, room, slot, end, null, p.teacherId);
-  if (ct) { conflictToast(ct); return; }
+  placementInFlight = true;
+  try {
+    const ct = await checkConflictServer(day, room, slot, end, null, p.teacherId);
+    if (ct) { conflictToast(ct); return; }
 
-  if (!(await checkTransferLimit(p.studentIds || []))) return;
+    if (!(await checkTransferLimit(p.studentIds || []))) return;
 
   const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
   const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
@@ -1570,43 +1681,65 @@ async function placeTransferredLesson(day, room, slot) {
   await recomputeSubscriptionsByLesson(p.originalLessonId);
   state.placingLesson = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Занятие перенесено на следующую неделю', 'success'); await loadLessons();
+  } finally {
+    placementInFlight = false;
+  }
 }
 
 async function placeTransferredStudent(day, room, slot) {
+  if (placementInFlight) return;
   const p = state.placingStudent; if (!p) return;
   const end = slot + p.slotLength;
   if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); return; }
-  const ct = await checkConflictServer(day, room, slot, end, null, p.teacherId);
-  if (ct) { conflictToast(ct); return; }
+  placementInFlight = true;
+  try {
+    const ct = await checkConflictServer(day, room, slot, end, null, p.teacherId);
+    if (ct) { conflictToast(ct); return; }
 
-  if (!(await checkTransferLimit([p.studentId]))) return;
+    if (!(await checkTransferLimit([p.studentId]))) return;
 
-  const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
-  const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
-  const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
+    const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
+    const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
+    const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
 
-  const { data, error } = await db.from('lessons').insert({
-    teacher_id: p.teacherId, room, week_start: formatDate(state.currentWeekStart),
-    start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
-  }).select().single();
-  if (error) { showToast('Ошибка', 'error'); return; }
-  await db.from('lesson_students').insert({ lesson_id: data.id, student_id: p.studentId });
-  await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
-  await attachActiveSubscriptionIfAny(data.id, p.studentId, p.teacherId);
-  await recomputeSubscriptionsByLesson(p.lessonId);
-  // Record transfer (not cancellation) - won't show in truants
-  const origLesson = state.lessons.find(l => l.id === p.lessonId);
-  const origWs = p.originalWeekStart || formatDate(getMonday(new Date()));
-  await db.from('cancellations').insert({
-    student_id: p.studentId, teacher_id: p.teacherId, week_start: origWs, status: 'transferred',
-    lesson_start_time: origLesson?.start_time, lesson_end_time: origLesson?.end_time, lesson_day: origLesson ? new Date(origLesson.start_time).getDay() : null
-  });
-  await cleanEmptyLesson(p.lessonId);
-  state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
-  showToast('Ученик перенесён на следующую неделю', 'success'); await loadLessons();
+    // Auto-merge: same teacher / same room / same start+end → join the existing group
+    const sMs = sTime.getTime(), eMs = eTime.getTime();
+    const twin = state.lessons.find(l =>
+      l.room === room && l.teacher_id === p.teacherId &&
+      new Date(l.start_time).getTime() === sMs &&
+      new Date(l.end_time).getTime() === eMs
+    );
+    if (twin) {
+      placementInFlight = false;
+      showToast('Объединено с существующим занятием', 'success');
+      return placeTransferredStudentOnLesson(twin.id);
+    }
+
+    const { data, error } = await db.from('lessons').insert({
+      teacher_id: p.teacherId, room, week_start: formatDate(state.currentWeekStart),
+      start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+    }).select().single();
+    if (error) { showToast('Ошибка', 'error'); return; }
+    await db.from('lesson_students').insert({ lesson_id: data.id, student_id: p.studentId });
+    await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
+    await attachActiveSubscriptionIfAny(data.id, p.studentId, p.teacherId);
+    await recomputeSubscriptionsByLesson(p.lessonId);
+    const origLesson = state.lessons.find(l => l.id === p.lessonId);
+    const origWs = p.originalWeekStart || formatDate(getMonday(new Date()));
+    await db.from('cancellations').insert({
+      student_id: p.studentId, teacher_id: p.teacherId, week_start: origWs, status: 'transferred',
+      lesson_start_time: origLesson?.start_time, lesson_end_time: origLesson?.end_time, lesson_day: origLesson ? new Date(origLesson.start_time).getDay() : null
+    });
+    await cleanEmptyLesson(p.lessonId);
+    state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
+    showToast('Ученик перенесён на следующую неделю', 'success'); await loadLessons();
+  } finally {
+    placementInFlight = false;
+  }
 }
 
 async function placeTransferredStudentOnLesson(targetLessonId) {
+  if (placementInFlight) return;
   const p = state.placingStudent; if (!p) return;
   const tl = state.lessons.find(l => l.id === targetLessonId);
   if (!tl) { showToast('Занятие не найдено', 'error'); return; }
@@ -1614,6 +1747,8 @@ async function placeTransferredStudentOnLesson(targetLessonId) {
   if ((tl.lesson_students?.length || 0) >= getMaxGroup(tl.teacher_id)) { showToast(`Максимум ${getMaxGroup(tl.teacher_id)} учеников`, 'error'); return; }
 
   if (!(await checkTransferLimit([p.studentId]))) return;
+  placementInFlight = true;
+  try {
 
   await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: p.studentId });
   await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
@@ -1622,6 +1757,9 @@ async function placeTransferredStudentOnLesson(targetLessonId) {
   await cleanEmptyLesson(p.lessonId);
   state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Ученик добавлен к занятию', 'success'); await loadLessons();
+  } finally {
+    placementInFlight = false;
+  }
 }
 
 // ===== STUDENT DND =====
@@ -1641,38 +1779,61 @@ function startStudentDrag(studentData, lessonId, teacherId, lessonSlotLength) {
 }
 
 async function placeStudentOnCell(day, room, slot) {
+  if (placementInFlight) return;  // double-click guard
   const s = studentDragState; if (!s) return;
   const end = slot + s.slotLength;
   if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); cancelStudentDrag(); return; }
-  const ct = await checkConflictServer(day, room, slot, end, null, s.teacherId);
-  if (ct) { conflictToast(ct, cancelStudentDrag); return; }
+  placementInFlight = true;
+  try {
+    const ct = await checkConflictServer(day, room, slot, end, null, s.teacherId);
+    if (ct) { conflictToast(ct, cancelStudentDrag); return; }
 
-  if (!(await checkTransferLimit([s.studentId]))) { cancelStudentDrag(); return; }
+    if (!(await checkTransferLimit([s.studentId]))) { cancelStudentDrag(); return; }
 
-  const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
-  const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
-  const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
+    const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
+    const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
+    const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
 
-  const { data, error } = await db.from('lessons').insert({
-    teacher_id: s.teacherId, room, week_start: formatDate(state.currentWeekStart),
-    start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
-  }).select().single();
-  if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
-  await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
-  await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
-  await attachActiveSubscriptionIfAny(data.id, s.studentId, s.teacherId);
-  await recomputeSubscriptionsByLesson(s.lessonId);
-  await cleanEmptyLesson(s.lessonId);
-  cancelStudentDrag();
-  showToast('Ученик перенесён', 'success'); await loadLessons();
+    // Auto-merge: a lesson already covering exactly this room+start+end with the same
+    // teacher = same group → add the student into it instead of stacking a duplicate.
+    const sMs = sTime.getTime(), eMs = eTime.getTime();
+    const twin = state.lessons.find(l =>
+      l.room === room && l.teacher_id === s.teacherId &&
+      new Date(l.start_time).getTime() === sMs &&
+      new Date(l.end_time).getTime() === eMs
+    );
+    if (twin) {
+      placementInFlight = false;  // placeStudentOnLesson re-acquires the guard
+      showToast('Объединено с существующим занятием', 'success');
+      return placeStudentOnLesson(twin.id);
+    }
+
+    const { data, error } = await db.from('lessons').insert({
+      teacher_id: s.teacherId, room, week_start: formatDate(state.currentWeekStart),
+      start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+    }).select().single();
+    if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
+    await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
+    await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
+    await attachActiveSubscriptionIfAny(data.id, s.studentId, s.teacherId);
+    await recomputeSubscriptionsByLesson(s.lessonId);
+    await cleanEmptyLesson(s.lessonId);
+    cancelStudentDrag();
+    showToast('Ученик перенесён', 'success'); await loadLessons();
+  } finally {
+    placementInFlight = false;
+  }
 }
 
 async function placeStudentOnLesson(targetLessonId) {
+  if (placementInFlight) return;
   const s = studentDragState; if (!s) return;
   if (targetLessonId === s.lessonId) { cancelStudentDrag(); return; }
   const tl = state.lessons.find(l => l.id === targetLessonId);
   if (!tl) { cancelStudentDrag(); return; }
   if (tl.teacher_id !== s.teacherId) { showToast('Можно добавить только к своему преподавателю', 'error'); cancelStudentDrag(); return; }
+  placementInFlight = true;
+  try {
 
   // Compute target lesson's duration in slots
   const tStart = new Date(tl.start_time), tEnd = new Date(tl.end_time);
@@ -1745,6 +1906,9 @@ async function placeStudentOnLesson(targetLessonId) {
   await cleanEmptyLesson(s.lessonId);
   cancelStudentDrag();
   showToast('Ученик добавлен к занятию', 'success'); await loadLessons();
+  } finally {
+    placementInFlight = false;
+  }
 }
 
 async function cleanEmptyLesson(lessonId) {
@@ -1759,10 +1923,27 @@ function cancelStudentDrag() {
     releaseLock(studentDragState.lockKey);
   }
   studentDragState = null;
-  document.getElementById('student-drag-banner').style.display = 'none';
+  hideStudentTransferBanner();
+  // Also hide the placing-banner — used by other transfer flows. Defensive cleanup.
+  hidePlacingBanner();
   document.body.style.cursor = '';
   clearDragHighlight();
   document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
+}
+
+// Hides the «Куда переносим: X» pill and resets the touch-mode positioning, without
+// touching studentDragState. Used to make the banner disappear the instant the user
+// releases their finger, before the async placement DB ops complete.
+function hideStudentTransferBanner() {
+  const dragBanner = document.getElementById('student-drag-banner');
+  if (!dragBanner) return;
+  dragBanner.style.display = 'none';
+  if (dragBanner.dataset.touchMode === '1') {
+    delete dragBanner.dataset.touchMode;
+    dragBanner.style.top = '';
+    dragBanner.style.left = '';
+    dragBanner.style.transform = '';
+  }
 }
 
 function startStudentNextWeekTransfer() {
@@ -1943,6 +2124,63 @@ function clearSelectionHighlight() {
 function removeDurationLabel() { if (durationLabel) { durationLabel.remove(); durationLabel = null; } }
 
 // ===== LESSONS CRUD =====
+
+// Collapse lessons that share the same (teacher, room, start_time, end_time) into a
+// single visible card. Such duplicates can exist as legacy data from before auto-merge
+// was implemented; without this, the schedule shows two identical cards stacked on top
+// of one another and the slot count reads double. Returns a deduplicated array.
+function collapseOverlappingLessons(lessons) {
+  const groups = new Map();
+  for (const l of lessons) {
+    const key = `${l.teacher_id}|${l.room}|${l.start_time}|${l.end_time}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(l);
+  }
+  const out = [];
+  const cleanupTasks = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) { out.push(group[0]); continue; }
+    // Multiple lessons at the exact same slot — fold all their student lists into the
+    // first (primary) lesson, keeping unique student_ids only.
+    const primary = group[0];
+    const seen = new Set();
+    const merged = [];
+    for (const l of group) {
+      for (const ls of (l.lesson_students || [])) {
+        if (seen.has(ls.student_id)) continue;
+        seen.add(ls.student_id);
+        merged.push(ls);
+      }
+    }
+    primary.lesson_students = merged;
+    out.push(primary);
+    cleanupTasks.push({
+      primaryId: primary.id,
+      secondaryIds: group.slice(1).map(l => l.id),
+      studentIds: Array.from(seen)
+    });
+  }
+  // Fire-and-forget DB cleanup so the duplicates eventually disappear server-side too
+  if (cleanupTasks.length > 0) cleanupOverlappingLessons(cleanupTasks);
+  return out;
+}
+
+async function cleanupOverlappingLessons(tasks) {
+  for (const t of tasks) {
+    try {
+      // Ensure every student is attached to the primary lesson (upsert ignores existing rows)
+      if (t.studentIds.length > 0) {
+        const rows = t.studentIds.map(sid => ({ lesson_id: t.primaryId, student_id: sid }));
+        await db.from('lesson_students').upsert(rows, { onConflict: 'lesson_id,student_id', ignoreDuplicates: true });
+      }
+      // Remove the now-redundant duplicate lessons (CASCADE drops their lesson_students rows)
+      if (t.secondaryIds.length > 0) {
+        await db.from('lessons').delete().in('id', t.secondaryIds);
+      }
+    } catch (_) { /* best-effort cleanup — RLS may reject for foreign teachers */ }
+  }
+}
+
 async function loadLessons() {
   const ws = formatDate(state.currentWeekStart);
   const { data, error } = await db.from('lessons')
@@ -1961,7 +2199,9 @@ async function loadLessons() {
       return true;
     });
   });
-  state.lessons = (data || []).filter(l => l.lesson_students?.length > 0 && l.room !== 0);
+  state.lessons = collapseOverlappingLessons(
+    (data || []).filter(l => l.lesson_students?.length > 0 && l.room !== 0)
+  );
   const emptyIds = (data || []).filter(l => !l.lesson_students?.length).map(l => l.id);
   if (emptyIds.length > 0) db.from('lessons').delete().in('id', emptyIds);
   if (!recurringByStudent) await loadRecurringByStudent();
@@ -2100,7 +2340,7 @@ function renderCurrentStudents() {
   ct.innerHTML = `<label class="lesson-label">Текущие ученики</label>` + selected.map(s => {
     const cancelBtn = canEdit && (m.mode === 'edit') ? `<button class="cs-cancel" data-student-id="${s.id}" title="Отменить ученика">✕</button>` : '';
     return `<div class="current-student-row" data-student-id="${s.id}">
-      ${canEdit && (m.mode === 'edit' || m.mode === 'rec-edit') ? '<span class="cs-drag-handle" title="Перенести"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></span>' : ''}
+      ${canEdit && (m.mode === 'edit' || m.mode === 'rec-edit') ? '<button class="cs-transfer-btn" type="button" title="Перенести ученика"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>' : ''}
       <span class="cs-name">${s.first_name} ${s.last_name} <span class="lesson-student-subject">${sl(s.subject)}</span>${s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : ''}</span>
       ${cancelBtn}
       ${canEdit ? `<button class="cs-remove" data-student-id="${s.id}" title="Убрать из списка"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>` : ''}
@@ -2167,34 +2407,37 @@ function renderCurrentStudents() {
       });
     });
     if (m.mode === 'edit' || m.mode === 'rec-edit') {
-      ct.querySelectorAll('.cs-drag-handle').forEach(handle => {
-        handle.addEventListener('pointerdown', (e) => {
-          // Skip synthetic mouse events that may follow a touch
-          if (e.pointerType === 'mouse' && isShortlyAfterTouch()) return;
+      ct.querySelectorAll('.cs-transfer-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
           e.preventDefault(); e.stopPropagation();
-          const row = handle.closest('.current-student-row');
+          const row = btn.closest('.current-student-row');
           const sid = row.dataset.studentId;
           const sd = allTeacherStudents.find(s => s.id === sid);
           if (!sd) return;
           const lessonSlots = m.slotTo - m.slotFrom;
-          if (e.pointerType === 'touch') {
-            lastTouchTime = Date.now();
-            startStudentDrag(sd, m.lessonId, m.teacherId, lessonSlots);
-            // No follow-cursor banner on touch — show placing-banner with cancel instead
-            const dragBanner = document.getElementById('student-drag-banner');
-            if (dragBanner) dragBanner.style.display = 'none';
-            document.body.style.cursor = '';
-            showPlacingBanner();
-            const banner = document.getElementById('placing-banner');
-            const span = banner?.querySelector('span');
-            if (span) span.textContent = `Куда переносим ученика: ${sd.first_name} ${sd.last_name}`;
-          } else {
-            startStudentDrag(sd, m.lessonId, m.teacherId, lessonSlots);
-          }
+          enterStudentPlacingMode(sd, m.lessonId, m.teacherId, lessonSlots);
         });
       });
     }
   }
+}
+
+// Click-to-place flow for student transfer — same UX shape as truant placement.
+// Closes the modal, sets studentDragState, and shows the shared #placing-banner with
+// "Выберите место для <name>". User then long-presses a grid cell to preview the slot,
+// drags to fine-tune, releases to commit (with conflict check that BLOCKS on red).
+function enterStudentPlacingMode(sd, lessonId, teacherId, lessonSlots) {
+  closeLessonModal();
+  if (typeof acquireLock === 'function') acquireLock('lesson:' + lessonId);
+  studentDragState = {
+    studentId: sd.id, studentName: `${sd.first_name} ${sd.last_name}`,
+    lessonId, teacherId, slotLength: lessonSlots,
+    lockKey: 'lesson:' + lessonId
+  };
+  // Hide the desktop cursor-follower banner — we use the shared placing-banner instead
+  const dragBanner = document.getElementById('student-drag-banner');
+  if (dragBanner) dragBanner.style.display = 'none';
+  showPlacingBanner(`Выберите место для ${sd.first_name} ${sd.last_name}`);
 }
 
 function closeLessonModal() {

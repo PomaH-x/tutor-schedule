@@ -62,7 +62,6 @@ function handleConnectionLoss() {
   if (reconnectTimer) return; // already scheduled
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
-    console.warn('[realtime] reconnecting…');
     try {
       if (presenceChannel) {
         await presenceChannel.unsubscribe();
@@ -103,7 +102,7 @@ async function initRealtime() {
       presenceReady = true;
       await trackMyState();
     } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-      console.warn('[realtime] presence connection lost:', status);
+      // Channel transients are normal on mobile/sleeping tabs — silent reconnect via timer
       handleConnectionLoss();
     }
   });
@@ -129,7 +128,6 @@ async function initRealtime() {
       })
       .subscribe((status) => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          console.warn('[realtime] data-sync connection lost:', status);
           // data-sync recovery rides along with presence reconnect via handleConnectionLoss
         }
       });
@@ -171,7 +169,7 @@ async function trackMyState() {
       editing: Array.from(myLockedKeys)
     });
   } catch (e) {
-    console.warn('[realtime] track failed:', e.message);
+    // best-effort presence — failures are non-fatal
   }
 }
 
