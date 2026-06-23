@@ -535,7 +535,7 @@ function renderPayrollHTML(isAdmin) {
     if (teachers.length > 1) {
       html += `<div class="payroll-filter">`;
       teachers.forEach(([tId, data]) => {
-        html += `<button class="payroll-filter-pill active" data-tid="${tId}"><span class="teacher-color-dot" style="background:${data.color}"></span>${data.name}</button>`;
+        html += `<button class="payroll-filter-pill active" data-tid="${tId}"><span class="teacher-color-dot" style="background:${escapeHtml(data.color)}"></span>${escapeHtml(data.name)}</button>`;
       });
       html += `</div>`;
     }
@@ -552,8 +552,8 @@ function renderPayrollHTML(isAdmin) {
     if (isAdmin) {
       html += `<div class="payroll-teacher" data-teacher-id="${tId}">
         <div class="payroll-teacher-header">
-          <span class="teacher-color-dot" style="background:${data.color}"></span>
-          <span class="payroll-teacher-name">${data.name}</span>
+          <span class="teacher-color-dot" style="background:${escapeHtml(data.color)}"></span>
+          <span class="payroll-teacher-name">${escapeHtml(data.name)}</span>
           ${cancelBadge}
         </div>`;
     } else {
@@ -584,7 +584,7 @@ function renderPayrollHTML(isAdmin) {
     });
     // 2. One-off conducted lessons
     oneOffStudents.forEach(s => {
-      html += `<div class="payroll-student"><span class="ps-name">${s.name}</span><span class="ps-count">${s.count} зан.</span><span class="ps-amount">${s.amount} ₽</span></div>`;
+      html += `<div class="payroll-student"><span class="ps-name">${escapeHtml(s.name)}</span><span class="ps-count">${s.count} зан.</span><span class="ps-amount">${s.amount} ₽</span></div>`;
     });
     // 3. Paid one-off cancellations (yellow)
     data.cancelledStudents.filter(cs => cs.isPaid && !cs.fromSubscription).forEach(cs => {
@@ -600,7 +600,7 @@ function renderPayrollHTML(isAdmin) {
       subStudents.forEach(s => {
         const durStr = s.duration ? ` · ${s.duration === 90 ? '1,5 ч' : s.duration === 120 ? '2 ч' : s.duration === 180 ? '3 ч' : (s.duration + ' мин')}` : '';
         html += `<div class="payroll-student payroll-student-sub">
-          <span class="ps-name">${s.name} <span class="ps-sub-meta">· Абон ${s.subType}${durStr}</span></span>
+          <span class="ps-name">${escapeHtml(s.name)} <span class="ps-sub-meta">· Абон ${escapeHtml(s.subType)}${durStr}</span></span>
           <span class="ps-count">${s.count} зан.</span>
           <span class="ps-amount">${s.amount} ₽</span>
         </div>`;
@@ -621,7 +621,7 @@ function renderPayrollHTML(isAdmin) {
       data.soldSubs.forEach(ss => {
         const durStr = ss.duration ? ` · ${ss.duration === 90 ? '1,5 ч' : ss.duration === 120 ? '2 ч' : ss.duration === 180 ? '3 ч' : (ss.duration + ' мин')}` : '';
         html += `<div class="payroll-student payroll-student-sold">
-          <span class="ps-name">${ss.studentName} <span class="ps-sub-meta">· Абон ${ss.subType}${durStr}</span></span>
+          <span class="ps-name">${escapeHtml(ss.studentName)} <span class="ps-sub-meta">· Абон ${escapeHtml(ss.subType)}${durStr}</span></span>
           <span class="ps-count">${ss.paidAmount} ₽</span>
           <span class="ps-amount">центру ${ss.centerShare} ₽</span>
         </div>`;
@@ -637,7 +637,7 @@ function renderPayrollHTML(isAdmin) {
       data.refundsList.forEach(rs => {
         const durStr = rs.duration ? ` · ${rs.duration === 90 ? '1,5 ч' : rs.duration === 120 ? '2 ч' : rs.duration === 180 ? '3 ч' : (rs.duration + ' мин')}` : '';
         html += `<div class="payroll-student payroll-student-refund">
-          <span class="ps-name">${rs.studentName} <span class="ps-sub-meta">· Абон ${rs.subType}${durStr}</span></span>
+          <span class="ps-name">${escapeHtml(rs.studentName)} <span class="ps-sub-meta">· Абон ${escapeHtml(rs.subType)}${durStr}</span></span>
           <span class="ps-count">возврат ${rs.refundAmount} ₽</span>
           <span class="ps-amount">центру −${rs.centerPart} ₽</span>
         </div>`;
@@ -759,7 +759,7 @@ function renderCancellationRow(cs, colorClass, isAdmin) {
   }
   const statusLabel = cs.isPaid ? 'Платная отмена' : 'Отменено';
   return `<div class="payroll-student ${colorClass}">
-    <span class="ps-name">${cs.name}</span>
+    <span class="ps-name">${escapeHtml(cs.name)}</span>
     <span class="ps-reason">${btn}</span>
     <span class="ps-cancel-status">${statusLabel}</span>
     <span class="ps-amount">${cs.amount} ₽</span>

@@ -63,16 +63,25 @@ html, body {
 }
 
 /* iPhone safe-area: keep the top bar and side edges out of the notch / rounded corners.
-   The viewport meta uses viewport-fit=cover so content fills the screen; without these
-   paddings, the time labels and top buttons get clipped by the notch. */
+   The viewport meta uses viewport-fit=cover so content fills the screen edges; without
+   these paddings, the time labels, top buttons and titles get visually clipped by the
+   notch / dynamic island and by the curved corners (env(safe-area-inset-left) is 0 in
+   portrait, so we add an explicit 4px floor for the corner radius). */
 .top-bar {
   padding-top: max(12px, env(safe-area-inset-top));
   padding-left: max(20px, env(safe-area-inset-left));
   padding-right: max(20px, env(safe-area-inset-right));
 }
 .screen {
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
+  padding-left: max(4px, env(safe-area-inset-left));
+  padding-right: max(4px, env(safe-area-inset-right));
+  padding-bottom: env(safe-area-inset-bottom);
+}
+/* Time labels need a little extra left-padding so the leading «1» of «10:00»–«22:00»
+   never sits flush against the screen's rounded corner */
+.grid-time {
+  padding-left: 4px;
+  box-sizing: border-box;
 }
 
 #app {
@@ -2686,6 +2695,18 @@ input, textarea, select {
     font-size: 15px;
     margin-right: 2px;
     max-width: 90px;
+    white-space: pre-wrap;
+    line-height: 1.1;
+  }
+  /* Schedule screen — same truncation as recurring, so the «22 июня — 28 июня» title
+     never overruns its row even on narrow iPhones. */
+  #screen-schedule .top-bar-left {
+    gap: 6px;
+  }
+  #screen-schedule .top-bar-left h2 {
+    font-size: 15px;
+    margin-right: 2px;
+    max-width: 105px;
     white-space: pre-wrap;
     line-height: 1.1;
   }

@@ -217,9 +217,10 @@ function renderTruants(cancellations) {
   truants.forEach(function(t) {
     if (isAdmin && t.teacherName !== currentTeacher) {
       currentTeacher = t.teacherName;
-      html += '<div class="truant-group-title">' + currentTeacher + '</div>';
+      html += '<div class="truant-group-title">' + escapeHtml(currentTeacher) + '</div>';
     }
     var name = t.student.first_name + ' ' + t.student.last_name;
+    var nameEsc = escapeHtml(name);
     var count = t.cancels.length;
 
     if (count === 1) {
@@ -228,20 +229,20 @@ function renderTruants(cancellations) {
       var dur = getCancelDuration(c);
       html += '<div class="truant-card">' +
         '<div class="truant-info">' +
-          '<span class="truant-name">' + name + '</span>' +
+          '<span class="truant-name">' + nameEsc + '</span>' +
           '<span class="truant-date-badge">' + label + '</span>' +
           paidBadge(c) +
         '</div>' +
         '<div class="truant-actions">' +
-          '<button class="btn-remove-truant-single" data-cid="' + c.id + '" data-name="' + name + '" title="Убрать">Убрать</button>' +
-          '<button class="btn-place-truant" data-student-id="' + t.studentId + '" data-teacher-id="' + t.teacherId + '" data-cid="' + c.id + '" data-duration="' + dur + '" data-name="' + name + '">Разместить</button>' +
+          '<button class="btn-remove-truant-single" data-cid="' + c.id + '" data-name="' + nameEsc + '" title="Убрать">Убрать</button>' +
+          '<button class="btn-place-truant" data-student-id="' + t.studentId + '" data-teacher-id="' + t.teacherId + '" data-cid="' + c.id + '" data-duration="' + dur + '" data-name="' + nameEsc + '">Разместить</button>' +
         '</div>' +
       '</div>';
     } else {
       html += '<div class="truant-card truant-card-expandable">' +
         '<div class="truant-header" data-toggle="' + t.studentId + '">' +
           '<div class="truant-info">' +
-            '<span class="truant-name">' + name + '</span>' +
+            '<span class="truant-name">' + nameEsc + '</span>' +
             '<span class="truant-count-badge">' + count + ' неотработ.</span>' +
           '</div>' +
           '<span class="truant-expand-icon">▸</span>' +
@@ -254,8 +255,8 @@ function renderTruants(cancellations) {
           '<span class="truant-date-badge">' + clabel + '</span>' +
           paidBadge(c) +
           '<div class="truant-actions">' +
-            '<button class="btn-remove-truant-single" data-cid="' + c.id + '" data-name="' + name + '" title="Убрать">Убрать</button>' +
-            '<button class="btn-place-truant" data-student-id="' + t.studentId + '" data-teacher-id="' + t.teacherId + '" data-cid="' + c.id + '" data-duration="' + dur + '" data-name="' + name + '">Разместить</button>' +
+            '<button class="btn-remove-truant-single" data-cid="' + c.id + '" data-name="' + nameEsc + '" title="Убрать">Убрать</button>' +
+            '<button class="btn-place-truant" data-student-id="' + t.studentId + '" data-teacher-id="' + t.teacherId + '" data-cid="' + c.id + '" data-duration="' + dur + '" data-name="' + nameEsc + '">Разместить</button>' +
           '</div>' +
         '</div>';
       });
@@ -348,19 +349,46 @@ async function placeTruantOnCell(day, room, slot) {
       return placeTruantOnLesson(twin.id);
     }
 
-    var result = await db.from('lessons').insert({
-      teacher_id: t.teacherId, room: room, week_start: formatDate(state.currentWeekStart),
-      start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
-    }).select().single();
-    if (result.error) { showToast('Ошибка', 'error'); return; }
-    await db.from('lesson_students').insert({ lesson_id: result.data.id, student_id: t.studentId });
-    await attachActiveSubscriptionIfAny(result.data.id, t.studentId, t.teacherId);
+    // Fast path: RPC handles INSERT lesson + add student + attach sub atomically.
+    // The cancellation row delete is independent and runs in parallel.
+    var rpcRes = await rpcPlaceStudentOnNewLesson({
+      p_student_id: t.studentId,
+      p_teacher_id: t.teacherId,
+      p_source_lesson_id: null,  // truant placement has no source lesson
+      p_room: room,
+      p_start_time: sTime.toISOString(),
+      p_end_time: eTime.toISOString(),
+      p_week_start: formatDate(state.currentWeekStart)
+    });
 
-    if (t.cancellationId) {
-      await db.from('cancellations').delete().eq('id', t.cancellationId);
+    if (rpcRes) {
+      var tasks = [recomputeSubscriptionsByIds(rpcRes.affected_sub_ids)];
+      if (t.cancellationId) {
+        tasks.push(db.from('cancellations').delete().eq('id', t.cancellationId));
+      } else {
+        // Pick the oldest pending cancellation as the one being marked-up
+        tasks.push((async () => {
+          var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
+          if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
+        })());
+      }
+      await Promise.all(tasks);
     } else {
-      var pending = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
-      if (pending.data && pending.data.length > 0) await db.from('cancellations').delete().eq('id', pending.data[0].id);
+      // Legacy fallback
+      var result = await db.from('lessons').insert({
+        teacher_id: t.teacherId, room: room, week_start: formatDate(state.currentWeekStart),
+        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+      }).select().single();
+      if (result.error) { showToast('Ошибка', 'error'); return; }
+      await db.from('lesson_students').insert({ lesson_id: result.data.id, student_id: t.studentId });
+      await attachActiveSubscriptionIfAny(result.data.id, t.studentId, t.teacherId);
+
+      if (t.cancellationId) {
+        await db.from('cancellations').delete().eq('id', t.cancellationId);
+      } else {
+        var pending2 = await db.from('cancellations').select('id').eq('student_id', t.studentId).eq('teacher_id', t.teacherId).eq('status', 'pending').order('week_start').limit(1);
+        if (pending2.data && pending2.data.length > 0) await db.from('cancellations').delete().eq('id', pending2.data[0].id);
+      }
     }
 
     state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
@@ -416,15 +444,33 @@ async function placeTruantOnLesson(targetLessonId) {
     var sTime = new Date(tStart);
     var eTime = new Date(tStart.getTime() + t.slotLength * SLOT_MINUTES * 60 * 1000);
 
-    var ins = await db.from('lessons').insert({
-      teacher_id: t.teacherId, room: tl.room, week_start: formatDate(state.currentWeekStart),
-      start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
-    }).select().single();
-    if (ins.error) { showToast('Ошибка', 'error'); return; }
+    // Fast path: RPC creates new lesson at the same start with the truant's own duration
+    var rpcResDiff = await rpcPlaceStudentOnNewLesson({
+      p_student_id: t.studentId,
+      p_teacher_id: t.teacherId,
+      p_source_lesson_id: null,
+      p_room: tl.room,
+      p_start_time: sTime.toISOString(),
+      p_end_time: eTime.toISOString(),
+      p_week_start: formatDate(state.currentWeekStart)
+    });
 
-    await db.from('lesson_students').insert({ lesson_id: ins.data.id, student_id: t.studentId });
-    await attachActiveSubscriptionIfAny(ins.data.id, t.studentId, t.teacherId);
-    await closeCancellation();
+    if (rpcResDiff) {
+      await Promise.all([
+        recomputeSubscriptionsByIds(rpcResDiff.affected_sub_ids),
+        closeCancellation()
+      ]);
+    } else {
+      // Legacy fallback
+      var ins = await db.from('lessons').insert({
+        teacher_id: t.teacherId, room: tl.room, week_start: formatDate(state.currentWeekStart),
+        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+      }).select().single();
+      if (ins.error) { showToast('Ошибка', 'error'); return; }
+      await db.from('lesson_students').insert({ lesson_id: ins.data.id, student_id: t.studentId });
+      await attachActiveSubscriptionIfAny(ins.data.id, t.studentId, t.teacherId);
+      await closeCancellation();
+    }
 
     state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
     showToast('Размещён в отдельное занятие (своя длительность)', 'success');
@@ -449,9 +495,25 @@ async function placeTruantOnLesson(targetLessonId) {
   }
   if (targetStudents.length >= getMaxGroup(tl.teacher_id)) { showToast('Максимум ' + getMaxGroup(tl.teacher_id) + ' учеников', 'error'); return; }
 
-  await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: t.studentId });
-  await attachActiveSubscriptionIfAny(targetLessonId, t.studentId, t.teacherId);
-  await closeCancellation();
+  // Fast path: merge via RPC
+  var rpcResMerge = await rpcPlaceStudentOnExistingLesson({
+    p_student_id: t.studentId,
+    p_teacher_id: t.teacherId,
+    p_source_lesson_id: null,
+    p_target_lesson_id: targetLessonId
+  });
+
+  if (rpcResMerge) {
+    await Promise.all([
+      recomputeSubscriptionsByIds(rpcResMerge.affected_sub_ids),
+      closeCancellation()
+    ]);
+  } else {
+    // Legacy fallback
+    await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: t.studentId });
+    await attachActiveSubscriptionIfAny(targetLessonId, t.studentId, t.teacherId);
+    await closeCancellation();
+  }
 
   state.placingTruant = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Ученик добавлен к занятию', 'success');

@@ -72,8 +72,8 @@ function renderOnlineLessons() {
       if (!s) return;
       html += `<div class="online-card-student">
         <div class="online-student-info">
-          <span class="online-student-name">${s.first_name} ${s.last_name}</span>
-          ${s.subject ? `<span class="online-student-subject">${s.subject}</span>` : ''}
+          <span class="online-student-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}</span>
+          ${s.subject ? `<span class="online-student-subject">${escapeHtml(s.subject)}</span>` : ''}
         </div>
       </div>`;
     });
@@ -166,7 +166,7 @@ async function loadOnlineStudents() {
   list.innerHTML = onlineStudents.map(s => {
     const sel = onlineSelectedStudentId === s.id;
     return `<label class="lesson-student-row${sel ? ' checked' : ''}">
-      <span class="lesson-student-name">${s.first_name} ${s.last_name}</span>
+      <span class="lesson-student-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}</span>
       <input type="radio" name="online-student" class="lesson-checkbox" data-id="${s.id}" ${sel ? 'checked' : ''}>
     </label>`;
   }).join('') || '<div class="lesson-no-students">Нет онлайн-учеников</div>';

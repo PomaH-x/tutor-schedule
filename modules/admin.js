@@ -81,21 +81,21 @@ function renderPendingUsers() {
       });
       const teachersHTML = Object.values(byTeacher).map(g =>
         `<div class="pending-row">
-          <span class="pending-label"><span class="teacher-color-dot" style="background:${g.color}"></span>${g.name}:</span>
-          <span>${g.subjects.join(', ') || '—'}</span>
+          <span class="pending-label"><span class="teacher-color-dot" style="background:${escapeHtml(g.color)}"></span>${escapeHtml(g.name)}:</span>
+          <span>${escapeHtml(g.subjects.join(', ') || '—')}</span>
         </div>`
       ).join('');
       details = `<div class="pending-details">
-        ${u.phone ? `<div class="pending-row"><span class="pending-label">Телефон:</span><span>${u.phone}</span></div>` : ''}
-        ${u.requested_grade ? `<div class="pending-row"><span class="pending-label">Класс:</span><span>${u.requested_grade}</span></div>` : ''}
+        ${u.phone ? `<div class="pending-row"><span class="pending-label">Телефон:</span><span>${escapeHtml(u.phone)}</span></div>` : ''}
+        ${u.requested_grade ? `<div class="pending-row"><span class="pending-label">Класс:</span><span>${escapeHtml(u.requested_grade)}</span></div>` : ''}
         ${teachersHTML || '<div class="pending-row"><span class="pending-label">Заявки:</span><span>—</span></div>'}
       </div>`;
     }
     return `<div class="pending-card pending-card-expanded" data-id="${u.id}">
       <div class="pending-header">
         <div class="pending-info">
-          <span class="pending-name">${u.full_name}</span>
-          <span class="pending-role">${roleLabel[u.role] || u.role}</span>
+          <span class="pending-name">${escapeHtml(u.full_name)}</span>
+          <span class="pending-role">${roleLabel[u.role] || escapeHtml(u.role)}</span>
         </div>
         <div class="pending-actions">
           <button class="btn-approve" data-id="${u.id}" title="Одобрить">✓</button>
@@ -199,13 +199,13 @@ function renderTeachers() {
     let roleBtn = '';
     if (!isSelf) {
       if (isAdmin && adminCount > 1) {
-        roleBtn = `<button class="btn-role-down" data-id="${t.id}" data-name="${t.full_name}" title="Понизить до преподавателя">
+        roleBtn = `<button class="btn-role-down" data-id="${t.id}" data-name="${escapeHtml(t.full_name)}" title="Понизить до преподавателя">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/>
           </svg>
         </button>`;
       } else if (!isAdmin) {
-        roleBtn = `<button class="btn-role-up" data-id="${t.id}" data-name="${t.full_name}" title="Повысить до администратора">
+        roleBtn = `<button class="btn-role-up" data-id="${t.id}" data-name="${escapeHtml(t.full_name)}" title="Повысить до администратора">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
           </svg>
@@ -215,14 +215,14 @@ function renderTeachers() {
 
     return `
     <div class="teacher-card" data-id="${t.id}">
-      <div class="teacher-color" style="background:${t.color || '#1e6fe8'}" data-id="${t.id}" title="Сменить цвет">
+      <div class="teacher-color" style="background:${escapeHtml(t.color || '#1e6fe8')}" data-id="${t.id}" title="Сменить цвет">
         <span class="teacher-color-edit">✎</span>
       </div>
       <div class="teacher-info">
-        <span class="teacher-name">${t.full_name}</span>
-        <span class="teacher-role">${roleLabel[t.role] || t.role}</span>
+        <span class="teacher-name">${escapeHtml(t.full_name)}</span>
+        <span class="teacher-role">${roleLabel[t.role] || escapeHtml(t.role)}</span>
       </div>
-      <button class="btn-teacher-subjects" data-id="${t.id}" data-name="${t.full_name}" title="Предметы">
+      <button class="btn-teacher-subjects" data-id="${t.id}" data-name="${escapeHtml(t.full_name)}" title="Предметы">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
         Предметы
       </button>
@@ -231,7 +231,7 @@ function renderTeachers() {
         <input type="number" class="input-group-size" data-id="${t.id}" value="${t.max_group_size || 4}" min="1" max="20">
       </div>
       ${roleBtn}
-      ${!isSelf ? `<button class="btn-delete-teacher" data-id="${t.id}" data-name="${t.full_name}" title="Удалить">×</button>` : ''}
+      ${!isSelf ? `<button class="btn-delete-teacher" data-id="${t.id}" data-name="${escapeHtml(t.full_name)}" title="Удалить">×</button>` : ''}
     </div>
   `;
   }).join('');
@@ -400,8 +400,8 @@ function renderSubjectsAdmin(subjects) {
   }
   list.innerHTML = subjects.map(s =>
     `<div class="subject-card">
-      <span class="subject-name">${s.name}</span>
-      <button class="btn-delete-subject" data-id="${s.id}" data-name="${s.name}">×</button>
+      <span class="subject-name">${escapeHtml(s.name)}</span>
+      <button class="btn-delete-subject" data-id="${s.id}" data-name="${escapeHtml(s.name)}">×</button>
     </div>`
   ).join('');
 
@@ -497,8 +497,8 @@ async function loadAdminCancellationStats() {
 
   let html = `<div class="cancel-stat-total">Всего отмен: <b>${cancellations.length}</b></div>`;
   Object.values(byTeacher).forEach(t => {
-    html += `<div class="cancel-stat-teacher"><span class="teacher-color-dot" style="background:${t.color}"></span><span class="cancel-stat-name">${t.name}</span><span class="cancel-stat-count">${t.students.length} отм.</span></div>`;
-    t.students.forEach(s => { html += `<div class="cancel-stat-student">${s}</div>`; });
+    html += `<div class="cancel-stat-teacher"><span class="teacher-color-dot" style="background:${escapeHtml(t.color)}"></span><span class="cancel-stat-name">${escapeHtml(t.name)}</span><span class="cancel-stat-count">${t.students.length} отм.</span></div>`;
+    t.students.forEach(s => { html += `<div class="cancel-stat-student">${escapeHtml(s)}</div>`; });
   });
   container.innerHTML = html;
 }

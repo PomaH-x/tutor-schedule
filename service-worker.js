@@ -1,5 +1,5 @@
 // Bump CACHE_NAME on every deploy so clients refetch assets.
-const CACHE_NAME = 'tutor-schedule-v65';
+const CACHE_NAME = 'tutor-schedule-v68';
 
 // Compute base path dynamically so the SW works under any URL,
 // including GitHub Pages subpaths like /tutor-schedule/tutor-schedule/.
@@ -24,6 +24,7 @@ const ASSETS = [
   'modules/realtime.js',
   'modules/student.js',
   'modules/pricing.js',
+  'modules/subscriptions.js',
   'modules/admin.js',
   'assets/icon.svg',
   'assets/icon-192.png',

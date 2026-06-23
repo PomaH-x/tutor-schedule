@@ -298,7 +298,10 @@ function renderGrid() {
       }
     }
   }
-  initGridInteractions(grid);
+  // initGridInteractions is NOT called here — it's installed once via initSchedule(),
+  // because event listeners on the #schedule-grid element survive innerHTML wipes
+  // (only its children are removed). Re-registering on every renderGrid would stack
+  // duplicate handlers (week-switch → +9 listeners each time, full leak).
   renderLessons();
   if (state.placingLesson || state.placingStudent || state.placingTruant) showPlacingBanner();
 }
@@ -407,7 +410,7 @@ function renderLessons() {
       }
 
       const isFirst = lesson._ov === 0;
-      const sn = (lesson.teacher?.short_name || '??').replace(/\./g, '');
+      const sn = escapeHtml((lesson.teacher?.short_name || '??').replace(/\./g, ''));
       const headerColor = `rgba(${r},${g},${b},${isDark ? 0.9 : 1})`;
       const headerHTML = isFirst ? `<div class="lc-header" style="color:${headerColor}">${sn}</div>` : '';
       const dragHTML = canDrag ? '<div class="lc-drag-handle" title="Перетащить">⠿</div>' : '';
@@ -1370,7 +1373,7 @@ function showLessonTooltipForCard(card) {
     (l.lesson_students || []).forEach(s => {
       if (!s.student) return;
       const inRecurring = recurringByStudent ? isStudentInRecurringSlot(s.student_id, dayOfWeek, startHHMM, endHHMM, l.room) : true;
-      const name = `${s.student.first_name} ${s.student.last_name}`;
+      const name = escapeHtml(`${s.student.first_name} ${s.student.last_name}`);
       names.push(inRecurring ? name : `<span class="tooltip-transferred">${name}</span>`);
     });
   });
@@ -1715,22 +1718,47 @@ async function placeTransferredStudent(day, room, slot) {
       return placeTransferredStudentOnLesson(twin.id);
     }
 
-    const { data, error } = await db.from('lessons').insert({
-      teacher_id: p.teacherId, room, week_start: formatDate(state.currentWeekStart),
-      start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
-    }).select().single();
-    if (error) { showToast('Ошибка', 'error'); return; }
-    await db.from('lesson_students').insert({ lesson_id: data.id, student_id: p.studentId });
-    await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
-    await attachActiveSubscriptionIfAny(data.id, p.studentId, p.teacherId);
-    await recomputeSubscriptionsByLesson(p.lessonId);
+    // Fast path: RPC handles INSERT lesson + move + cleanup + attach sub atomically
+    const rpcRes = await rpcPlaceStudentOnNewLesson({
+      p_student_id: p.studentId,
+      p_teacher_id: p.teacherId,
+      p_source_lesson_id: p.lessonId,
+      p_room: room,
+      p_start_time: sTime.toISOString(),
+      p_end_time: eTime.toISOString(),
+      p_week_start: formatDate(state.currentWeekStart)
+    });
+
     const origLesson = state.lessons.find(l => l.id === p.lessonId);
     const origWs = p.originalWeekStart || formatDate(getMonday(new Date()));
-    await db.from('cancellations').insert({
-      student_id: p.studentId, teacher_id: p.teacherId, week_start: origWs, status: 'transferred',
-      lesson_start_time: origLesson?.start_time, lesson_end_time: origLesson?.end_time, lesson_day: origLesson ? new Date(origLesson.start_time).getDay() : null
-    });
-    await cleanEmptyLesson(p.lessonId);
+
+    if (rpcRes) {
+      // Sub recompute + cancellation insert run in parallel — they don't depend on each other
+      await Promise.all([
+        recomputeSubscriptionsByIds(rpcRes.affected_sub_ids),
+        db.from('cancellations').insert({
+          student_id: p.studentId, teacher_id: p.teacherId, week_start: origWs, status: 'transferred',
+          lesson_start_time: origLesson?.start_time, lesson_end_time: origLesson?.end_time,
+          lesson_day: origLesson ? new Date(origLesson.start_time).getDay() : null
+        })
+      ]);
+    } else {
+      // Legacy fallback
+      const { data, error } = await db.from('lessons').insert({
+        teacher_id: p.teacherId, room, week_start: formatDate(state.currentWeekStart),
+        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+      }).select().single();
+      if (error) { showToast('Ошибка', 'error'); return; }
+      await db.from('lesson_students').insert({ lesson_id: data.id, student_id: p.studentId });
+      await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
+      await attachActiveSubscriptionIfAny(data.id, p.studentId, p.teacherId);
+      await recomputeSubscriptionsByLesson(p.lessonId);
+      await db.from('cancellations').insert({
+        student_id: p.studentId, teacher_id: p.teacherId, week_start: origWs, status: 'transferred',
+        lesson_start_time: origLesson?.start_time, lesson_end_time: origLesson?.end_time, lesson_day: origLesson ? new Date(origLesson.start_time).getDay() : null
+      });
+      await cleanEmptyLesson(p.lessonId);
+    }
     state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
     showToast('Ученик перенесён на следующую неделю', 'success'); await loadLessons();
   } finally {
@@ -1749,14 +1777,26 @@ async function placeTransferredStudentOnLesson(targetLessonId) {
   if (!(await checkTransferLimit([p.studentId]))) return;
   placementInFlight = true;
   try {
+    // Fast path: one RPC
+    const rpcRes = await rpcPlaceStudentOnExistingLesson({
+      p_student_id: p.studentId,
+      p_teacher_id: p.teacherId,
+      p_source_lesson_id: p.lessonId,
+      p_target_lesson_id: targetLessonId
+    });
 
-  await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: p.studentId });
-  await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
-  await attachActiveSubscriptionIfAny(targetLessonId, p.studentId, p.teacherId);
-  await recomputeSubscriptionsByLesson(p.lessonId);
-  await cleanEmptyLesson(p.lessonId);
-  state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
-  showToast('Ученик добавлен к занятию', 'success'); await loadLessons();
+    if (rpcRes) {
+      recomputeSubscriptionsByIds(rpcRes.affected_sub_ids);
+    } else {
+      // Legacy fallback
+      await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: p.studentId });
+      await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
+      await attachActiveSubscriptionIfAny(targetLessonId, p.studentId, p.teacherId);
+      await recomputeSubscriptionsByLesson(p.lessonId);
+      await cleanEmptyLesson(p.lessonId);
+    }
+    state.placingStudent = null; hidePlacingBanner(); clearDragHighlight();
+    showToast('Ученик добавлен к занятию', 'success'); await loadLessons();
   } finally {
     placementInFlight = false;
   }
@@ -1808,16 +1848,34 @@ async function placeStudentOnCell(day, room, slot) {
       return placeStudentOnLesson(twin.id);
     }
 
-    const { data, error } = await db.from('lessons').insert({
-      teacher_id: s.teacherId, room, week_start: formatDate(state.currentWeekStart),
-      start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
-    }).select().single();
-    if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
-    await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
-    await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
-    await attachActiveSubscriptionIfAny(data.id, s.studentId, s.teacherId);
-    await recomputeSubscriptionsByLesson(s.lessonId);
-    await cleanEmptyLesson(s.lessonId);
+    // Fast path: one RPC does INSERT lesson + move lesson_students + cleanup + attach sub
+    const rpcRes = await rpcPlaceStudentOnNewLesson({
+      p_student_id: s.studentId,
+      p_teacher_id: s.teacherId,
+      p_source_lesson_id: s.lessonId,
+      p_room: room,
+      p_start_time: sTime.toISOString(),
+      p_end_time: eTime.toISOString(),
+      p_week_start: formatDate(state.currentWeekStart)
+    });
+
+    if (rpcRes) {
+      // Recompute affected subscriptions in parallel (single concurrent batch)
+      recomputeSubscriptionsByIds(rpcRes.affected_sub_ids); // fire-and-forget; cache invalidation also happens inside
+    } else {
+      // Legacy fallback (RPC not installed or other error). Same behaviour as before
+      // iteration 3 — kept verbatim so the app keeps working pre-migration.
+      const { data, error } = await db.from('lessons').insert({
+        teacher_id: s.teacherId, room, week_start: formatDate(state.currentWeekStart),
+        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+      }).select().single();
+      if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
+      await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
+      await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
+      await attachActiveSubscriptionIfAny(data.id, s.studentId, s.teacherId);
+      await recomputeSubscriptionsByLesson(s.lessonId);
+      await cleanEmptyLesson(s.lessonId);
+    }
     cancelStudentDrag();
     showToast('Ученик перенесён', 'success'); await loadLessons();
   } finally {
@@ -1862,17 +1920,32 @@ async function placeStudentOnLesson(targetLessonId) {
     const sTime = new Date(tStart);
     const eTime = new Date(tStart.getTime() + s.slotLength * SLOT_MINUTES * 60 * 1000);
 
-    const { data, error } = await db.from('lessons').insert({
-      teacher_id: s.teacherId, room: tl.room, week_start: formatDate(state.currentWeekStart),
-      start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
-    }).select().single();
-    if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
+    // Fast path: one RPC handles INSERT lesson + move + cleanup + attach sub
+    const rpcRes = await rpcPlaceStudentOnNewLesson({
+      p_student_id: s.studentId,
+      p_teacher_id: s.teacherId,
+      p_source_lesson_id: s.lessonId,
+      p_room: tl.room,
+      p_start_time: sTime.toISOString(),
+      p_end_time: eTime.toISOString(),
+      p_week_start: formatDate(state.currentWeekStart)
+    });
 
-    await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
-    await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
-    await attachActiveSubscriptionIfAny(data.id, s.studentId, s.teacherId);
-    await recomputeSubscriptionsByLesson(s.lessonId);
-    await cleanEmptyLesson(s.lessonId);
+    if (rpcRes) {
+      recomputeSubscriptionsByIds(rpcRes.affected_sub_ids);
+    } else {
+      // Legacy fallback
+      const { data, error } = await db.from('lessons').insert({
+        teacher_id: s.teacherId, room: tl.room, week_start: formatDate(state.currentWeekStart),
+        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+      }).select().single();
+      if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
+      await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
+      await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
+      await attachActiveSubscriptionIfAny(data.id, s.studentId, s.teacherId);
+      await recomputeSubscriptionsByLesson(s.lessonId);
+      await cleanEmptyLesson(s.lessonId);
+    }
     cancelStudentDrag();
     showToast('Ученик перенесён в отдельное занятие (своя длительность)', 'success');
     await loadLessons();
@@ -1899,11 +1972,24 @@ async function placeStudentOnLesson(targetLessonId) {
 
   if (!(await checkTransferLimit([s.studentId]))) { cancelStudentDrag(); return; }
 
-  await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: s.studentId });
-  await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
-  await attachActiveSubscriptionIfAny(targetLessonId, s.studentId, s.teacherId);
-  await recomputeSubscriptionsByLesson(s.lessonId);
-  await cleanEmptyLesson(s.lessonId);
+  // Fast path: one RPC does INSERT into target + DELETE from source + cleanup + attach sub.
+  const rpcRes = await rpcPlaceStudentOnExistingLesson({
+    p_student_id: s.studentId,
+    p_teacher_id: s.teacherId,
+    p_source_lesson_id: s.lessonId,
+    p_target_lesson_id: targetLessonId
+  });
+
+  if (rpcRes) {
+    recomputeSubscriptionsByIds(rpcRes.affected_sub_ids);
+  } else {
+    // Legacy fallback (RPC not installed)
+    await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: s.studentId });
+    await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
+    await attachActiveSubscriptionIfAny(targetLessonId, s.studentId, s.teacherId);
+    await recomputeSubscriptionsByLesson(s.lessonId);
+    await cleanEmptyLesson(s.lessonId);
+  }
   cancelStudentDrag();
   showToast('Ученик добавлен к занятию', 'success'); await loadLessons();
   } finally {
@@ -2048,7 +2134,7 @@ function handleLessonTooltip(e) {
       (l.lesson_students || []).forEach(s => {
         if (!s.student) return;
         const inRecurring = recurringByStudent ? isStudentInRecurringSlot(s.student_id, dayOfWeek, startHHMM, endHHMM, l.room) : true;
-        const name = `${s.student.first_name} ${s.student.last_name}`;
+        const name = escapeHtml(`${s.student.first_name} ${s.student.last_name}`);
         names.push(inRecurring ? name : `<span class="tooltip-transferred">${name}</span>`);
       });
     });
@@ -2341,7 +2427,7 @@ function renderCurrentStudents() {
     const cancelBtn = canEdit && (m.mode === 'edit') ? `<button class="cs-cancel" data-student-id="${s.id}" title="Отменить ученика">✕</button>` : '';
     return `<div class="current-student-row" data-student-id="${s.id}">
       ${canEdit && (m.mode === 'edit' || m.mode === 'rec-edit') ? '<button class="cs-transfer-btn" type="button" title="Перенести ученика"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>' : ''}
-      <span class="cs-name">${s.first_name} ${s.last_name} <span class="lesson-student-subject">${sl(s.subject)}</span>${s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : ''}</span>
+      <span class="cs-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)} <span class="lesson-student-subject">${escapeHtml(sl(s.subject))}</span>${s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : ''}</span>
       ${cancelBtn}
       ${canEdit ? `<button class="cs-remove" data-student-id="${s.id}" title="Убрать из списка"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>` : ''}
     </div>`;
@@ -2560,7 +2646,7 @@ function renderLessonStudentsList(filter) {
         const timeStr = getCancelTimeStr(c);
         return timeStr ? `<span class="modal-truant-date">${timeStr}</span>` : '';
       }).filter(Boolean).join('');
-      html += `<label class="lesson-student-row truant-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${onlBadge}${subBadge}${dateBadges}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
+      html += `<label class="lesson-student-row truant-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}${indBadge}${onlBadge}${subBadge}${dateBadges}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
     });
     html += '</div>';
   }
@@ -2572,7 +2658,7 @@ function renderLessonStudentsList(filter) {
     const onlBadge = s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : '';
     const subBadge = studentActiveSub[s.id] ? '<span class="lesson-sub-badge" title="Активный абонемент">Абн.</span>' : '';
     const weekBadge = buildStudentWeekBadge(s.id);
-    html += `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${s.first_name} ${s.last_name}${indBadge}${onlBadge}${subBadge}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
+    html += `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}${indBadge}${onlBadge}${subBadge}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
   });
 
   list.innerHTML = html;
@@ -2757,6 +2843,9 @@ function initSchedule() {
   state.currentWeekStart = getMonday(new Date());
   currentWeekOffset = 0;
   updateWeekLabel(); updateWeekTabs(); renderGrid(); loadLessons();
+  // Install grid event listeners ONCE — the #schedule-grid DOM element is never
+  // recreated (only its children are wiped on renderGrid via innerHTML='').
+  initGridInteractions(document.getElementById('schedule-grid'));
 
   document.querySelectorAll('.week-tab').forEach(tab => {
     tab.addEventListener('click', () => {

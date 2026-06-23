@@ -199,6 +199,58 @@ async function confirmSubscriptionActivation() {
 
 // --- Auto-binding lessons to active subscription ---
 
+// ----------------------------------------------------------------------------
+// Placement RPCs (iteration 3). These wrap the Postgres `place_student_on_*`
+// functions which do all the mechanical DB ops in one transaction (insert
+// lesson, move lesson_students row, delete empty source, attach subscription)
+// and return the list of subscription_ids that need recomputing on the client.
+// Caller is responsible for running recomputeSubscriptionUsage on those IDs
+// (this stays on the JS side because the JS function is the source of truth
+// for the recompute logic; the Postgres equivalent is kept as a backstop).
+//
+// Replaces the previous 5–7 sequential `await db.from(...)` chain with a
+// single round-trip. If the RPC isn't installed yet (user hasn't applied
+// iteration-3.sql), the wrapper sets `rpcAvailable=false` for the rest of
+// the session and falls back to the legacy sequential path automatically.
+// ----------------------------------------------------------------------------
+let __rpcPlacementAvailable = true;
+
+async function rpcPlaceStudentOnNewLesson(params) {
+  if (!__rpcPlacementAvailable) return null;
+  const { data, error } = await db.rpc('place_student_on_new_lesson', params);
+  if (error) {
+    // 42883 = undefined_function — RPC not installed. Disable for session.
+    if (error.code === '42883' || /function .* does not exist/i.test(error.message || '')) {
+      console.warn('[placement-rpc] not installed, falling back to legacy path. Apply iteration-3.sql to enable single-roundtrip placement.');
+      __rpcPlacementAvailable = false;
+      return null;
+    }
+    throw error;
+  }
+  return data && data[0] ? data[0] : null; // { new_lesson_id, source_deleted, affected_sub_ids }
+}
+
+async function rpcPlaceStudentOnExistingLesson(params) {
+  if (!__rpcPlacementAvailable) return null;
+  const { data, error } = await db.rpc('place_student_on_existing_lesson', params);
+  if (error) {
+    if (error.code === '42883' || /function .* does not exist/i.test(error.message || '')) {
+      __rpcPlacementAvailable = false;
+      return null;
+    }
+    throw error;
+  }
+  return data && data[0] ? data[0] : null; // { source_deleted, affected_sub_ids }
+}
+
+// After an RPC placement returns affected_sub_ids[], recompute all of them
+// in parallel (one HTTP round-trip per sub, but they fire simultaneously
+// rather than sequentially as the old code did).
+async function recomputeSubscriptionsByIds(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return;
+  await Promise.all(ids.map(id => recomputeSubscriptionUsage(id)));
+}
+
 // Call this after inserting a lesson_students row.
 // If the student has an ACTIVE subscription with this teacher AND the lesson falls
 // within its validity period — attach. Direct query, no cache, no fallback to expired.
@@ -543,7 +595,7 @@ async function openSubscriptionRefund(subscriptionId) {
   };
   const hStr = dur === 90 ? '1,5 ч' : dur === 120 ? '2 ч' : dur === 180 ? '3 ч' : `${dur} мин`;
   document.getElementById('sub-refund-summary').innerHTML = `
-    <div class="sub-refund-row"><span class="sub-refund-label">Ученик:</span><span class="sub-refund-value">${refundCtx.studentName}</span></div>
+    <div class="sub-refund-row"><span class="sub-refund-label">Ученик:</span><span class="sub-refund-value">${escapeHtml(refundCtx.studentName)}</span></div>
     <div class="sub-refund-row"><span class="sub-refund-label">Абонемент:</span><span class="sub-refund-value">${subFresh.total_lessons} занятий · ${hStr}${isOnline ? ' · онлайн' : ''}${isInd && !isOnline ? ' · индивидуальное' : ''}</span></div>
     <div class="sub-refund-row"><span class="sub-refund-label">Срок:</span><span class="sub-refund-value">${fmt(subFresh.start_date)} — ${fmt(subFresh.end_date)}</span></div>
     <div class="sub-refund-row"><span class="sub-refund-label">Оплачено:</span><span class="sub-refund-value"><b>${subFresh.paid_amount} ₽</b></span></div>

@@ -182,7 +182,12 @@ function renderRecurringGrid() {
     }
   }
 
-  initRecurringGridEvents(grid);
+  // initRecurringGridEvents is NOT called here — listeners survive innerHTML wipes and
+  // are installed once on first renderRecurringGrid via the recurringInited guard.
+  if (!recurringInited) {
+    initRecurringGridEvents(grid);
+    recurringInited = true;
+  }
   renderRecurringLessons();
 }
 
@@ -306,7 +311,7 @@ function renderRecurringBookings(grid) {
     el.style.background = `rgba(${r},${g},${bl},${bgAlpha})`;
     el.style.borderColor = `rgba(${r},${g},${bl},${isDark ? 0.7 : 0.6})`;
     el.style.color = `rgba(${r},${g},${bl},${isDark ? 0.95 : 0.85})`;
-    el.innerHTML = `<span class="booking-label">${(b.teacher?.short_name || '').replace(/\./g, '')}</span>`;
+    el.innerHTML = `<span class="booking-label">${escapeHtml((b.teacher?.short_name || '').replace(/\./g, ''))}</span>`;
     grid.appendChild(el);
   });
 }
@@ -839,7 +844,7 @@ function showRecLessonTooltipForCard(card) {
   clearRecLessonTooltip();
   const names = (lesson.recurring_lesson_students || [])
     .filter(s => s.student)
-    .map(s => `${s.student.first_name} ${s.student.last_name}`);
+    .map(s => escapeHtml(`${s.student.first_name} ${s.student.last_name}`));
   if (names.length === 0) return;
   recLessonTooltip = document.createElement('div');
   recLessonTooltip.className = 'lesson-tooltip lesson-tooltip-touch';
@@ -886,7 +891,7 @@ function handleRecLessonTooltip(e) {
       const lE = +ep[0] * 60 + +ep[1];
       if (slotStartMin >= lE || slotEndMin <= lS) return;
       (l.recurring_lesson_students || []).forEach(s => {
-        if (s.student) names.push(`${s.student.first_name} ${s.student.last_name}`);
+        if (s.student) names.push(escapeHtml(`${s.student.first_name} ${s.student.last_name}`));
       });
     });
     if (names.length === 0) { clearRecLessonTooltip(); return; }
@@ -1579,7 +1584,7 @@ async function onCopyRecurringClick() {
   const list = document.getElementById('copy-teacher-list');
   let html = `<button class="copy-teacher-btn" data-tid="all"><span class="copy-teacher-dot" style="background:var(--accent)"></span>Все преподаватели</button>`;
   (teachers || []).forEach(t => {
-    html += `<button class="copy-teacher-btn" data-tid="${t.id}"><span class="copy-teacher-dot" style="background:${t.color || '#1e6fe8'}"></span>${t.full_name}</button>`;
+    html += `<button class="copy-teacher-btn" data-tid="${t.id}"><span class="copy-teacher-dot" style="background:${escapeHtml(t.color || '#1e6fe8')}"></span>${escapeHtml(t.full_name)}</button>`;
   });
   list.innerHTML = html;
   list.querySelectorAll('.copy-teacher-btn').forEach(btn => {

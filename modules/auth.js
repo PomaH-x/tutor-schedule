@@ -139,14 +139,14 @@ async function loadTeachersForRegistration() {
     const subjectsHTML = subjects
       .sort((a, b) => a.name.localeCompare(b.name))
       .map(s => `<label class="reg-subject-item">
-        <input type="checkbox" data-subject-id="${s.id}" data-subject-name="${s.name}">
-        <span>${s.name}</span>
+        <input type="checkbox" data-subject-id="${s.id}" data-subject-name="${escapeHtml(s.name)}">
+        <span>${escapeHtml(s.name)}</span>
       </label>`).join('');
     return `<div class="reg-teacher-item" data-teacher-id="${t.id}">
       <label class="reg-teacher-head">
         <input type="checkbox" data-teacher-toggle>
-        <span class="reg-teacher-color" style="background:${color}"></span>
-        <span class="reg-teacher-name">${t.full_name}</span>
+        <span class="reg-teacher-color" style="background:${escapeHtml(color)}"></span>
+        <span class="reg-teacher-name">${escapeHtml(t.full_name)}</span>
         <span class="reg-teacher-arrow">›</span>
       </label>
       <div class="reg-subjects-list" hidden>

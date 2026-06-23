@@ -9,11 +9,11 @@ async function loadSubjects() {
 
 function populateSubjectSelects() {
   const sel = document.getElementById('student-subject');
-  if (sel) sel.innerHTML = subjectsList.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+  if (sel) sel.innerHTML = subjectsList.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('');
   const filterSel = document.getElementById('filter-subject');
   if (filterSel) {
     const current = filterSel.value;
-    filterSel.innerHTML = '<option value="">Все предметы</option>' + subjectsList.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+    filterSel.innerHTML = '<option value="">Все предметы</option>' + subjectsList.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('');
     filterSel.value = current;
   }
 }
@@ -73,7 +73,7 @@ function renderStudents(filter = '') {
     list.innerHTML = entries.map(([tId, group]) =>
       `<div class="students-group" data-teacher-id="${tId}">
         <div class="students-group-header" data-teacher-id="${tId}">
-          <span class="students-group-name">${group.name}</span>
+          <span class="students-group-name">${escapeHtml(group.name)}</span>
           <span class="students-group-count">${group.students.length}</span>
           <span class="students-group-arrow">›</span>
         </div>
@@ -116,11 +116,11 @@ function studentCardHTML(s) {
   const isUnlinked = !s.profile_id;
   return `<div class="student-card ${isUnlinked ? 'student-card-unlinked' : ''}" data-id="${s.id}">
     <div class="student-card-main">
-      <span class="student-name">${s.first_name} ${s.last_name}</span>
-      <span class="student-subject">${s.subject || ''}</span>
+      <span class="student-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}</span>
+      <span class="student-subject">${escapeHtml(s.subject || '')}</span>
     </div>
     <div class="student-card-meta">
-      ${s.grade ? `<span>${s.grade} класс</span>` : ''}
+      ${s.grade ? `<span>${escapeHtml(s.grade)} класс</span>` : ''}
       ${isUnlinked ? '<span class="student-unlinked-badge" title="Не привязан к аккаунту">Тест</span>' : ''}
     </div>
   </div>`;
@@ -283,9 +283,9 @@ function initStudents() {
     closeCancelConfirm();
   });
 
-  document.getElementById('student-search').addEventListener('input', (e) => {
+  document.getElementById('student-search').addEventListener('input', debounce((e) => {
     renderStudents(e.target.value);
-  });
+  }, 150));
 
   document.getElementById('filter-subject').addEventListener('change', () => {
     renderStudents(document.getElementById('student-search').value);
@@ -333,9 +333,9 @@ function initStudents() {
   document.getElementById('link-student-overlay').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeLinkStudentModal();
   });
-  document.getElementById('link-student-search').addEventListener('input', (e) => {
+  document.getElementById('link-student-search').addEventListener('input', debounce((e) => {
     renderLinkStudentList(e.target.value);
-  });
+  }, 150));
 }
 
 let studentDetailId = null;
@@ -358,7 +358,7 @@ async function openStudentDetail(studentId) {
       .eq('student_id', studentId)
       .order('submitted_at', { ascending: false }),
     db.from('cancellations')
-      .select('id, week_start, lesson_start_time, lesson_end_time, recurring_lesson_id, recurring_lesson:recurring_lessons(start_time, end_time, day_of_week, subject)')
+      .select('id, week_start, lesson_start_time, lesson_end_time, recurring_lesson_id')
       .eq('student_id', studentId)
       .eq('status', 'missed')
       .order('week_start', { ascending: false })
@@ -368,21 +368,36 @@ async function openStudentDetail(studentId) {
   const lessons = lessonsRes.data;
   const payments = paymentsRes.data;
 
+  // Resolve recurring_lesson templates for the missed cancellations in a second query.
+  // We avoid PostgREST embed (`recurring_lesson:recurring_lessons(...)`) because that
+  // syntax requires a declared FK constraint on cancellations.recurring_lesson_id and
+  // returns 400 if the constraint is missing. Two-query approach is FK-agnostic.
+  const missedRaw = missedRes.data || [];
+  const recIds = [...new Set(missedRaw.map(c => c.recurring_lesson_id).filter(Boolean))];
+  let recById = {};
+  if (recIds.length > 0) {
+    const { data: recRows } = await db.from('recurring_lessons')
+      .select('id, start_time, end_time, day_of_week, subject')
+      .in('id', recIds);
+    (recRows || []).forEach(r => { recById[r.id] = r; });
+  }
+
   // Convert missed cancellations into synthetic "missed" lesson rows. They participate
   // in the same per-subject grouping and attendance counters as the real lesson rows.
-  const missedRows = (missedRes.data || []).map(c => {
+  const missedRows = missedRaw.map(c => {
+    const rec = c.recurring_lesson_id ? recById[c.recurring_lesson_id] : null;
     // Prefer the cancellation's own captured time (set when the lesson was concrete).
     // Otherwise compute the date from week_start + day_of_week + time on the recurring template.
     let startISO = c.lesson_start_time || null;
     let endISO = c.lesson_end_time || null;
     let subj = null;
-    if (c.recurring_lesson) subj = c.recurring_lesson.subject || null;
-    if (!startISO && c.recurring_lesson && c.week_start) {
+    if (rec) subj = rec.subject || null;
+    if (!startISO && rec && c.week_start) {
       const monday = new Date(c.week_start);
-      const dow = c.recurring_lesson.day_of_week;
+      const dow = rec.day_of_week;
       const date = new Date(monday); date.setDate(monday.getDate() + dow);
-      const sp = (c.recurring_lesson.start_time || '00:00').split(':');
-      const ep = (c.recurring_lesson.end_time || '00:00').split(':');
+      const sp = (rec.start_time || '00:00').split(':');
+      const ep = (rec.end_time || '00:00').split(':');
       const s = new Date(date); s.setHours(+sp[0], +sp[1], 0, 0);
       const e = new Date(date); e.setHours(+ep[0], +ep[1], 0, 0);
       startISO = s.toISOString();
@@ -416,7 +431,7 @@ async function openStudentDetail(studentId) {
 
   // Build select options
   const subjectOptions = subjectsList.map(s =>
-    `<option value="${s.name}" ${s.name === (student.subject || '') ? 'selected' : ''}>${s.name}</option>`
+    `<option value="${escapeHtml(s.name)}" ${s.name === (student.subject || '') ? 'selected' : ''}>${escapeHtml(s.name)}</option>`
   ).join('');
   const gradeOptions = [5,6,7,8,9,10,11].map(g =>
     `<option value="${g}" ${g === (student.grade || 11) ? 'selected' : ''}>${g}</option>`
@@ -457,10 +472,10 @@ async function openStudentDetail(studentId) {
           <div class="form-group"><label>Источник</label><select id="sd-source">${sourceOptions}</select></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>ФИО родителя</label><input type="text" id="sd-parent-name" value="${student.parent_name || ''}" placeholder="Иванова Мария Сергеевна"></div>
-          <div class="form-group"><label>Телефон родителя</label><input type="text" id="sd-parent-phone" value="${student.parent_phone || ''}" placeholder="+7 (999) 000-00-00"></div>
+          <div class="form-group"><label>ФИО родителя</label><input type="text" id="sd-parent-name" value="${escapeHtml(student.parent_name || '')}" placeholder="Иванова Мария Сергеевна"></div>
+          <div class="form-group"><label>Телефон родителя</label><input type="text" id="sd-parent-phone" value="${escapeHtml(student.parent_phone || '')}" placeholder="+7 (999) 000-00-00"></div>
         </div>
-        <div class="form-group"><label>Примечание</label><textarea id="sd-note" rows="2">${student.notes || ''}</textarea></div>
+        <div class="form-group"><label>Примечание</label><textarea id="sd-note" rows="2">${escapeHtml(student.notes || '')}</textarea></div>
       </div>
     </div>`;
 
@@ -544,10 +559,10 @@ async function openStudentDetail(studentId) {
   if (subjectEntries.length === 0) {
     html += `<div class="sd-section"><h4>Занятия</h4><div class="sd-empty">Нет занятий</div></div>`;
   } else if (subjectEntries.length === 1) {
-    html += `<div class="sd-section"><h4>Занятия — ${subjectEntries[0][0]}</h4>${buildLessonsTable(subjectEntries[0][1])}</div>`;
+    html += `<div class="sd-section"><h4>Занятия — ${escapeHtml(subjectEntries[0][0])}</h4>${buildLessonsTable(subjectEntries[0][1])}</div>`;
   } else {
     subjectEntries.forEach(([subj, group]) => {
-      html += `<div class="sd-section"><h4>${subj}</h4>${buildLessonsTable(group)}</div>`;
+      html += `<div class="sd-section"><h4>${escapeHtml(subj)}</h4>${buildLessonsTable(group)}</div>`;
     });
   }
 
@@ -570,7 +585,7 @@ async function openStudentDetail(studentId) {
     html += `</div></div>`;
   }
 
-  document.getElementById('student-detail-title').innerHTML =
+  document.getElementById('student-detail-title').textContent =
     `${student.first_name} ${student.last_name}`;
 
   body.innerHTML = html;
@@ -757,8 +772,8 @@ function renderLinkStudentList(search) {
   list.innerHTML = filtered.map(p => `
     <div class="link-student-item" data-profile-id="${p.id}">
       <div class="link-student-item-main">
-        <span class="link-student-name">${p.full_name || '(без имени)'}</span>
-        ${p.phone ? `<span class="link-student-phone">${p.phone}</span>` : ''}
+        <span class="link-student-name">${escapeHtml(p.full_name || '(без имени)')}</span>
+        ${p.phone ? `<span class="link-student-phone">${escapeHtml(p.phone)}</span>` : ''}
       </div>
       <button class="btn-primary btn-sm" data-pick="${p.id}">Выбрать</button>
     </div>

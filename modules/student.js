@@ -318,11 +318,11 @@ async function renderStudentSchedule() {
       <div class="student-card-body">
         <div class="student-card-row">
           <span class="student-card-label">Предмет:</span>
-          <span class="student-card-value">${it.subject}</span>
+          <span class="student-card-value">${escapeHtml(it.subject)}</span>
         </div>
         <div class="student-card-row">
           <span class="student-card-label">Преподаватель:</span>
-          <span class="student-card-value student-card-teacher"><span class="teacher-color-dot" style="background:${it.teacherColor}"></span>${it.teacherName}${tgLink}</span>
+          <span class="student-card-value student-card-teacher"><span class="teacher-color-dot" style="background:${escapeHtml(it.teacherColor)}"></span>${escapeHtml(it.teacherName)}${tgLink}</span>
         </div>
         ${roomLine}
         <div class="student-card-row">
@@ -429,8 +429,8 @@ async function renderStudentHistory() {
       <td>${STUDENT_DAYS_SHORT[dayIdx]}</td>
       <td>${timeStr}</td>
       <td>${it.duration} мин</td>
-      <td>${it.subject}</td>
-      <td><span class="teacher-color-dot" style="background:${it.teacherColor}"></span>${it.teacherName}</td>
+      <td>${escapeHtml(it.subject)}</td>
+      <td><span class="teacher-color-dot" style="background:${escapeHtml(it.teacherColor)}"></span>${escapeHtml(it.teacherName)}</td>
       <td>${roomStr}</td>
       <td>${statusHTML}</td>
       <td>${it.cost} ₽</td>
