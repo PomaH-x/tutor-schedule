@@ -19,6 +19,12 @@ function populateSubjectSelects() {
 }
 
 async function loadStudents() {
+  // Show skeleton rows on first load (when list is empty); on refresh keep
+  // existing rows visible to avoid flicker.
+  const list = document.getElementById('students-list');
+  if (list && !list.querySelector('.student-card:not(.skel-row)') && !list.querySelector('.students-empty') && !list.querySelector('.skel-row')) {
+    list.innerHTML = '<div class="student-card skel-row"></div>'.repeat(5);
+  }
   const isAdmin = state.profile.role === 'admin';
   let query = db.from('students').select('*, teacher:profiles!teacher_id(full_name, short_name)');
   if (!isAdmin) query = query.eq('teacher_id', state.user.id);

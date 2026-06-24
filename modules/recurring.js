@@ -769,9 +769,14 @@ async function onRecGridPointerUp(e) {
         recTouchLastCardTapId = cardId;
         recTouchLastCardTapAt = now;
         if (recTouchEditTimer) clearTimeout(recTouchEditTimer);
-        recTouchEditTimer = setTimeout(() => { recTouchEditTimer = null; openRecurringEditModal(lesson); }, 280);
+        recTouchEditTimer = setTimeout(() => {
+          recTouchEditTimer = null;
+          openRecurringEditModal(lesson);
+          shieldFromGhostClick();
+        }, 280);
       } else {
         openRecurringEditModal(lesson);
+        shieldFromGhostClick();
       }
     }
     recTouchGesture = null;
@@ -798,6 +803,7 @@ async function onRecGridPointerUp(e) {
       recTouchGesture = null; return;
     }
     openRecurringCreateModal({ day: recSelStart.day, room: recSelStart.room, slotFrom: sf, slotTo: st });
+    shieldFromGhostClick();
   } else if (g.mode === 'move') {
     // Resolve target cell FIRST — while grid-dragging is still active and cards are pointer-events:none
     const el = document.elementFromPoint(e.clientX, e.clientY);

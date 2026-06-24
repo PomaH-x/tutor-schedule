@@ -67,12 +67,69 @@ function showAuthStep(stepId) {
   document.getElementById(stepId).classList.add('active');
 }
 
+// Keys we DON'T persist — those are boot/auth-flow screens, not navigation targets
+const _NON_PERSISTED_SCREENS = new Set(['screen-loading', 'screen-auth']);
+
 function showScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(screenId).classList.add('active');
   if (typeof clearLessonTooltip === 'function') clearLessonTooltip();
   if (typeof removeCellTooltip === 'function') removeCellTooltip();
   if (typeof clearRecLessonTooltip === 'function') clearRecLessonTooltip();
+  // Remember the last navigated-to screen so we can restore it after a page
+  // reload (UI-state persistence). Boot/auth screens are excluded — when the
+  // user is logged out they'll see auth regardless, and the loading splash is
+  // transient. Stored under 'lastScreen' in localStorage.
+  if (!_NON_PERSISTED_SCREENS.has(screenId)) {
+    try { localStorage.setItem('lastScreen', screenId); } catch (_) { /* private mode */ }
+  }
+}
+
+// Screens each role is allowed to land on after a reload. If the persisted
+// screen isn't in this list for the current user, we silently fall back to the
+// role's default. Prevents e.g. an old admin session restoring to screen-admin
+// after a role downgrade.
+const _SCREEN_ALLOWLIST = {
+  admin:   ['screen-schedule', 'screen-recurring', 'screen-online', 'screen-profile'],
+  teacher: ['screen-schedule', 'screen-recurring', 'screen-online', 'screen-profile'],
+  student: ['screen-student', 'screen-student-history', 'screen-profile']
+};
+
+// Called from onAuthSuccess AFTER the default screen + inits have run.
+// If a valid persisted screen exists, navigate there by dispatching a click on
+// the corresponding nav button. We deliberately go through real click handlers
+// (instead of calling functions directly) so we don't have to duplicate any
+// load/render logic — the same code path that handles a normal user click is
+// re-used here.
+function restoreLastScreen() {
+  let target;
+  try { target = localStorage.getItem('lastScreen'); } catch (_) { return; }
+  if (!target) return;
+
+  const role = state.profile?.role;
+  const allowed = _SCREEN_ALLOWLIST[role] || [];
+  if (!allowed.includes(target)) return;
+
+  // Default screen for the role — if target IS the default, nothing to do
+  const defaultScreen = role === 'student' ? 'screen-student' : 'screen-schedule';
+  if (target === defaultScreen) return;
+
+  // Map target → the nav button that opens it. Using the actual button click
+  // re-uses the existing setup path (which loads data, renders grid, etc.).
+  const navMap = {
+    'screen-recurring':       'btn-to-recurring',
+    'screen-online':          'btn-to-online',
+    'screen-profile':         role === 'student' ? 'btn-profile-student' : 'btn-profile',
+    'screen-student-history': 'btn-student-history'
+  };
+  const btnId = navMap[target];
+  if (btnId) {
+    const btn = document.getElementById(btnId);
+    if (btn) { btn.click(); return; }
+  }
+  // Fallback for screens without a single button click that fully sets them up
+  // (e.g. profile for student): just open the screen directly.
+  try { showScreen(target); } catch (_) { /* unknown screen — stay on default */ }
 }
 
 async function loadProfile(userId) {
@@ -349,7 +406,8 @@ async function onAuthSuccess(user) {
   }
 
   if (profile.role === 'student') {
-    showStudentScreen();
+    await showStudentScreen();
+    restoreLastScreen();
     return;
   }
 
@@ -361,12 +419,20 @@ async function onAuthSuccess(user) {
   computeAndSyncCancellations();
   syncRecurringToWeeks();
   if (typeof initRealtime === 'function') initRealtime();
+  // After the default screen + inits are running, restore the user's last
+  // navigated screen if one was persisted (UI-state persistence — survives
+  // page reloads). No-op if nothing was saved or the saved screen isn't
+  // valid for this user's role.
+  restoreLastScreen();
 }
 
 async function handleLogout() {
   await db.auth.signOut();
   state.user = null;
   state.profile = null;
+  // Forget the persisted screen so the next user (or the same user re-logging
+  // in) doesn't get restored to the previous session's view.
+  try { localStorage.removeItem('lastScreen'); } catch (_) {}
   showScreen('screen-auth');
   showAuthStep('auth-step-role');
 }

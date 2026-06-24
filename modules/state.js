@@ -1,4 +1,34 @@
-const state = {
+// =============================================================================
+// REACTIVE STATE STORE (iteration 5)
+// =============================================================================
+// `state` is the central app store. It looks and behaves like a plain object —
+// all existing reads (`state.lessons`, `state.user`, …) and writes
+// (`state.lessons = newArray`) keep working unchanged. UNDER THE HOOD it's a
+// Proxy that, on every property assignment, notifies anyone who subscribed to
+// that key via `subscribe(key, fn)`.
+//
+// Why a Proxy and not setState/getState?
+//   - 235 existing call-sites read `state.lessons` directly. Switching to
+//     `getState('lessons')` would mean touching all of them. The Proxy lets
+//     us keep the simple read syntax and add reactivity transparently.
+//
+// What the Proxy CANNOT catch:
+//   - In-place mutation: `state.lessons.push(...)` and
+//     `state.lessons.forEach(l => l.foo = 'x')` don't go through the setter,
+//     so subscribers won't fire. After any in-place change, call
+//     `publish('lessons')` to notify manually. Reassignment with the spread
+//     operator (`state.lessons = [...state.lessons, x]`) is the cleaner
+//     pattern when possible.
+//
+// Usage examples:
+//   subscribe('placingLesson', (newVal) => {
+//     if (newVal) showPlacingBanner(); else hidePlacingBanner();
+//   });
+//   state.placingLesson = { … }; // → banner appears automatically
+//   state.placingLesson = null;  // → banner hides automatically
+// =============================================================================
+
+const _stateData = {
   user: null,
   profile: null,
   currentWeekStart: null,
@@ -10,6 +40,49 @@ const state = {
   placingStudent: null,
   placingTruant: null
 };
+
+// key (string) → Set<function>
+const _subscribers = new Map();
+
+function _notify(key, newValue, oldValue) {
+  const subs = _subscribers.get(key);
+  if (!subs || subs.size === 0) return;
+  // Snapshot to allow subscribers to unsubscribe during the iteration without
+  // breaking the loop. Errors in one subscriber must not stop the others.
+  Array.from(subs).forEach(fn => {
+    try { fn(newValue, oldValue); }
+    catch (e) { console.error('[state] subscriber error for key=' + key + ':', e); }
+  });
+}
+
+const state = new Proxy(_stateData, {
+  set(target, key, value) {
+    const old = target[key];
+    target[key] = value;
+    if (old !== value) _notify(key, value, old);
+    return true;
+  }
+});
+
+// Subscribe to changes of a single state key. Returns an unsubscribe function.
+// Subscribers are invoked synchronously AFTER the assignment, with
+// (newValue, oldValue). Use `publish(key)` to manually trigger when the value
+// was mutated in place (e.g. array push, object property change).
+function subscribe(key, fn) {
+  if (typeof fn !== 'function') throw new Error('subscribe: fn must be a function');
+  if (!_subscribers.has(key)) _subscribers.set(key, new Set());
+  _subscribers.get(key).add(fn);
+  return function unsubscribe() {
+    const set = _subscribers.get(key);
+    if (set) set.delete(fn);
+  };
+}
+
+// Force-fire all subscribers for a key with the current value. Use after
+// in-place mutation (e.g. `state.lessons.push(x); publish('lessons');`).
+function publish(key) {
+  if (key in _stateData) _notify(key, _stateData[key], _stateData[key]);
+}
 
 function getMonday(date) {
   const d = new Date(date);

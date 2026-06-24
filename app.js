@@ -1,4 +1,12 @@
 document.addEventListener('DOMContentLoaded', async () => {
+  // Detect iOS Safari (iPhone / iPad / iPod, including iPad on iOS 13+ which
+  // reports as MacIntel + touch). Used to scope safe-area paddings ONLY to
+  // iOS — other phones don't have the notch / rounded-corner issues and
+  // shouldn't get unnecessary side margins.
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (isIOS) document.documentElement.classList.add('is-ios');
+
   // Warm up Supabase connection before user interaction
   db.from('profiles').select('id').limit(1).then(() => {}).catch(() => {});
 

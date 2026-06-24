@@ -52,7 +52,14 @@
 }
 
 html, body {
+  /* `100dvh` is the dynamic viewport height — it shrinks when the mobile
+     browser's address bar is visible and grows when it auto-hides. Without
+     this, `100%` resolves to `100vh` (which always equals the LARGE viewport)
+     and content near the bottom of the grid sits BEHIND the address bar,
+     making lessons near 18:00 untappable. Falls back to 100% on older browsers
+     that don't support dvh (Safari < 15.4, Chrome < 108). */
   height: 100%;
+  height: 100dvh;
   font-family: var(--font);
   background: var(--bg);
   color: var(--text);
@@ -62,26 +69,47 @@ html, body {
   -webkit-user-select: none;
 }
 
-/* iPhone safe-area: keep the top bar and side edges out of the notch / rounded corners.
-   The viewport meta uses viewport-fit=cover so content fills the screen edges; without
-   these paddings, the time labels, top buttons and titles get visually clipped by the
-   notch / dynamic island and by the curved corners (env(safe-area-inset-left) is 0 in
-   portrait, so we add an explicit 4px floor for the corner radius). */
-.top-bar {
-  padding-top: max(12px, env(safe-area-inset-top));
+/* iPhone safe-area: keep the top bar and side edges out of the notch / rounded
+   corners. Scoped to `.is-ios` (set by JS at boot) so Android and other phones
+   don't get unnecessary side margins. The viewport meta uses viewport-fit=cover
+   so on iOS the page extends to the screen edges and the safe-area paddings
+   below carve back the unsafe regions. */
+.is-ios .top-bar {
+  /* Generous top padding so the title clears the dynamic island / notch on
+     every iPhone model. max() uses env() when available (notched: ~44–59px)
+     and falls back to 20px on older non-notched iPhones / iPads. */
+  padding-top: max(20px, env(safe-area-inset-top));
   padding-left: max(20px, env(safe-area-inset-left));
   padding-right: max(20px, env(safe-area-inset-right));
 }
-.screen {
+.is-ios .screen {
+  /* 4px floor for the rounded-corner clip in portrait (env returns 0 then),
+     plus the home-indicator gap at the bottom. */
   padding-left: max(4px, env(safe-area-inset-left));
   padding-right: max(4px, env(safe-area-inset-right));
   padding-bottom: env(safe-area-inset-bottom);
 }
-/* Time labels need a little extra left-padding so the leading «1» of «10:00»–«22:00»
-   never sits flush against the screen's rounded corner */
-.grid-time {
+/* Time labels need a little extra left-padding so the leading «1» of «10:00»–
+   «22:00» never sits flush against the rounded corner */
+.is-ios .grid-time {
   padding-left: 4px;
   box-sizing: border-box;
+}
+/* "Blue plate" under the iPhone status bar — extend a solid accent-coloured
+   strip up to the very top of the screen so the system status bar area gets
+   tinted (matches the Android theme-color #1e6fe8 behaviour). Uses body::before
+   with position:fixed so it isn't clipped by any ancestor's overflow:hidden.
+   Only visible on iOS (the .is-ios class is set in app.js based on UA). */
+.is-ios body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top);
+  background: var(--accent);
+  z-index: 9999;
+  pointer-events: none;
 }
 
 #app {
@@ -2706,7 +2734,7 @@ input, textarea, select {
   #screen-schedule .top-bar-left h2 {
     font-size: 15px;
     margin-right: 2px;
-    max-width: 105px;
+    max-width: 140px;
     white-space: pre-wrap;
     line-height: 1.1;
   }
@@ -3236,6 +3264,29 @@ input, textarea, select {
 .lesson-modal-footer .btn-primary {
   padding: 8px 14px;
   font-size: 13px;
+}
+
+/* Mobile: keep the modal footer on a single row by collapsing the
+   «Расформировать» (delete) button down to a trash-bin icon. The text label
+   is hidden, the SVG is shown, padding tightens. Both Close and Save keep
+   their text so the action remains explicit on the primary CTA. */
+.btn-icon-mobile { display: none; }
+@media (max-width: 600px) {
+  .btn-icon-mobile {
+    display: inline-block;
+    vertical-align: middle;
+  }
+  .btn-label-desktop { display: none; }
+  .lesson-modal-footer #btn-delete-lesson {
+    padding: 8px 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Don't wrap — let all 3 buttons sit on the same row */
+  .lesson-modal-footer {
+    flex-wrap: nowrap;
+  }
 }
 
 /* ===== ONLINE SCREEN ===== */
@@ -5217,5 +5268,98 @@ input, textarea, select {
   /* Z-cycle button — hidden on mobile (use double-tap instead) */
   .lc-zcycle {
     display: none;
+  }
+}
+
+/* =============================================================================
+   ITERATION 4 (refined): skeletons + modal animation only.
+   Lesson-card and student-card enter animations were removed at the user's
+   request — they masked tappable areas on mobile when realtime triggered
+   re-renders and produced perpetual transform → bad touch hit-testing.
+   ============================================================================= */
+
+/* --- Skeleton shimmer ---
+   `--skel-base` and `--skel-shine` are theme-aware tokens (light/dark). The
+   animation translates a diagonal highlight band across the element.
+   Performance-only: uses background-position (compositor handled), no layout
+   thrash, no JS. */
+:root {
+  --skel-base: rgba(120, 130, 145, 0.10);
+  --skel-shine: rgba(120, 130, 145, 0.22);
+}
+[data-theme="dark"] {
+  --skel-base: rgba(180, 190, 210, 0.06);
+  --skel-shine: rgba(180, 190, 210, 0.14);
+}
+
+.skel {
+  background: linear-gradient(
+    100deg,
+    var(--skel-base) 30%,
+    var(--skel-shine) 50%,
+    var(--skel-base) 70%
+  );
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+@keyframes skel-shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* Schedule grid skeleton — looks like real lesson cards in plausible positions.
+   These are JS-injected `.lesson-card.skel-card` placeholders that get removed
+   on the first real `renderLessons()` run. */
+.lesson-card.skel-card {
+  background: var(--skel-base);
+  border: 1px solid transparent;
+  animation: skel-shimmer 1.4s ease-in-out infinite;
+  background-image: linear-gradient(
+    100deg,
+    var(--skel-base) 30%,
+    var(--skel-shine) 50%,
+    var(--skel-base) 70%
+  );
+  background-size: 200% 100%;
+  pointer-events: none;
+}
+.lesson-card.skel-card > * { display: none; }
+
+/* Student list skeleton row */
+.student-card.skel-row {
+  display: block;
+  height: 56px;
+  margin-bottom: 8px;
+  background: var(--skel-base);
+  animation: skel-shimmer 1.4s ease-in-out infinite;
+  background-image: linear-gradient(
+    100deg,
+    var(--skel-base) 30%,
+    var(--skel-shine) 50%,
+    var(--skel-base) 70%
+  );
+  background-size: 200% 100%;
+  pointer-events: none;
+}
+.student-card.skel-row > * { display: none; }
+
+/* Modal smooth fade + scale — kept, doesn't affect interactivity */
+.modal-overlay.active .modal {
+  animation: modal-enter 180ms ease-out;
+}
+@keyframes modal-enter {
+  from { opacity: 0; transform: scale(0.96) translateY(4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Respect reduced-motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .skel, .lesson-card.skel-card, .student-card.skel-row {
+    animation: none;
+    background: var(--skel-base);
+  }
+  .modal-overlay.active .modal {
+    animation: none;
   }
 }

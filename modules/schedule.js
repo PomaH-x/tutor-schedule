@@ -1231,6 +1231,11 @@ function onGridPointerUp(e) {
       const openEdit = () => {
         if (canEdit) openEditLessonModal(lesson);
         else showToast('Нельзя редактировать чужие занятия', 'error');
+        // After opening via touch, shield the modal so the ~300ms-delayed synthetic
+        // click that follows touchend can't hit a button / search input / backdrop
+        // inside the modal (which would otherwise immediately trigger Расформировать,
+        // Сохранить, focus the search, or close the modal — the "flash" bug).
+        shieldFromGhostClick();
       };
 
       if (inOverlap) {
@@ -1268,6 +1273,7 @@ function onGridPointerUp(e) {
       }
     }
     openLessonModal({ day: selStart.day, room: selStart.room, slotFrom: sf, slotTo: st });
+    shieldFromGhostClick();
   } else if (g.mode === 'move') {
     document.querySelectorAll('.week-tab-drop').forEach(t => t.classList.remove('week-tab-drop'));
     const nwTab = getNextWeekTab();
@@ -2267,7 +2273,34 @@ async function cleanupOverlappingLessons(tasks) {
   }
 }
 
+// Show shimmer placeholder cards in plausible positions while the real lesson
+// data is fetching. Removed automatically on the next renderLessons() call.
+// Strategy: keep the EXISTING cards visible if there are any (avoids the empty
+// flash when switching weeks), only inject skeletons on first load when there's
+// nothing to show. This is the "skeleton or stale content, never blank" rule.
+function showScheduleSkeleton() {
+  const grid = document.getElementById('schedule-grid');
+  if (!grid) return;
+  // If we already have rendered lesson cards, don't replace them — keep the
+  // user looking at the previous week's cards until the new data lands.
+  if (grid.querySelector('.lesson-card:not(.skel-card)')) return;
+  if (grid.querySelector('.skel-card')) return; // already shown
+  // Inject a handful of fake cards at common slots (10:00, 14:00, 18:00 × few rooms)
+  const isMobile = window.innerWidth <= 600;
+  const positions = isMobile
+    ? [[0, 1, 4, 4], [2, 2, 12, 4]]                            // mobile: 2 cards
+    : [[0, 1, 4, 4], [2, 2, 12, 4], [4, 3, 20, 4], [1, 2, 8, 4]]; // desktop: 4 cards
+  positions.forEach(([day, room, startSlot, length]) => {
+    const card = document.createElement('div');
+    card.className = 'lesson-card skel-card';
+    card.style.gridRow = `${rowForSlot(startSlot)} / ${rowForSlot(startSlot + length)}`;
+    card.style.gridColumn = colForDayRoom(day, room);
+    grid.appendChild(card);
+  });
+}
+
 async function loadLessons() {
+  showScheduleSkeleton(); // shimmer placeholder while we fetch
   const ws = formatDate(state.currentWeekStart);
   const { data, error } = await db.from('lessons')
     .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), lesson_students(student_id, student:students(first_name, last_name, subject, is_individual, is_online, price_type)), original_start_time, original_end_time, transferred_from_id')
@@ -2762,7 +2795,6 @@ async function deleteLesson() {
     // If this was a transferred lesson, turn its existing "transferred" cancellations into "pending"
     // so the students appear in truants for origin week
     if (transferredFromId && studentIds.length > 0) {
-      // Look up the transferred-origin cancellations (status='transferred') for these students + teacher
       const { data: origCancels } = await db.from('cancellations')
         .select('id, student_id, week_start')
         .eq('teacher_id', teacherId)
@@ -2846,6 +2878,27 @@ function initSchedule() {
   // Install grid event listeners ONCE — the #schedule-grid DOM element is never
   // recreated (only its children are wiped on renderGrid via innerHTML='').
   initGridInteractions(document.getElementById('schedule-grid'));
+
+  // ----- Reactive placing-banner (iteration 5) -----
+  // Subscribers fire on any assignment to state.placingLesson/Student/Truant.
+  // Effect: setting any of these to non-null automatically shows the banner;
+  // setting all three to null automatically hides it. Removes the "I cleared
+  // the placing state but forgot to call hidePlacingBanner" class of bugs.
+  // Custom banner text is still set by callers via `showPlacingBanner(text)`;
+  // this subscriber only enforces visibility.
+  const syncPlacingBanner = () => {
+    const isPlacing = state.placingLesson || state.placingStudent || state.placingTruant;
+    const banner = document.getElementById('placing-banner');
+    if (isPlacing) {
+      if (!banner) showPlacingBanner();      // create DOM + default text
+      else banner.style.display = 'flex';     // already exists → just reveal
+    } else {
+      if (banner) banner.style.display = 'none';
+    }
+  };
+  subscribe('placingLesson', syncPlacingBanner);
+  subscribe('placingStudent', syncPlacingBanner);
+  subscribe('placingTruant', syncPlacingBanner);
 
   document.querySelectorAll('.week-tab').forEach(tab => {
     tab.addEventListener('click', () => {
