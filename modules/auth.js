@@ -70,19 +70,45 @@ function showAuthStep(stepId) {
 // Keys we DON'T persist — those are boot/auth-flow screens, not navigation targets
 const _NON_PERSISTED_SCREENS = new Set(['screen-loading', 'screen-auth']);
 
+// Flag set during popstate handling so showScreen() doesn't push ANOTHER history
+// entry while we're already responding to a Back press (would create an infinite
+// loop where Back leads forward).
+let _isPopStateNav = false;
+
+// The persisted screen captured BEFORE any showScreen call wipes it. Set by
+// `capturePersistedScreen()` at the very start of the boot flow; consumed once
+// by `restoreLastScreen()`. Without this temp variable the first
+// `showScreen('screen-schedule')` in onAuthSuccess overwrites localStorage
+// before we get to read it, and restore always sees the default.
+let _pendingRestoreTarget = null;
+function capturePersistedScreen() {
+  try { _pendingRestoreTarget = localStorage.getItem('lastScreen'); } catch (_) {}
+}
+
 function showScreen(screenId) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(screenId).classList.add('active');
   if (typeof clearLessonTooltip === 'function') clearLessonTooltip();
   if (typeof removeCellTooltip === 'function') removeCellTooltip();
   if (typeof clearRecLessonTooltip === 'function') clearRecLessonTooltip();
+  if (_NON_PERSISTED_SCREENS.has(screenId)) return;
   // Remember the last navigated-to screen so we can restore it after a page
-  // reload (UI-state persistence). Boot/auth screens are excluded — when the
-  // user is logged out they'll see auth regardless, and the loading splash is
-  // transient. Stored under 'lastScreen' in localStorage.
-  if (!_NON_PERSISTED_SCREENS.has(screenId)) {
-    try { localStorage.setItem('lastScreen', screenId); } catch (_) { /* private mode */ }
-  }
+  // reload (UI-state persistence). Stored under 'lastScreen' in localStorage.
+  try { localStorage.setItem('lastScreen', screenId); } catch (_) { /* private mode */ }
+  // Push to the browser's history stack so the device Back button navigates
+  // through screens within the app instead of exiting. Don't push if we are
+  // currently RESPONDING to a popstate (would defeat the back navigation),
+  // and don't push if the current history entry is already this screen
+  // (de-duplicates rapid showScreen calls e.g. from boot sequence).
+  if (_isPopStateNav) return;
+  try {
+    if (history.state && history.state.screen === screenId) {
+      // Same entry already at the top — replace rather than stack a duplicate
+      history.replaceState({ screen: screenId }, '');
+    } else {
+      history.pushState({ screen: screenId }, '');
+    }
+  } catch (_) { /* history API unavailable */ }
 }
 
 // Screens each role is allowed to land on after a reload. If the persisted
@@ -96,14 +122,13 @@ const _SCREEN_ALLOWLIST = {
 };
 
 // Called from onAuthSuccess AFTER the default screen + inits have run.
-// If a valid persisted screen exists, navigate there by dispatching a click on
-// the corresponding nav button. We deliberately go through real click handlers
-// (instead of calling functions directly) so we don't have to duplicate any
-// load/render logic — the same code path that handles a normal user click is
-// re-used here.
+// Reads `_pendingRestoreTarget` (captured BEFORE any showScreen overwrote it).
+// If a valid persisted screen exists, navigates there by dispatching a click on
+// the corresponding nav button — re-uses the existing setup path so we don't
+// duplicate any load/render logic.
 function restoreLastScreen() {
-  let target;
-  try { target = localStorage.getItem('lastScreen'); } catch (_) { return; }
+  const target = _pendingRestoreTarget;
+  _pendingRestoreTarget = null; // single-use
   if (!target) return;
 
   const role = state.profile?.role;
@@ -114,8 +139,6 @@ function restoreLastScreen() {
   const defaultScreen = role === 'student' ? 'screen-student' : 'screen-schedule';
   if (target === defaultScreen) return;
 
-  // Map target → the nav button that opens it. Using the actual button click
-  // re-uses the existing setup path (which loads data, renders grid, etc.).
   const navMap = {
     'screen-recurring':       'btn-to-recurring',
     'screen-online':          'btn-to-online',
@@ -127,10 +150,51 @@ function restoreLastScreen() {
     const btn = document.getElementById(btnId);
     if (btn) { btn.click(); return; }
   }
-  // Fallback for screens without a single button click that fully sets them up
-  // (e.g. profile for student): just open the screen directly.
   try { showScreen(target); } catch (_) { /* unknown screen — stay on default */ }
 }
+
+// ===== Device Back-button handling =====
+// On mobile (iOS / Android) the system Back gesture / button fires a `popstate`
+// whenever there's history to pop. Combined with the `history.pushState` we do
+// inside `showScreen()`, this lets Back walk through in-app screens instead of
+// closing the PWA / leaving the web tab on the first press.
+//
+// History layout after typical boot:
+//   [ initial-page-entry (no state) ]                       ← the browser tab itself
+//   [ { screen: 'screen-schedule' } ]                       ← pushed by onAuthSuccess
+//   [ { screen: 'screen-profile' } ]                        ← pushed when user opens profile
+// Pressing Back on profile fires popstate with state={screen:'screen-schedule'},
+// we restore that screen. Pressing Back again fires popstate with state=null
+// (back to the initial entry); we deliberately do nothing so the browser handles
+// it naturally (which, on a third Back press in a PWA, closes the app —
+// expected behaviour: the user explicitly wants out at that point).
+window.addEventListener('popstate', (ev) => {
+  const target = ev.state && ev.state.screen;
+  if (!target) return; // null state — initial entry. Let the browser handle exit.
+  const role = state.profile && state.profile.role;
+  if (!role) return;  // not authenticated yet
+  if (!document.getElementById(target)) return; // unknown screen — ignore
+
+  // Suppress the recursive history.pushState inside showScreen while restoring
+  _isPopStateNav = true;
+  try {
+    // Re-use existing nav-button click handlers so data loaders fire too.
+    const navMap = {
+      'screen-recurring':       'btn-to-recurring',
+      'screen-online':          'btn-to-online',
+      'screen-profile':         role === 'student' ? 'btn-profile-student' : 'btn-profile',
+      'screen-student-history': 'btn-student-history',
+      'screen-schedule':        'btn-to-current',
+      'screen-student':         null
+    };
+    const btnId = navMap[target];
+    const btn = btnId ? document.getElementById(btnId) : null;
+    if (btn) btn.click();
+    else showScreen(target);
+  } finally {
+    _isPopStateNav = false;
+  }
+});
 
 async function loadProfile(userId) {
   const { data, error } = await db
@@ -404,6 +468,10 @@ async function onAuthSuccess(user) {
     await db.auth.signOut();
     return;
   }
+
+  // Capture the persisted screen BEFORE any showScreen() below overwrites it
+  // in localStorage. restoreLastScreen() will consume this value.
+  capturePersistedScreen();
 
   if (profile.role === 'student') {
     await showStudentScreen();
