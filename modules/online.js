@@ -22,15 +22,23 @@ function updateOnlineWeekTabs() {
 
 async function loadOnlineLessons() {
   const ws = formatDate(getOnlineWeekStart());
+  // Offline cache: hydrate before network. Keyed by week so switching weeks
+  // doesn't clobber neighbours' cache.
+  const cached = (typeof cacheGet === 'function') ? cacheGet('online:' + ws) : null;
+  if (cached && Array.isArray(cached)) {
+    onlineLessons = cached;
+    renderOnlineLessons();
+  }
   const isAdmin = state.profile.role === 'admin';
   let q = db.from('lessons')
     .select('*, teacher:profiles!teacher_id(short_name, color, full_name), lesson_students(student_id, student:students(first_name, last_name, subject, is_individual, is_online, price_type))')
     .eq('week_start', ws).eq('room', 0).eq('status', 'active');
   if (!isAdmin) q = q.eq('teacher_id', state.user.id);
   const { data, error } = await q;
-  if (error) console.error('Online load error:', error);
+  if (error) { console.error('Online load error:', error); return; }
   onlineLessons = (data || []).filter(l => l.lesson_students?.length > 0);
   renderOnlineLessons();
+  if (typeof cacheSet === 'function') cacheSet('online:' + ws, onlineLessons);
 }
 
 function renderOnlineLessons() {

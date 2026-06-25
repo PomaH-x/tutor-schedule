@@ -17,28 +17,42 @@ async function loadActiveSubscriptionForStudent(studentId, force) {
   if (!force && activeSubscriptionsCache[studentId] !== undefined) {
     return activeSubscriptionsCache[studentId];
   }
-  // Try active first
-  const { data: active } = await db.from('subscriptions')
-    .select('*, pricing:pricing_id(duration_minutes, is_individual, is_online, format, student_price, teacher_profit, commission)')
-    .eq('student_id', studentId)
-    .eq('status', 'active')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (active) {
-    activeSubscriptionsCache[studentId] = active;
-    return active;
+  try {
+    // Try active first
+    const { data: active, error: activeErr } = await db.from('subscriptions')
+      .select('*, pricing:pricing_id(duration_minutes, is_individual, is_online, format, student_price, teacher_profit, commission)')
+      .eq('student_id', studentId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!activeErr) {
+      if (active) {
+        activeSubscriptionsCache[studentId] = active;
+        // Persist for offline boot — keyed per student id
+        if (typeof cacheSet === 'function') cacheSet('sub:' + studentId, active);
+        return active;
+      }
+      // Fallback: most recent non-active (expired or refunded) — to show context in UI
+      const { data: other } = await db.from('subscriptions')
+        .select('*, pricing:pricing_id(duration_minutes, is_individual, is_online, format, student_price, teacher_profit, commission)')
+        .eq('student_id', studentId)
+        .in('status', ['expired', 'refunded'])
+        .order('end_date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      activeSubscriptionsCache[studentId] = other || null;
+      if (other && typeof cacheSet === 'function') cacheSet('sub:' + studentId, other);
+      return other || null;
+    }
+  } catch (_) { /* network down — try cache below */ }
+  // Network failed entirely: fall back to last-known snapshot from localStorage
+  const cached = (typeof cacheGet === 'function') ? cacheGet('sub:' + studentId) : null;
+  if (cached) {
+    activeSubscriptionsCache[studentId] = cached;
+    return cached;
   }
-  // Fallback: most recent non-active (expired or refunded) — to show context in UI
-  const { data: other } = await db.from('subscriptions')
-    .select('*, pricing:pricing_id(duration_minutes, is_individual, is_online, format, student_price, teacher_profit, commission)')
-    .eq('student_id', studentId)
-    .in('status', ['expired', 'refunded'])
-    .order('end_date', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  activeSubscriptionsCache[studentId] = other || null;
-  return other || null;
+  return null;
 }
 
 function invalidateSubscriptionCache(studentId) {

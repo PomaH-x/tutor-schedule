@@ -5,8 +5,15 @@ let currentPayrollOffset = 0;
 // ===== PRICING CRUD =====
 
 async function loadPricing() {
-  const { data } = await db.from('pricing').select('*').eq('active', true).order('is_individual').order('duration_minutes').order('price_type');
+  // Offline cache: hydrate before network so any code that uses findPricing()
+  // (lesson modal save, payroll recompute) has something usable immediately,
+  // even on a slow / disconnected connection.
+  const cached = (typeof cacheGet === 'function') ? cacheGet('pricing') : null;
+  if (cached && Array.isArray(cached)) pricingList = cached;
+  const { data, error } = await db.from('pricing').select('*').eq('active', true).order('is_individual').order('duration_minutes').order('price_type');
+  if (error) return; // keep cached pricingList
   pricingList = data || [];
+  if (typeof cacheSet === 'function') cacheSet('pricing', pricingList);
 }
 
 function formatTierLabel(duration, isIndividual) {
@@ -213,6 +220,18 @@ async function loadPayroll() {
   const weIso = we.toISOString();
   const isAdmin = state.profile.role === 'admin';
 
+  // Offline cache: hydrate from a snapshot of THIS week's payroll inputs. We
+  // cache all four query results + the computed subsById so the same
+  // renderPayroll() call can replay without any network.
+  const cached = (typeof cacheGet === 'function') ? cacheGet('payroll:' + ws) : null;
+  if (cached && cached.lessons) {
+    renderPayroll(
+      cached.lessons || [], cached.cancellations || [],
+      cached.soldSubs || [], cached.refundedSubs || [],
+      cached.subsById || {}, cached.isAdmin
+    );
+  }
+
   let q = db.from('lessons')
     .select('id, teacher_id, start_time, end_time, status, teacher:profiles!teacher_id(full_name, color, role), lesson_students(student_id, subscription_id, student:students(first_name, last_name, is_individual, is_online, price_type))')
     .eq('week_start', ws).in('status', ['active', 'cancelled']);
@@ -237,7 +256,14 @@ async function loadPayroll() {
     .gte('refunded_at', wsIso).lt('refunded_at', weIso);
   if (!isAdmin) qr = qr.eq('teacher_id', state.user.id);
 
-  const [{ data: lessons }, { data: cancellations }, { data: soldSubs }, { data: refundedSubs }] = await Promise.all([q, qc, qs, qr]);
+  let lessons, cancellations, soldSubs, refundedSubs;
+  try {
+    const res = await Promise.all([q, qc, qs, qr]);
+    lessons = res[0].data; cancellations = res[1].data;
+    soldSubs = res[2].data; refundedSubs = res[3].data;
+  } catch (_) {
+    return; // network failed; cached view (if any) stays on screen
+  }
 
   // Collect subscription IDs referenced by lesson_students, fetch them separately.
   // We don't use a nested join above because it can silently return null due to RLS or
@@ -255,6 +281,17 @@ async function loadPayroll() {
   }
 
   renderPayroll(lessons || [], cancellations || [], soldSubs || [], refundedSubs || [], subsById, isAdmin);
+  // Persist this week's full input set so we can replay renderPayroll offline
+  if (typeof cacheSet === 'function') {
+    cacheSet('payroll:' + ws, {
+      lessons: lessons || [],
+      cancellations: cancellations || [],
+      soldSubs: soldSubs || [],
+      refundedSubs: refundedSubs || [],
+      subsById,
+      isAdmin
+    });
+  }
 }
 
 let payrollTeacherData = {};

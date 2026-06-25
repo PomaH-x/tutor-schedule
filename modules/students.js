@@ -2,9 +2,17 @@ let editingStudentId = null;
 let subjectsList = [];
 
 async function loadSubjects() {
-  const { data } = await db.from('subjects').select('*').order('name');
+  // Offline cache: hydrate before network so dropdowns are populated instantly.
+  const cached = (typeof cacheGet === 'function') ? cacheGet('subjects') : null;
+  if (cached && Array.isArray(cached)) {
+    subjectsList = cached;
+    populateSubjectSelects();
+  }
+  const { data, error } = await db.from('subjects').select('*').order('name');
+  if (error) return; // keep cached subjectsList
   subjectsList = data || [];
   populateSubjectSelects();
+  if (typeof cacheSet === 'function') cacheSet('subjects', subjectsList);
 }
 
 function populateSubjectSelects() {
@@ -19,6 +27,15 @@ function populateSubjectSelects() {
 }
 
 async function loadStudents() {
+  // Offline cache: hydrate from the last known snapshot first so the list is
+  // populated instantly on a slow / failed network. The skeleton path below
+  // then becomes a no-op (list already has rendered rows).
+  const cached = (typeof cacheGet === 'function') ? cacheGet('students') : null;
+  if (cached && Array.isArray(cached)) {
+    state.students = cached;
+    renderStudents();
+  }
+
   // Show skeleton rows on first load (when list is empty); on refresh keep
   // existing rows visible to avoid flicker.
   const list = document.getElementById('students-list');
@@ -30,9 +47,15 @@ async function loadStudents() {
   if (!isAdmin) query = query.eq('teacher_id', state.user.id);
   query = query.order('first_name');
   const { data, error } = await query;
-  if (error) { showToast('Ошибка загрузки учеников', 'error'); return; }
+  if (error) {
+    // Don't shout about it if cached data is already on screen
+    if (!cached) showToast('Ошибка загрузки учеников', 'error');
+    return;
+  }
   state.students = data || [];
   renderStudents();
+  // Persist for next offline boot
+  if (typeof cacheSet === 'function') cacheSet('students', state.students);
 }
 
 function renderStudents(filter = '') {

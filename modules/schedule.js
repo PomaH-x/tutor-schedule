@@ -191,23 +191,27 @@ async function checkConflictServer(day, room, slotFrom, slotTo, excludeId, teach
   const st = new Date(date); st.setHours(START_HOUR + Math.floor(slotFrom * SLOT_MINUTES / 60), (slotFrom * SLOT_MINUTES) % 60, 0, 0);
   const et = new Date(date); et.setHours(START_HOUR + Math.floor(slotTo * SLOT_MINUTES / 60), (slotTo * SLOT_MINUTES) % 60, 0, 0);
 
-  const isAdmin = state.profile?.role === 'admin';
-
   // Ghost lessons (no students) sometimes linger in DB — they're hidden in the UI
   // (loadLessons filters them out) but the server still sees them. Always ignore them
   // so the conflict check matches what the user actually sees on the grid.
   const hasStudents = (l) => (l.lesson_students || []).length > 0;
 
-  // Check room conflict (different teacher same room) — admin can overlap anyone
-  if (!isAdmin) {
+  // Room conflict: a different teacher already occupies this room/time. Applies
+  // to admin too — the live preview already lights up red here (hasAnyConflict
+  // doesn't skip admin), and visual red MUST mean "blocked" or the user gets
+  // misled into thinking the drop succeeded normally.
+  {
     let q = db.from('lessons').select('id, teacher_id, lesson_students(student_id)').eq('week_start', ws).eq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
     if (excludeId) q = q.neq('id', excludeId);
     const { data: rd } = await q;
     if ((rd || []).some(l => l.teacher_id !== teacherId && hasStudents(l))) return 'room';
   }
 
-  // Check teacher in two rooms simultaneously — admin too is exempt (they set tid explicitly)
-  if (!isAdmin) {
+  // Teacher double-book conflict: same teacher already busy in a different room.
+  // Same reasoning — visual red must equal server block. (Even admins shouldn't
+  // double-book a specific teacher across rooms; the teacher physically can't be
+  // in two rooms at once.)
+  {
     let q2 = db.from('lessons').select('id, lesson_students(student_id)').eq('week_start', ws).eq('teacher_id', teacherId).neq('room', room).eq('status', 'active').lt('start_time', et.toISOString()).gt('end_time', st.toISOString());
     if (excludeId) q2 = q2.neq('id', excludeId);
     const { data: td } = await q2;
@@ -235,6 +239,43 @@ async function checkConflictServer(day, room, slotFrom, slotTo, excludeId, teach
     if ((movingHasIndividual && overlappingCount > 0) || (overlappingHasIndividual && movingCount > 0)) return 'individual';
   }
 
+  return null;
+}
+
+// Check if any of the given students is ALREADY booked in another active lesson
+// that overlaps the target time range. Used to prevent the "same student in two
+// places at once" class of conflicts when:
+//   - creating a new lesson with selected students,
+//   - dragging a student onto a cell (excludeLessonId = source lesson),
+//   - placing a transferred student / truant (excludeLessonId = null or source).
+//
+// Returns { studentId, name } of the FIRST conflicting student, or null if all
+// students are free at that slot. We return only the first hit because that's
+// enough to produce a meaningful toast — the user fixes one conflict at a time.
+async function findStudentDoubleBooking(studentIds, day, slotFrom, slotTo, excludeLessonId) {
+  if (!studentIds || studentIds.length === 0) return null;
+  const dates = getWeekDates(state.currentWeekStart);
+  const date = dates[day]; const ws = formatDate(state.currentWeekStart);
+  const st = new Date(date); st.setHours(START_HOUR + Math.floor(slotFrom * SLOT_MINUTES / 60), (slotFrom * SLOT_MINUTES) % 60, 0, 0);
+  const et = new Date(date); et.setHours(START_HOUR + Math.floor(slotTo * SLOT_MINUTES / 60), (slotTo * SLOT_MINUTES) % 60, 0, 0);
+  let q = db.from('lessons')
+    .select('id, lesson_students(student_id, student:students(first_name, last_name))')
+    .eq('week_start', ws)
+    .eq('status', 'active')
+    .lt('start_time', et.toISOString())
+    .gt('end_time', st.toISOString());
+  if (excludeLessonId) q = q.neq('id', excludeLessonId);
+  const { data } = await q;
+  if (!data) return null;
+  const idSet = new Set(studentIds);
+  for (const l of (data || [])) {
+    for (const ls of (l.lesson_students || [])) {
+      if (idSet.has(ls.student_id)) {
+        const n = ls.student;
+        return { studentId: ls.student_id, name: n ? `${n.first_name} ${n.last_name}` : 'Ученик' };
+      }
+    }
+  }
   return null;
 }
 
@@ -483,19 +524,20 @@ function onGridMouseDown(e) {
   // Student drag in progress — let document-level handlers do the placement, don't set pendingClick.
   if (studentDragState) return;
 
-  // Placing mode
+  // Placing mode (banner-driven student/truant/lesson placement). Per UX
+  // change: clicking a card no longer merges the student/truant into it —
+  // we always resolve the cell beneath the click and create a new lesson
+  // there. findCellAt() hides cards momentarily so elementFromPoint returns
+  // the underlying grid cell even when the click landed visually on a card.
   if (state.placingLesson || state.placingStudent || state.placingTruant) {
-    const cell = e.target.closest('.grid-cell');
-    const card = e.target.closest('.lesson-card');
-    if (card && (state.placingStudent || state.placingTruant)) {
+    const grid = document.getElementById('schedule-grid');
+    const cell = findCellAt(e.clientX, e.clientY, grid);
+    if (cell) {
       e.preventDefault();
-      if (state.placingStudent) placeTransferredStudentOnLesson(card.dataset.lessonId);
-      else placeTruantOnLesson(card.dataset.lessonId);
-    } else if (cell) {
-      e.preventDefault();
-      if (state.placingLesson) placeTransferredLesson(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-      else if (state.placingStudent) placeTransferredStudent(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
-      else placeTruantOnCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+      const d = +cell.dataset.day, r = +cell.dataset.room, s = +cell.dataset.slot;
+      if (state.placingLesson) placeTransferredLesson(d, r, s);
+      else if (state.placingStudent) placeTransferredStudent(d, r, s);
+      else placeTruantOnCell(d, r, s);
     }
     return;
   }
@@ -599,7 +641,14 @@ function onGridMouseMove(e) {
     const banner = document.getElementById('student-drag-banner');
     banner.style.left = `${e.clientX + 12}px`; banner.style.top = `${e.clientY - 12}px`;
     clearDragHighlight();
-    const cell = e.target.closest('.grid-cell');
+    // Use findCellAt: this temporarily disables pointer-events on all lesson
+    // cards so elementFromPoint returns the underlying grid cell, even when
+    // the cursor visually sits on top of a card. After the iteration-6 UX
+    // change (no auto-merge), we render the SAME silhouette preview whether
+    // the cursor is over a card or empty space — there's no longer a
+    // "drop onto card to merge" concept, so cards shouldn't get a special
+    // drop-target highlight anymore.
+    const cell = findCellAt(e.clientX, e.clientY, grid);
     if (cell) {
       const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
       const end = ts + studentDragState.slotLength;
@@ -612,22 +661,16 @@ function onGridMouseMove(e) {
         addTimeRangeHighlight(grid, ts, end);
       }
     }
-    // Also highlight if on a lesson card
-    const cardEl = e.target.closest('.lesson-card');
-    document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
-    if (cardEl) cardEl.classList.add('lesson-card-drop-target');
     return;
   }
 
-  // Placing mode (lesson or student)
+  // Placing mode (lesson or student / truant). Same iteration-6 rule: cursor
+  // over a card is functionally identical to cursor over an empty cell —
+  // findCellAt sees through cards to find the underlying grid cell so the
+  // user gets the same silhouette preview regardless.
   if (state.placingLesson || state.placingStudent || state.placingTruant) {
     clearDragHighlight();
-    document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
-    const cardEl = e.target.closest('.lesson-card');
-    if (cardEl && (state.placingStudent || state.placingTruant)) {
-      cardEl.classList.add('lesson-card-drop-target');
-    }
-    const cell = e.target.closest('.grid-cell');
+    const cell = findCellAt(e.clientX, e.clientY, grid);
     if (cell) {
       const p = state.placingLesson || state.placingStudent || state.placingTruant;
       const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
@@ -710,18 +753,19 @@ function onGridMouseUp(e) {
       selStart = null; selEnd = null;
       return;
     }
-    // Admin can place over anyone; teacher — only over their own
-    if (state.profile.role !== 'admin') {
-      if (hasLocalConflict(selStart.day, selStart.room, sf, st, null, state.user.id)) {
-        showToast('Кабинет уже занят в это время', 'error');
-        selStart = null; selEnd = null;
-        return;
-      }
-      if (hasTeacherDiffRoomConflict(selStart.day, selStart.room, sf, st, state.user.id, null)) {
-        showToast('У вас уже есть занятие в это время', 'error');
-        selStart = null; selEnd = null;
-        return;
-      }
+    // Conflict block (admin too — see same-reasoning comment in checkConflictServer).
+    // hasLocalConflict ignores own-teacher overlaps; admin gets the most generic
+    // form by passing their own user id, which simply prevents same-room overlap
+    // with anyone else. Visual red ↔ blocked.
+    if (hasLocalConflict(selStart.day, selStart.room, sf, st, null, state.user.id)) {
+      showToast('Кабинет уже занят в это время', 'error');
+      selStart = null; selEnd = null;
+      return;
+    }
+    if (hasTeacherDiffRoomConflict(selStart.day, selStart.room, sf, st, state.user.id, null)) {
+      showToast('У вас уже есть занятие в это время', 'error');
+      selStart = null; selEnd = null;
+      return;
     }
     openLessonModal({ day: selStart.day, room: selStart.room, slotFrom: sf, slotTo: st });
   }
@@ -1192,14 +1236,16 @@ function onGridPointerUp(e) {
       }
     }
 
+    // Per UX change: dropping a student / truant / transferred-student now
+    // ALWAYS creates a new lesson at the cell underneath the drop point — it
+    // never merges into the existing card. This means slot coords are the
+    // single source of truth here; the `card` variable is no longer consulted
+    // for student / truant placement.
     if (studentDragState) {
-      if (card) placeStudentOnLesson(card.dataset.lessonId);
-      else if (typeof slot === 'number') placeStudentOnCell(day, room, slot);
-      else cancelStudentDrag();  // released over nowhere → drop the gesture cleanly
+      if (typeof slot === 'number') placeStudentOnCell(day, room, slot);
+      else cancelStudentDrag();
       return;
     }
-    if (state.placingStudent && card) { placeTransferredStudentOnLesson(card.dataset.lessonId); return; }
-    if (state.placingTruant && card)  { placeTruantOnLesson(card.dataset.lessonId); return; }
     if (typeof slot === 'number') {
       if (state.placingLesson) placeTransferredLesson(day, room, slot);
       else if (state.placingStudent) placeTransferredStudent(day, room, slot);
@@ -1262,15 +1308,14 @@ function onGridPointerUp(e) {
       showToast(`Нет тарифов для ${durationMin} мин`, 'error');
       selStart = null; selEnd = null; touchGesture = null; return;
     }
-    if (state.profile.role !== 'admin') {
-      if (hasLocalConflict(selStart.day, selStart.room, sf, st, null, state.user.id)) {
-        showToast('Кабинет уже занят в это время', 'error');
-        selStart = null; selEnd = null; touchGesture = null; return;
-      }
-      if (hasTeacherDiffRoomConflict(selStart.day, selStart.room, sf, st, state.user.id, null)) {
-        showToast('У вас уже есть занятие в это время', 'error');
-        selStart = null; selEnd = null; touchGesture = null; return;
-      }
+    // Conflict block (admin too) — see mouse-up branch above for rationale
+    if (hasLocalConflict(selStart.day, selStart.room, sf, st, null, state.user.id)) {
+      showToast('Кабинет уже занят в это время', 'error');
+      selStart = null; selEnd = null; touchGesture = null; return;
+    }
+    if (hasTeacherDiffRoomConflict(selStart.day, selStart.room, sf, st, state.user.id, null)) {
+      showToast('У вас уже есть занятие в это время', 'error');
+      selStart = null; selEnd = null; touchGesture = null; return;
     }
     openLessonModal({ day: selStart.day, room: selStart.room, slotFrom: sf, slotTo: st });
     shieldFromGhostClick();
@@ -1667,6 +1712,16 @@ async function placeTransferredLesson(day, room, slot) {
     const ct = await checkConflictServer(day, room, slot, end, null, p.teacherId);
     if (ct) { conflictToast(ct); return; }
 
+    // No-double-booking: none of the lesson's students may already be in another
+    // active lesson overlapping the new slot. Exclude the original lesson —
+    // students are still linked to it until we flip its status to 'transferred'
+    // below, so without exclusion they'd flag against themselves.
+    const dup = await findStudentDoubleBooking(p.studentIds || [], day, slot, end, p.originalLessonId);
+    if (dup) {
+      showToast(`${dup.name} уже есть в другом занятии в это время`, 'error');
+      return;
+    }
+
     if (!(await checkTransferLimit(p.studentIds || []))) return;
 
   const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
@@ -1705,24 +1760,21 @@ async function placeTransferredStudent(day, room, slot) {
     const ct = await checkConflictServer(day, room, slot, end, null, p.teacherId);
     if (ct) { conflictToast(ct); return; }
 
+    // No-double-booking: a transferred student can't be placed where they
+    // already have another active lesson. We exclude p.lessonId — even though
+    // the cancellation flow usually means that lesson has been mutated, the
+    // student may still be linked to it briefly; explicit exclusion is safest.
+    const dup = await findStudentDoubleBooking([p.studentId], day, slot, end, p.lessonId);
+    if (dup) {
+      showToast(`${dup.name} уже есть в другом занятии в это время`, 'error');
+      return;
+    }
+
     if (!(await checkTransferLimit([p.studentId]))) return;
 
     const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
     const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
     const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
-
-    // Auto-merge: same teacher / same room / same start+end → join the existing group
-    const sMs = sTime.getTime(), eMs = eTime.getTime();
-    const twin = state.lessons.find(l =>
-      l.room === room && l.teacher_id === p.teacherId &&
-      new Date(l.start_time).getTime() === sMs &&
-      new Date(l.end_time).getTime() === eMs
-    );
-    if (twin) {
-      placementInFlight = false;
-      showToast('Объединено с существующим занятием', 'success');
-      return placeTransferredStudentOnLesson(twin.id);
-    }
 
     // Fast path: RPC handles INSERT lesson + move + cleanup + attach sub atomically
     const rpcRes = await rpcPlaceStudentOnNewLesson({
@@ -1834,24 +1886,36 @@ async function placeStudentOnCell(day, room, slot) {
     const ct = await checkConflictServer(day, room, slot, end, null, s.teacherId);
     if (ct) { conflictToast(ct, cancelStudentDrag); return; }
 
+    // No-double-booking: student must not already be in another active lesson
+    // overlapping target time. Source lesson is excluded — we're moving OUT of
+    // it, so it doesn't count as "elsewhere".
+    const dup = await findStudentDoubleBooking([s.studentId], day, slot, end, s.lessonId);
+    if (dup) {
+      showToast(`${dup.name} уже есть в другом занятии в это время`, 'error');
+      cancelStudentDrag(); return;
+    }
+
     if (!(await checkTransferLimit([s.studentId]))) { cancelStudentDrag(); return; }
 
     const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
     const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
     const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
 
-    // Auto-merge: a lesson already covering exactly this room+start+end with the same
-    // teacher = same group → add the student into it instead of stacking a duplicate.
+    // No-op: if the user dropped the student back onto the SAME slot of the
+    // source lesson (same teacher / room / start / end), there's nothing to
+    // change — just cancel the drag silently. Without this guard we'd create
+    // a new lesson identical to the source, move the student over, and delete
+    // the source, which is correct semantically but wasteful and produces a
+    // pointless «Ученик перенесён» toast.
     const sMs = sTime.getTime(), eMs = eTime.getTime();
-    const twin = state.lessons.find(l =>
-      l.room === room && l.teacher_id === s.teacherId &&
-      new Date(l.start_time).getTime() === sMs &&
-      new Date(l.end_time).getTime() === eMs
-    );
-    if (twin) {
-      placementInFlight = false;  // placeStudentOnLesson re-acquires the guard
-      showToast('Объединено с существующим занятием', 'success');
-      return placeStudentOnLesson(twin.id);
+    const sourceLesson = state.lessons.find(l => l.id === s.lessonId);
+    if (sourceLesson &&
+        sourceLesson.room === room &&
+        sourceLesson.teacher_id === s.teacherId &&
+        new Date(sourceLesson.start_time).getTime() === sMs &&
+        new Date(sourceLesson.end_time).getTime() === eMs) {
+      cancelStudentDrag();
+      return;
     }
 
     // Fast path: one RPC does INSERT lesson + move lesson_students + cleanup + attach sub
@@ -2020,6 +2084,11 @@ function cancelStudentDrag() {
   hidePlacingBanner();
   document.body.style.cursor = '';
   clearDragHighlight();
+  // The student-drag UX is shared between the current schedule and the recurring
+  // schedule — if the drag was happening on the recurring grid, the cell
+  // highlight classes there must be wiped too. Without this the red/green
+  // silhouette lingers on recurring after the placement DB op completes.
+  if (typeof clearRecDragHighlight === 'function') clearRecDragHighlight();
   document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
 }
 
@@ -2175,9 +2244,17 @@ function updateSelectionHighlight() {
   const grid = document.getElementById('schedule-grid');
   const sf = Math.min(selStart.slot, selEnd.slot); const st = Math.max(selStart.slot, selEnd.slot);
   const count = st - sf + 1;
+  // Conflict-aware visual: red the moment the range overlaps an existing
+  // lesson the user can't co-locate with. Applies to admin too — visual red
+  // ↔ release will be rejected (the release-time checks no longer skip admin).
+  let conflict = false;
+  if (state.user) {
+    conflict = hasLocalConflict(selStart.day, selStart.room, sf, st + 1, null, state.user.id)
+            || hasTeacherDiffRoomConflict(selStart.day, selStart.room, sf, st + 1, state.user.id, null);
+  }
   for (let s = sf; s <= st; s++) {
     const c = grid.querySelector(`.grid-cell[data-day="${selStart.day}"][data-room="${selStart.room}"][data-slot="${s}"]`);
-    if (c) c.classList.add('grid-cell-selected');
+    if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-selected');
   }
   // Highlight time labels: from start slot to end-time slot (st+1) inclusive
   addTimeRangeHighlight(grid, sf, st + 1);
@@ -2210,8 +2287,10 @@ function updateSelectionHighlight() {
 function clearSelectionHighlight() {
   const grid = document.getElementById('schedule-grid');
   if (!grid) return;
-  grid.querySelectorAll('.grid-cell-selected, .grid-time-active')
-    .forEach(c => c.classList.remove('grid-cell-selected', 'grid-time-active'));
+  // Also wipe grid-cell-conflict here so the red cells from a conflicted
+  // selection don't linger after the user releases or restarts the drag.
+  grid.querySelectorAll('.grid-cell-selected, .grid-cell-conflict, .grid-time-active')
+    .forEach(c => c.classList.remove('grid-cell-selected', 'grid-cell-conflict', 'grid-time-active'));
 }
 function removeDurationLabel() { if (durationLabel) { durationLabel.remove(); durationLabel = null; } }
 
@@ -2300,12 +2379,29 @@ function showScheduleSkeleton() {
 }
 
 async function loadLessons() {
-  showScheduleSkeleton(); // shimmer placeholder while we fetch
   const ws = formatDate(state.currentWeekStart);
+
+  // Offline cache: render the last known snapshot for this week INSTANTLY so
+  // the user sees their data even on a flaky / disconnected connection. If
+  // the network call below succeeds, this gets replaced with fresh data; if
+  // it fails, the cached view stays visible. The skeleton then becomes a
+  // no-op (showScheduleSkeleton skips when real cards are present).
+  const cached = (typeof cacheGet === 'function') ? cacheGet('lessons:' + ws) : null;
+  if (cached && Array.isArray(cached)) {
+    state.lessons = cached;
+    renderLessons();
+  }
+
+  showScheduleSkeleton(); // shimmer placeholder if we have nothing to show
   const { data, error } = await db.from('lessons')
     .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), lesson_students(student_id, student:students(first_name, last_name, subject, is_individual, is_online, price_type)), original_start_time, original_end_time, transferred_from_id')
     .eq('week_start', ws).eq('status', 'active');
-  if (error) { showToast('Ошибка загрузки', 'error'); return; }
+  if (error) {
+    // Only surface the toast if we don't already have cached data on screen.
+    // Otherwise the user thinks something's broken; the cached view is fine.
+    if (!cached) showToast('Ошибка загрузки', 'error');
+    return;
+  }
   // Deduplicate lesson_students by student_id — same student can't be in the same lesson
   // twice (physically impossible). Any duplicates that slipped past historical inserts are
   // collapsed here so counts, max-group checks, and rendering all see a clean set.
@@ -2325,6 +2421,10 @@ async function loadLessons() {
   if (emptyIds.length > 0) db.from('lessons').delete().in('id', emptyIds);
   if (!recurringByStudent) await loadRecurringByStudent();
   renderLessons();
+
+  // Persist this week's snapshot for offline boot. Keyed by week_start so
+  // switching weeks doesn't clobber each other's cache.
+  if (typeof cacheSet === 'function') cacheSet('lessons:' + ws, state.lessons);
 
   // Run side-effects in parallel, do not block the caller (e.g. cancellation flow)
   const currentMonday = getMonday(new Date());
@@ -2741,6 +2841,21 @@ async function saveLesson() {
   const ct = await checkConflictServer(m.day, m.room, m.slotFrom, m.slotTo, m.mode === 'edit' || m.mode === 'rec-edit' ? m.lessonId : null, tid);
   if (ct) { conflictToast(ct); btn.disabled = false; return; }
 
+  // No-double-booking rule: no selected student may already be in ANOTHER active
+  // lesson that overlaps this time slot. For edits we exclude THIS lesson so an
+  // existing student of the lesson isn't flagged against itself.
+  if (m.mode === 'create' || m.mode === 'edit') {
+    const sidsForCheck = Array.from(m.selectedIds);
+    const dup = await findStudentDoubleBooking(
+      sidsForCheck, m.day, m.slotFrom, m.slotTo,
+      m.mode === 'edit' ? m.lessonId : null
+    );
+    if (dup) {
+      showToast(`${dup.name} уже есть в другом занятии в это время`, 'error');
+      btn.disabled = false; return;
+    }
+  }
+
   const dates = getWeekDates(state.currentWeekStart); const date = dates[m.day]; const ws = formatDate(state.currentWeekStart);
   const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(m.slotFrom * SLOT_MINUTES / 60), (m.slotFrom * SLOT_MINUTES) % 60, 0, 0);
   const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(m.slotTo * SLOT_MINUTES / 60), (m.slotTo * SLOT_MINUTES) % 60, 0, 0);
@@ -2966,16 +3081,15 @@ function initSchedule() {
         }
       }
       clearDragHighlight();
-      document.querySelectorAll('.lesson-card-drop-target').forEach(c => c.classList.remove('lesson-card-drop-target'));
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      const cardEl = el?.closest?.('.lesson-card');
-      const cell = el?.closest?.('.grid-cell');
-      if (cardEl) cardEl.classList.add('lesson-card-drop-target');
-      else if (cell) {
+      // findCellAt resolves the cell under cards too. Iteration-6: cards
+      // never receive a special "drop target" highlight any more — same
+      // silhouette preview everywhere.
+      const grid = document.getElementById('schedule-grid');
+      const cell = findCellAt(e.clientX, e.clientY, grid);
+      if (cell) {
         const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
         const end = ts + studentDragState.slotLength;
         if (end <= TOTAL_SLOTS) {
-          const grid = document.getElementById('schedule-grid');
           const conflict = hasAnyConflict(td, tr, ts, end, null, studentDragState.teacherId);
           for (let s = ts; s < end; s++) {
             const c = grid.querySelector(`.grid-cell[data-day="${td}"][data-room="${tr}"][data-slot="${s}"]`);
@@ -3019,11 +3133,14 @@ function initSchedule() {
           startStudentNextWeekTransfer(); return;
         }
       }
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      const cardEl = el?.closest?.('.lesson-card');
-      const cell = el?.closest?.('.grid-cell');
-      if (cardEl) placeStudentOnLesson(cardEl.dataset.lessonId);
-      else if (cell) placeStudentOnCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
+      const grid = document.getElementById('schedule-grid');
+      // Drop a student onto a cell — even if the user released over a lesson
+      // card. findCellAt temporarily disables card pointer-events so
+      // elementFromPoint sees the cell beneath. We never call
+      // placeStudentOnLesson here any more (no auto-merge): a drop creates a
+      // new lesson at exactly the cell, with the student's slot length.
+      const cell = findCellAt(e.clientX, e.clientY, grid);
+      if (cell) placeStudentOnCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
       else cancelStudentDrag();
     }
   });

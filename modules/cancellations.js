@@ -125,6 +125,10 @@ async function computeAndSyncCancellations() {
 
 async function loadTruants() {
   if (!state.profile || state.profile.role === 'student') return;
+  // Offline cache: hydrate before network so the truants list renders instantly.
+  const cached = (typeof cacheGet === 'function') ? cacheGet('truants') : null;
+  if (cached && Array.isArray(cached)) renderTruants(cached);
+
   const isAdmin = state.profile.role === 'admin';
   const threeWeeksAgo = new Date(getMonday(new Date()));
   threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 14);
@@ -134,8 +138,10 @@ async function loadTruants() {
     .gte('week_start', formatDate(threeWeeksAgo));
   if (!isAdmin) q = q.eq('teacher_id', state.user.id);
   q = q.order('week_start', { ascending: false });
-  const { data } = await q;
+  const { data, error } = await q;
+  if (error) return; // keep cached view
   renderTruants(data || []);
+  if (typeof cacheSet === 'function') cacheSet('truants', data || []);
 }
 
 function getCancelLabel(c) {
@@ -331,23 +337,16 @@ async function placeTruantOnCell(day, room, slot) {
     if (ct === 'room') { showToast('Кабинет занят', 'error'); return; }
     if (ct === 'teacher') { showToast('Преподаватель занят', 'error'); return; }
 
+    // No-double-booking: a truant being placed must not already be in another
+    // active lesson at the target time (e.g. they were re-scheduled into a
+    // different group meanwhile). No source lesson to exclude — truants come
+    // from cancelled lessons that no longer link to the student.
+    var dup = await findStudentDoubleBooking([t.studentId], day, slot, end, null);
+    if (dup) { showToast(dup.name + ' уже есть в другом занятии в это время', 'error'); return; }
+
     var dates = getWeekDates(state.currentWeekStart); var date = dates[day];
     var sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
     var eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
-
-    // Auto-merge: if a lesson with the exact same room/start/end already exists for this
-    // teacher, the user wants to JOIN that group, not stack a duplicate on top of it.
-    var sMs = sTime.getTime(), eMs = eTime.getTime();
-    var twin = state.lessons.find(function (l) {
-      return l.room === room && l.teacher_id === t.teacherId &&
-        new Date(l.start_time).getTime() === sMs &&
-        new Date(l.end_time).getTime() === eMs;
-    });
-    if (twin) {
-      placementInFlight = false;
-      showToast('Объединено с существующим занятием', 'success');
-      return placeTruantOnLesson(twin.id);
-    }
 
     // Fast path: RPC handles INSERT lesson + add student + attach sub atomically.
     // The cancellation row delete is independent and runs in parallel.

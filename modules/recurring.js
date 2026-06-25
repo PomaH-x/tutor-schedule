@@ -47,6 +47,19 @@ function onRecPlaceLongPress() {
 }
 
 async function loadRecurringLessons() {
+  // Offline cache: hydrate before network. recurringLessons feeds the grid,
+  // recurringBookings feeds the booking blocks. Both are cached separately so
+  // a partial read (only one cached) still works.
+  const cachedLessons = (typeof cacheGet === 'function') ? cacheGet('recurringLessons') : null;
+  const cachedBookings = (typeof cacheGet === 'function') ? cacheGet('recurringBookings') : null;
+  let hydrated = false;
+  if (cachedLessons && Array.isArray(cachedLessons)) {
+    recurringLessons = cachedLessons;
+    recurringBookings = (cachedBookings && Array.isArray(cachedBookings)) ? cachedBookings : [];
+    hydrated = true;
+    renderRecurringLessons();
+  }
+
   // Everyone (admin + teacher) sees ALL recurring lessons — needed for conflict prevention
   const [lessonsRes, bookingsRes] = await Promise.all([
     db.from('recurring_lessons')
@@ -56,7 +69,8 @@ async function loadRecurringLessons() {
   ]);
   if (lessonsRes.error) {
     console.error('loadRecurringLessons error:', lessonsRes.error);
-    showToast('Ошибка загрузки', 'error');
+    // Don't shout if the cached view is already on screen
+    if (!hydrated) showToast('Ошибка загрузки', 'error');
     return;
   }
   recurringLessons = lessonsRes.data || [];
@@ -124,6 +138,13 @@ async function loadRecurringLessons() {
   // If `time_bookings` table doesn't exist yet (migration not applied), just silently skip.
   recurringBookings = bookingsRes.error ? [] : (bookingsRes.data || []);
   renderRecurringLessons();
+  // Persist the collapsed snapshot for offline boot. We cache the POST-collapse
+  // arrays — they're what the renderer expects on next hydrate, so we don't
+  // have to re-run dedup/collapse from a stale snapshot.
+  if (typeof cacheSet === 'function') {
+    cacheSet('recurringLessons', recurringLessons);
+    cacheSet('recurringBookings', recurringBookings);
+  }
   setTimeout(() => {
     if (recurringLessons.length === 0) return;
     const visible = document.querySelectorAll('#recurring-grid .lesson-card').length;
@@ -405,10 +426,13 @@ function onRecGridMouseMove(e) {
   if (recIsShortlyAfterTouch()) return;
   const grid = document.getElementById('recurring-grid');
 
-  // Student drag — highlight target cells with conflict awareness
+  // Student drag — highlight target cells with conflict awareness.
+  // Use findRecCellAt (not e.target) so the silhouette stays visible even
+  // when the cursor visually sits on top of a lesson card. Without this the
+  // highlight blinks off the moment the user crosses any existing lesson.
   if (studentDragState) {
     clearRecDragHighlight();
-    const cell = e.target.closest('.grid-cell');
+    const cell = findRecCellAt(e.clientX, e.clientY);
     if (cell) {
       const td = +cell.dataset.day; const tr = +cell.dataset.room; const ts = +cell.dataset.slot;
       const end = ts + studentDragState.slotLength;
@@ -479,12 +503,11 @@ async function onRecGridMouseUp(e) {
   // Student drag (started from a lesson modal, modal was closed, banner shown)
   if (studentDragState) {
     recPendingClick = null;
-    const card = e.target.closest('.lesson-card');
-    if (card) {
-      placeStudentOnRecurringLesson(card.dataset.lessonId);
-      return;
-    }
-    const cell = e.target.closest('.grid-cell');
+    // Mirror schedule's drop behaviour: a drop ALWAYS creates a new recurring
+    // lesson at the cell underneath the release point, never merges into an
+    // existing card. findRecCellAt hides cards momentarily so the underlying
+    // grid cell is what elementFromPoint returns.
+    const cell = findRecCellAt(e.clientX, e.clientY);
     if (cell) {
       placeStudentOnRecurringCell(+cell.dataset.day, +cell.dataset.room, +cell.dataset.slot);
       return;
@@ -731,8 +754,6 @@ async function onRecGridPointerUp(e) {
       const stackCell = stack.find(el => el.classList && el.classList.contains('grid-cell'));
       if (stackCell) { day = +stackCell.dataset.day; room = +stackCell.dataset.room; slot = +stackCell.dataset.slot; }
     }
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    const card = el?.closest?.('.lesson-card');
 
     // Client-side conflict check — match the red preview regardless of any card on top
     if (typeof slot === 'number' && studentDragState && typeof getRecDragConflictType === 'function') {
@@ -743,7 +764,10 @@ async function onRecGridPointerUp(e) {
       if (ct) { showToast('Конфликт — это место занято', 'error'); return; }  // banner stays
     }
 
-    if (card) { placeStudentOnRecurringLesson(card.dataset.lessonId); return; }
+    // Mirror schedule: a drop ALWAYS goes through the cell-version. No more
+    // card→merge branch. If the user released over a card, the slot resolved
+    // above (via pointermove targets or elementsFromPoint scan) points to the
+    // cell beneath the card.
     if (typeof slot === 'number') { placeStudentOnRecurringCell(day, room, slot); return; }
     // Released over nowhere → drop the gesture
     if (studentDragState) cancelStudentDrag();
@@ -948,9 +972,19 @@ function updateRecSelection() {
   const sf = Math.min(recSelStart.slot, recSelEnd.slot);
   const st = Math.max(recSelStart.slot, recSelEnd.slot);
   const count = st - sf + 1;
+  // Conflict-aware visual — mirrors the release-time rule. Applies to admin
+  // too: in recurring, admin passes excludeTeacherId=null at release-time which
+  // makes hasRecRoomConflict flag ANY room overlap. Match that here so visual
+  // red ↔ release blocked.
+  let conflict = false;
+  if (state.user) {
+    const ownTid = state.profile && state.profile.role === 'admin' ? null : state.user.id;
+    conflict = hasRecRoomConflict(recSelStart.day, recSelStart.room, sf, st + 1, null, ownTid)
+            || (ownTid && hasRecTeacherDiffRoomConflict(recSelStart.day, recSelStart.room, sf, st + 1, ownTid, null));
+  }
   for (let s = sf; s <= st; s++) {
     const c = grid.querySelector(`.grid-cell[data-day="${recSelStart.day}"][data-room="${recSelStart.room}"][data-slot="${s}"]`);
-    if (c) c.classList.add('grid-cell-selected');
+    if (c) c.classList.add(conflict ? 'grid-cell-conflict' : 'grid-cell-selected');
   }
   // Time labels: same exclusive-end convention as schedule.js (off-by-one fix)
   if (typeof addTimeRangeHighlight === 'function') addTimeRangeHighlight(grid, sf, st + 1);
@@ -978,8 +1012,8 @@ function updateRecSelection() {
 
 function clearRecSelection() {
   const grid = document.getElementById('recurring-grid');
-  if (grid) grid.querySelectorAll('.grid-cell-selected, .grid-time-active')
-    .forEach(c => c.classList.remove('grid-cell-selected', 'grid-time-active'));
+  if (grid) grid.querySelectorAll('.grid-cell-selected, .grid-cell-conflict, .grid-time-active')
+    .forEach(c => c.classList.remove('grid-cell-selected', 'grid-cell-conflict', 'grid-time-active'));
   if (recDurationLabel) { recDurationLabel.remove(); recDurationLabel = null; }
 }
 function clearRecDragHighlight() {
@@ -1070,6 +1104,37 @@ function hasRecConflict(day, room, slotFrom, slotTo, excludeId, teacherId) {
   return false;
 }
 
+// Mirror of schedule.findStudentDoubleBooking, adapted to the recurring schema.
+// In recurring, lessons are templates (day_of_week + start_time/end_time strings
+// "HH:MM:SS"), so we compare time strings directly. Room is irrelevant — a
+// student can't be in two places on the same weekday and time even across rooms.
+//
+// Returns { studentId, name } of the FIRST student found in another recurring
+// lesson that overlaps the target slot, or null if all are free.
+async function findRecStudentDoubleBooking(studentIds, day, slotFrom, slotTo, excludeLessonId) {
+  if (!studentIds || studentIds.length === 0) return null;
+  const startStr = recSlotToTimeStr(slotFrom);  // "HH:MM:SS"
+  const endStr = recSlotToTimeStr(slotTo);
+  let q = db.from('recurring_lessons')
+    .select('id, recurring_lesson_students(student_id, student:students(first_name, last_name))')
+    .eq('day_of_week', day)
+    .lt('start_time', endStr)
+    .gt('end_time', startStr);
+  if (excludeLessonId) q = q.neq('id', excludeLessonId);
+  const { data } = await q;
+  if (!data) return null;
+  const idSet = new Set(studentIds);
+  for (const l of data) {
+    for (const rs of (l.recurring_lesson_students || [])) {
+      if (idSet.has(rs.student_id)) {
+        const n = rs.student;
+        return { studentId: rs.student_id, name: n ? `${n.first_name} ${n.last_name}` : 'Ученик' };
+      }
+    }
+  }
+  return null;
+}
+
 // ===== STUDENT DRAG-AND-DROP IN RECURRING =====
 
 // Find recurring lesson by source: where the dragged student currently lives in recurring template
@@ -1087,28 +1152,45 @@ async function placeStudentOnRecurringCell(day, room, slot) {
   const end = slot + s.slotLength;
   if (end > TOTAL_SLOTS) { showToast('Не помещается', 'error'); cancelStudentDrag(); return; }
 
-  const conflict = hasRecConflict(day, room, slot, end, null, s.teacherId);
-  if (conflict === 'room') { showToast('Кабинет уже занят в это время', 'error'); cancelStudentDrag(); return; }
-  if (conflict === 'teacher') { showToast('У вас уже есть занятие в это время', 'error'); cancelStudentDrag(); return; }
+  // No-op: dropping on the source's own slot (same room/teacher/start/end) is a
+  // no-change. Resolve the source lesson FIRST so we can both detect the no-op
+  // AND pass it as the exclude id to subsequent conflict checks.
+  const sourceRecId = await findSourceRecurringLessonId(s.studentId, s.teacherId);
+  const startStr = recSlotToTimeStr(slot), endStr = recSlotToTimeStr(end);
+  if (sourceRecId) {
+    const src = recurringLessons.find(rl => rl.id === sourceRecId);
+    if (src && src.day_of_week === day && src.room === room &&
+        src.start_time && src.start_time.slice(0, 5) === startStr.slice(0, 5) &&
+        src.end_time   && src.end_time.slice(0, 5)   === endStr.slice(0, 5)) {
+      cancelStudentDrag();
+      return;
+    }
+  }
+
+  // Full conflict-type check (room / teacher / capacity / individual mixing) —
+  // matches schedule's checkConflictServer coverage. We exclude the source so
+  // it doesn't flag against itself.
+  const conflict = getRecDragConflictType(day, room, slot, end, sourceRecId, s.teacherId);
+  if (conflict === 'room')       { showToast('Кабинет уже занят в это время', 'error'); cancelStudentDrag(); return; }
+  if (conflict === 'teacher')    { showToast('У вас уже есть занятие в это время', 'error'); cancelStudentDrag(); return; }
+  if (conflict === 'students')   { showToast('Превышен размер группы', 'error'); cancelStudentDrag(); return; }
+  if (conflict === 'individual') { showToast('Индивидуальное нельзя смешивать с группой', 'error'); cancelStudentDrag(); return; }
+
+  // No-double-booking: the student must not already be in another recurring
+  // lesson at the same day/time. Source excluded — we move OUT of it.
+  const dup = await findRecStudentDoubleBooking([s.studentId], day, slot, end, sourceRecId);
+  if (dup) {
+    showToast(`${dup.name} уже есть в другом занятии в это время`, 'error');
+    cancelStudentDrag();
+    return;
+  }
 
   placementInFlight = true;
   try {
-    // Auto-merge: existing recurring lesson with same day/room/teacher/start/end → join it
-    const startStr = recSlotToTimeStr(slot), endStr = recSlotToTimeStr(end);
-    const twin = recurringLessons.find(rl =>
-      rl.teacher_id === s.teacherId && rl.day_of_week === day && rl.room === room &&
-      rl.start_time && rl.end_time &&
-      rl.start_time.slice(0, 5) === startStr.slice(0, 5) &&
-      rl.end_time.slice(0, 5) === endStr.slice(0, 5)
-    );
-    if (twin) {
-      placementInFlight = false;
-      showToast('Объединено с существующим занятием', 'success');
-      return placeStudentOnRecurringLesson(twin.id);
-    }
-
-    const sourceRecId = await findSourceRecurringLessonId(s.studentId, s.teacherId);
-
+    // No more auto-merge: even when an identical recurring slot exists with
+    // the same teacher/room/start/end, we create a NEW lesson row. The
+    // collapseOverlappingLessons logic in loadRecurringLessons deduplicates
+    // visually if needed. Matches schedule's iter-6 UX.
     const { data: newRec, error } = await db.from('recurring_lessons').insert({
       teacher_id: s.teacherId, room, day_of_week: day,
       start_time: startStr, end_time: endStr
@@ -1346,6 +1428,32 @@ async function saveRecurringLesson() {
   const startTimeStr = recSlotToTimeStr(m.slotFrom);
   const endTimeStr = recSlotToTimeStr(m.slotTo);
 
+  // Tariff validation — mirrors schedule's saveLesson. Without this, a user
+  // could create a recurring lesson of 1h or 2h30m even when there's no tariff
+  // matching that duration / format / individual flag — the lesson would then
+  // become impossible to bill correctly when it gets materialised into a real
+  // weekly lesson.
+  const durationMin = (m.slotTo - m.slotFrom) * SLOT_MINUTES;
+  const selectedStudents = allTeacherStudents.filter(s => m.selectedIds.has(s.id));
+  for (const s of selectedStudents) {
+    if (!findPricing(durationMin, s.is_individual || false, s.price_type || 'new', s.is_online || false)) {
+      showToast(`Нет тарифа для ${s.first_name} ${s.last_name} (${durationMin} мин, ${s.is_individual ? 'инд.' : 'груп.'}, ${s.price_type === 'old' ? 'стар.' : 'нов.'})`, 'error');
+      return;
+    }
+  }
+
+  // No-double-booking: no selected student may already be in ANOTHER recurring
+  // lesson that overlaps this day/time. For edits, exclude this lesson so its
+  // own students aren't flagged against itself. Mirrors schedule's saveLesson.
+  const dup = await findRecStudentDoubleBooking(
+    sids, m.day, m.slotFrom, m.slotTo,
+    m.mode === 'rec-edit' ? m.lessonId : null
+  );
+  if (dup) {
+    showToast(`${dup.name} уже есть в другом занятии в это время`, 'error');
+    return;
+  }
+
   if (m.mode === 'rec-create') {
     const { data, error } = await db.from('recurring_lessons').insert({
       teacher_id: state.user.id, room: m.room, day_of_week: m.day,
@@ -1391,6 +1499,16 @@ async function finishRecDrag(targetDay, targetRoom, targetSlot) {
   if (conflictType === 'teacher')    { showToast('У вас уже есть занятие в это время', 'error');    clearRecDragState(); recDragStarted = false; return; }
   if (conflictType === 'students')   { showToast('Превышен лимит учеников в группе', 'error');      clearRecDragState(); recDragStarted = false; return; }
   if (conflictType === 'individual') { showToast('Нельзя смешивать индивидуальные и групповые', 'error'); clearRecDragState(); recDragStarted = false; return; }
+
+  // No-double-booking: every student of the moved lesson must be free at the
+  // new day/time. Exclude THIS lesson (its own students are obviously linked
+  // to it). Mirrors schedule's placeTransferredLesson behaviour.
+  const lessonStudentIds = (lesson.recurring_lesson_students || []).map(rs => rs.student_id);
+  const dup = await findRecStudentDoubleBooking(lessonStudentIds, targetDay, targetSlot, end, lesson.id);
+  if (dup) {
+    showToast(`${dup.name} уже есть в другом занятии в это время`, 'error');
+    clearRecDragState(); recDragStarted = false; return;
+  }
 
   // Optimistic local update
   const newStart = recSlotToTimeStr(targetSlot);

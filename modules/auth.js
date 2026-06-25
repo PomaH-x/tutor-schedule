@@ -202,7 +202,17 @@ async function loadProfile(userId) {
     .select('*')
     .eq('id', userId)
     .single();
-  if (error) return null;
+  if (error || !data) {
+    // Network or RLS failure — fall back to the cached profile IF it belongs to
+    // this user. Without the id check we could leak a previous user's profile.
+    const cached = cacheGet('profile');
+    if (cached && cached.id === userId) return cached;
+    return null;
+  }
+  // Persist for offline boot. Other cache writes (lessons, students) are gated
+  // by cacheEnsureUser(); we write profile BEFORE the user-marker check
+  // because the marker uses the id we're about to confirm.
+  cacheSet('profile', data);
   return data;
 }
 
@@ -458,6 +468,12 @@ async function onAuthSuccess(user) {
     return;
   }
 
+  // Now that we've confirmed the current user's identity (either via network
+  // or via cached profile that matches user.id), tell the cache layer to wipe
+  // anything belonging to a previous user. Subsequent loadLessons/loadStudents
+  // calls will populate the cache fresh under this user.
+  cacheEnsureUser(user.id);
+
   if (profile.status === 'pending') {
     showAuthStep('auth-step-pending');
     return;
@@ -501,6 +517,9 @@ async function handleLogout() {
   // Forget the persisted screen so the next user (or the same user re-logging
   // in) doesn't get restored to the previous session's view.
   try { localStorage.removeItem('lastScreen'); } catch (_) {}
+  // Wipe the offline cache too — no profile / lessons / students should
+  // survive a logout. cacheEnsureUser on next login will be a clean slate.
+  cacheClearAll();
   showScreen('screen-auth');
   showAuthStep('auth-step-role');
 }
