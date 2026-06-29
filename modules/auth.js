@@ -491,6 +491,9 @@ async function onAuthSuccess(user) {
 
   if (profile.role === 'student') {
     await showStudentScreen();
+    // Students receive 2 of the 3 push scenarios (subscription ending, new
+    // subscription enrolled), so they need a subscription too.
+    if (typeof setupPushSubscription === 'function') setupPushSubscription();
     restoreLastScreen();
     return;
   }
@@ -502,7 +505,19 @@ async function onAuthSuccess(user) {
   loadPricing();
   computeAndSyncCancellations();
   syncRecurringToWeeks();
+  // Load the user's online-lesson pin list, then propagate them to +2 weeks
+  // ahead. Same hook as syncRecurringToWeeks — boot-time auto-fill.
+  if (typeof loadOnlinePinned === 'function') {
+    loadOnlinePinned().then(() => {
+      if (typeof syncOnlinePinnedToWeeks === 'function') syncOnlinePinnedToWeeks();
+    });
+  }
   if (typeof initRealtime === 'function') initRealtime();
+  // Register / refresh the Web Push subscription so the Edge Function can
+  // target this user. Best-effort: silently no-ops if the browser doesn't
+  // support push, if the user denies permission, or if iOS Safari is not in
+  // installed-PWA mode. Behaviour is documented in modules/push.js.
+  if (typeof setupPushSubscription === 'function') setupPushSubscription();
   // After the default screen + inits are running, restore the user's last
   // navigated screen if one was persisted (UI-state persistence — survives
   // page reloads). No-op if nothing was saved or the saved screen isn't
@@ -511,6 +526,13 @@ async function onAuthSuccess(user) {
 }
 
 async function handleLogout() {
+  // Tear down push BEFORE auth.signOut() — once the session is gone, RLS will
+  // reject the DELETE on push_subscriptions. We unsubscribe the PushManager
+  // first (so the browser drops the endpoint), then DELETE our row so the
+  // Edge Function doesn't keep trying to push to a stale endpoint.
+  if (typeof teardownPushSubscription === 'function') {
+    try { await teardownPushSubscription(); } catch (_) { /* best-effort */ }
+  }
   await db.auth.signOut();
   state.user = null;
   state.profile = null;

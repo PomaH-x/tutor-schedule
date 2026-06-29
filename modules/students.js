@@ -1,18 +1,23 @@
 let editingStudentId = null;
 let subjectsList = [];
 
+let subjectsFreshlyLoaded = false;
+
 async function loadSubjects() {
-  // Offline cache: hydrate before network so dropdowns are populated instantly.
-  const cached = (typeof cacheGet === 'function') ? cacheGet('subjects') : null;
-  if (cached && Array.isArray(cached)) {
-    subjectsList = cached;
-    populateSubjectSelects();
+  const isFreshLoad = !subjectsFreshlyLoaded;
+  if (isFreshLoad && !navigator.onLine) {
+    const cached = (typeof cacheGet === 'function') ? cacheGet('subjects') : null;
+    if (cached && Array.isArray(cached)) {
+      subjectsList = cached;
+      populateSubjectSelects();
+    }
   }
   const { data, error } = await db.from('subjects').select('*').order('name');
-  if (error) return; // keep cached subjectsList
+  if (error) return;
   subjectsList = data || [];
   populateSubjectSelects();
   if (typeof cacheSet === 'function') cacheSet('subjects', subjectsList);
+  subjectsFreshlyLoaded = true;
 }
 
 function populateSubjectSelects() {
@@ -26,14 +31,18 @@ function populateSubjectSelects() {
   }
 }
 
+// Same "freshly loaded" guard as loadLessons — prevents the cache from
+// flicker-overwriting fresh state on subsequent refresh calls.
+let studentsFreshlyLoaded = false;
+
 async function loadStudents() {
-  // Offline cache: hydrate from the last known snapshot first so the list is
-  // populated instantly on a slow / failed network. The skeleton path below
-  // then becomes a no-op (list already has rendered rows).
-  const cached = (typeof cacheGet === 'function') ? cacheGet('students') : null;
-  if (cached && Array.isArray(cached)) {
-    state.students = cached;
-    renderStudents();
+  const isFreshLoad = !studentsFreshlyLoaded;
+  if (isFreshLoad && !navigator.onLine) {
+    const cached = (typeof cacheGet === 'function') ? cacheGet('students') : null;
+    if (cached && Array.isArray(cached)) {
+      state.students = cached;
+      renderStudents();
+    }
   }
 
   // Show skeleton rows on first load (when list is empty); on refresh keep
@@ -48,14 +57,15 @@ async function loadStudents() {
   query = query.order('first_name');
   const { data, error } = await query;
   if (error) {
-    // Don't shout about it if cached data is already on screen
-    if (!cached) showToast('Ошибка загрузки учеников', 'error');
+    if (isFreshLoad && (!state.students || state.students.length === 0)) {
+      showToast('Ошибка загрузки учеников', 'error');
+    }
     return;
   }
   state.students = data || [];
   renderStudents();
-  // Persist for next offline boot
   if (typeof cacheSet === 'function') cacheSet('students', state.students);
+  studentsFreshlyLoaded = true;
 }
 
 function renderStudents(filter = '') {

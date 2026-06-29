@@ -46,18 +46,19 @@ function onRecPlaceLongPress() {
   }
 }
 
+let recurringFreshlyLoaded = false;
+
 async function loadRecurringLessons() {
-  // Offline cache: hydrate before network. recurringLessons feeds the grid,
-  // recurringBookings feeds the booking blocks. Both are cached separately so
-  // a partial read (only one cached) still works.
-  const cachedLessons = (typeof cacheGet === 'function') ? cacheGet('recurringLessons') : null;
-  const cachedBookings = (typeof cacheGet === 'function') ? cacheGet('recurringBookings') : null;
-  let hydrated = false;
-  if (cachedLessons && Array.isArray(cachedLessons)) {
-    recurringLessons = cachedLessons;
-    recurringBookings = (cachedBookings && Array.isArray(cachedBookings)) ? cachedBookings : [];
-    hydrated = true;
-    renderRecurringLessons();
+  // Hydrate from cache only when offline. Online — always fresh.
+  const isFreshLoad = !recurringFreshlyLoaded;
+  if (isFreshLoad && !navigator.onLine) {
+    const cachedLessons = (typeof cacheGet === 'function') ? cacheGet('recurringLessons') : null;
+    const cachedBookings = (typeof cacheGet === 'function') ? cacheGet('recurringBookings') : null;
+    if (cachedLessons && Array.isArray(cachedLessons)) {
+      recurringLessons = cachedLessons;
+      recurringBookings = (cachedBookings && Array.isArray(cachedBookings)) ? cachedBookings : [];
+      renderRecurringLessons();
+    }
   }
 
   // Everyone (admin + teacher) sees ALL recurring lessons — needed for conflict prevention
@@ -69,8 +70,9 @@ async function loadRecurringLessons() {
   ]);
   if (lessonsRes.error) {
     console.error('loadRecurringLessons error:', lessonsRes.error);
-    // Don't shout if the cached view is already on screen
-    if (!hydrated) showToast('Ошибка загрузки', 'error');
+    if (isFreshLoad && (!recurringLessons || recurringLessons.length === 0)) {
+      showToast('Ошибка загрузки', 'error');
+    }
     return;
   }
   recurringLessons = lessonsRes.data || [];
@@ -145,6 +147,7 @@ async function loadRecurringLessons() {
     cacheSet('recurringLessons', recurringLessons);
     cacheSet('recurringBookings', recurringBookings);
   }
+  recurringFreshlyLoaded = true;
   setTimeout(() => {
     if (recurringLessons.length === 0) return;
     const visible = document.querySelectorAll('#recurring-grid .lesson-card').length;
@@ -1541,6 +1544,9 @@ function initRecurring() {
   });
   document.getElementById('btn-to-current').addEventListener('click', () => {
     showScreen('screen-schedule');
+    // Re-fetch lessons so user always sees latest state when coming back
+    // (someone else may have changed the schedule meanwhile).
+    if (typeof loadLessons === 'function') loadLessons();
   });
   document.getElementById('btn-profile-2').addEventListener('click', () => {
     openProfileScreen();

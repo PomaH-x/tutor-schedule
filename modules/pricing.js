@@ -4,16 +4,19 @@ let currentPayrollOffset = 0;
 
 // ===== PRICING CRUD =====
 
+let pricingFreshlyLoaded = false;
+
 async function loadPricing() {
-  // Offline cache: hydrate before network so any code that uses findPricing()
-  // (lesson modal save, payroll recompute) has something usable immediately,
-  // even on a slow / disconnected connection.
-  const cached = (typeof cacheGet === 'function') ? cacheGet('pricing') : null;
-  if (cached && Array.isArray(cached)) pricingList = cached;
+  const isFreshLoad = !pricingFreshlyLoaded;
+  if (isFreshLoad && !navigator.onLine) {
+    const cached = (typeof cacheGet === 'function') ? cacheGet('pricing') : null;
+    if (cached && Array.isArray(cached)) pricingList = cached;
+  }
   const { data, error } = await db.from('pricing').select('*').eq('active', true).order('is_individual').order('duration_minutes').order('price_type');
-  if (error) return; // keep cached pricingList
+  if (error) return;
   pricingList = data || [];
   if (typeof cacheSet === 'function') cacheSet('pricing', pricingList);
+  pricingFreshlyLoaded = true;
 }
 
 function formatTierLabel(duration, isIndividual) {
@@ -210,6 +213,8 @@ async function deletePricingEntry() {
 
 // ===== PAYROLL CALCULATION =====
 
+const payrollFreshlyLoadedWeeks = new Set();
+
 async function loadPayroll() {
   const now = getMonday(new Date());
   const target = new Date(now);
@@ -220,16 +225,18 @@ async function loadPayroll() {
   const weIso = we.toISOString();
   const isAdmin = state.profile.role === 'admin';
 
-  // Offline cache: hydrate from a snapshot of THIS week's payroll inputs. We
-  // cache all four query results + the computed subsById so the same
-  // renderPayroll() call can replay without any network.
-  const cached = (typeof cacheGet === 'function') ? cacheGet('payroll:' + ws) : null;
-  if (cached && cached.lessons) {
-    renderPayroll(
-      cached.lessons || [], cached.cancellations || [],
-      cached.soldSubs || [], cached.refundedSubs || [],
-      cached.subsById || {}, cached.isAdmin
-    );
+  // Hydrate from cache ONLY when offline. Online users get fresh data on
+  // every navigation to this tab.
+  const isFreshLoad = !payrollFreshlyLoadedWeeks.has(ws);
+  if (isFreshLoad && !navigator.onLine) {
+    const cached = (typeof cacheGet === 'function') ? cacheGet('payroll:' + ws) : null;
+    if (cached && cached.lessons) {
+      renderPayroll(
+        cached.lessons || [], cached.cancellations || [],
+        cached.soldSubs || [], cached.refundedSubs || [],
+        cached.subsById || {}, cached.isAdmin
+      );
+    }
   }
 
   let q = db.from('lessons')
@@ -292,6 +299,7 @@ async function loadPayroll() {
       isAdmin
     });
   }
+  payrollFreshlyLoadedWeeks.add(ws);
 }
 
 let payrollTeacherData = {};

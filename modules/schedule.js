@@ -2378,18 +2378,26 @@ function showScheduleSkeleton() {
   });
 }
 
+// Tracks which weeks have been successfully loaded from the network during
+// this session. If a week is already in here, subsequent loadLessons() calls
+// for that week (from realtime refresh, after a drag, after a placement)
+// SKIP the cache-hydrate step — the in-memory state is canonical, and
+// re-rendering from possibly-older cache would flicker stale data on top.
+const lessonsFreshlyLoadedWeeks = new Set();
+
 async function loadLessons() {
   const ws = formatDate(state.currentWeekStart);
 
-  // Offline cache: render the last known snapshot for this week INSTANTLY so
-  // the user sees their data even on a flaky / disconnected connection. If
-  // the network call below succeeds, this gets replaced with fresh data; if
-  // it fails, the cached view stays visible. The skeleton then becomes a
-  // no-op (showScheduleSkeleton skips when real cards are present).
-  const cached = (typeof cacheGet === 'function') ? cacheGet('lessons:' + ws) : null;
-  if (cached && Array.isArray(cached)) {
-    state.lessons = cached;
-    renderLessons();
+  // Hydrate from cache ONLY when offline. Online users always go straight to
+  // the network — cache flash on tab navigation would be a UX regression.
+  // (Offline boot still benefits from cache to show last-known data.)
+  const isFreshLoad = !lessonsFreshlyLoadedWeeks.has(ws);
+  if (isFreshLoad && !navigator.onLine) {
+    const cached = (typeof cacheGet === 'function') ? cacheGet('lessons:' + ws) : null;
+    if (cached && Array.isArray(cached)) {
+      state.lessons = cached;
+      renderLessons();
+    }
   }
 
   showScheduleSkeleton(); // shimmer placeholder if we have nothing to show
@@ -2397,9 +2405,10 @@ async function loadLessons() {
     .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), lesson_students(student_id, student:students(first_name, last_name, subject, is_individual, is_online, price_type)), original_start_time, original_end_time, transferred_from_id')
     .eq('week_start', ws).eq('status', 'active');
   if (error) {
-    // Only surface the toast if we don't already have cached data on screen.
-    // Otherwise the user thinks something's broken; the cached view is fine.
-    if (!cached) showToast('Ошибка загрузки', 'error');
+    // Toast only if we have NOTHING on screen for this week
+    if (isFreshLoad && (!state.lessons || state.lessons.length === 0)) {
+      showToast('Ошибка загрузки', 'error');
+    }
     return;
   }
   // Deduplicate lesson_students by student_id — same student can't be in the same lesson
@@ -2425,6 +2434,7 @@ async function loadLessons() {
   // Persist this week's snapshot for offline boot. Keyed by week_start so
   // switching weeks doesn't clobber each other's cache.
   if (typeof cacheSet === 'function') cacheSet('lessons:' + ws, state.lessons);
+  lessonsFreshlyLoadedWeeks.add(ws);
 
   // Run side-effects in parallel, do not block the caller (e.g. cancellation flow)
   const currentMonday = getMonday(new Date());

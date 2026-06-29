@@ -1,5 +1,5 @@
 // Bump CACHE_NAME on every deploy so clients refetch assets.
-const CACHE_NAME = 'tutor-schedule-v81';
+const CACHE_NAME = 'tutor-schedule-v84';
 
 // Compute base path dynamically so the SW works under any URL,
 // including GitHub Pages subpaths like /tutor-schedule/tutor-schedule/.
@@ -27,6 +27,7 @@ const ASSETS = [
   'modules/pricing.js',
   'modules/subscriptions.js',
   'modules/admin.js',
+  'modules/push.js',
   'assets/icon.svg',
   'assets/icon-192.png',
   'assets/icon-512.png',
@@ -82,5 +83,56 @@ self.addEventListener('fetch', (event) => {
   // Cache-first for static assets / modules.
   event.respondWith(
     caches.match(event.request).then(cached => cached || fetch(event.request))
+  );
+});
+
+// =============================================================================
+// Web Push handler
+// =============================================================================
+// Fires when the push service delivers a notification payload (sent from the
+// `send-push` Edge Function). We display a system notification and store the
+// `url` so notificationclick can deep-link the user to the relevant screen.
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch (_) {
+    // Non-JSON payload (or empty) — show a generic notification rather than
+    // dropping the event entirely.
+    data = { title: 'УМпульс', body: event.data ? event.data.text() : '' };
+  }
+
+  const title = data.title || 'УМпульс';
+  const options = {
+    body: data.body || '',
+    icon: BASE + 'assets/icon-192.png',
+    badge: BASE + 'assets/icon-192.png',
+    tag: data.tag,                   // collapses duplicate notifications
+    data: { url: data.url || BASE }, // accessed in notificationclick below
+    requireInteraction: false,
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Clicking the notification — focus an existing app window if open, otherwise
+// open a new one. Honors the `url` from the push payload for deep-linking
+// (e.g. straight to the admin panel for a new-registration push).
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) || BASE;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+      for (const c of clients) {
+        // If an app tab is already open in this origin, just focus it and
+        // post the url so the SPA can navigate inside without a hard reload.
+        if (c.url.startsWith(self.registration.scope.replace(/\/$/, ''))) {
+          c.focus();
+          try { c.postMessage({ type: 'push-navigate', url: targetUrl }); } catch (_) {}
+          return;
+        }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+    })
   );
 });

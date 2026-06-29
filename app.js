@@ -53,8 +53,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.getElementById('btn-back-to-schedule').addEventListener('click', () => {
-    if (state.profile?.role === 'student') showScreen('screen-student');
-    else showScreen('screen-schedule');
+    if (state.profile?.role === 'student') {
+      showScreen('screen-student');
+      // Re-fetch the student's data on return so the cabinet view is fresh.
+      if (typeof loadStudentRecords === 'function') loadStudentRecords();
+    } else {
+      showScreen('screen-schedule');
+      // Re-fetch lessons + pending count on return so the schedule reflects
+      // any changes that happened while the user was in profile (e.g. another
+      // teacher added a lesson).
+      if (typeof loadLessons === 'function') loadLessons();
+      if (typeof loadPendingCount === 'function') loadPendingCount();
+    }
   });
 
   document.getElementById('btn-logout').addEventListener('click', handleLogout);

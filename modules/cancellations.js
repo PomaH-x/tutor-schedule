@@ -123,11 +123,21 @@ async function computeAndSyncCancellations() {
 }
 
 
+// Tracks whether truants have been loaded from network this session. Refresh
+// calls (realtime fires from cancellations table, computeAndSyncCancellations
+// finishing) MUST NOT re-hydrate from cache — that's the root cause of the
+// "truants appear, then disappear" flicker users were seeing: the network
+// returns the actual truant list, then a cache hydrate flashes the older
+// snapshot back on screen for a frame.
+let truantsFreshlyLoaded = false;
+
 async function loadTruants() {
   if (!state.profile || state.profile.role === 'student') return;
-  // Offline cache: hydrate before network so the truants list renders instantly.
-  const cached = (typeof cacheGet === 'function') ? cacheGet('truants') : null;
-  if (cached && Array.isArray(cached)) renderTruants(cached);
+  const isFreshLoad = !truantsFreshlyLoaded;
+  if (isFreshLoad && !navigator.onLine) {
+    const cached = (typeof cacheGet === 'function') ? cacheGet('truants') : null;
+    if (cached && Array.isArray(cached)) renderTruants(cached);
+  }
 
   const isAdmin = state.profile.role === 'admin';
   const threeWeeksAgo = new Date(getMonday(new Date()));
@@ -139,9 +149,10 @@ async function loadTruants() {
   if (!isAdmin) q = q.eq('teacher_id', state.user.id);
   q = q.order('week_start', { ascending: false });
   const { data, error } = await q;
-  if (error) return; // keep cached view
+  if (error) return; // keep what's on screen
   renderTruants(data || []);
   if (typeof cacheSet === 'function') cacheSet('truants', data || []);
+  truantsFreshlyLoaded = true;
 }
 
 function getCancelLabel(c) {
