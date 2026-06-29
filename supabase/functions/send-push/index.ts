@@ -108,16 +108,18 @@ serve(async (req) => {
   // policies might forbid SELECTing those profile rows).
   const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-  // Resolve final target user_id set: direct ids + (if requested) all active
+  // Resolve final target user_id set: direct ids + (if requested) all approved
   // users with the broadcast role. De-duped via Set so a user that appears
-  // in both lists doesn't get the notification twice.
+  // in both lists doesn't get the notification twice. Note: profile.status
+  // for an onboarded user is "approved" (not "active") — "active" is the
+  // lessons/subscriptions table state, NOT the profile lifecycle.
   const targetSet = new Set<string>(directIds);
   if (broadcastRole) {
     const { data: roleTargets, error: roleErr } = await admin
       .from("profiles")
       .select("id")
       .eq("role", broadcastRole)
-      .eq("status", "active");
+      .eq("status", "approved");
     if (roleErr) {
       console.warn("[send-push] broadcast role resolve failed:", roleErr);
     } else {
