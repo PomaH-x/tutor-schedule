@@ -454,6 +454,18 @@ async function handleRegister() {
     }
   }
 
+  // Fire push to all admins about the new pending registration. Fan-out is
+  // resolved server-side via broadcast_role so RLS on profiles doesn't have
+  // to permit a pending user to SELECT admin rows. Best-effort.
+  if (typeof sendPushToRole === 'function') {
+    const roleLabel = role === 'student' ? 'ученик' : role === 'teacher' ? 'преподаватель' : 'администратор';
+    sendPushToRole('admin', {
+      title: 'Новая заявка',
+      body: `${fullName} (${roleLabel}) хочет зарегистрироваться`,
+      tag: `reg-${data.user.id}`,
+    });
+  }
+
   btn.disabled = false;
   await onAuthSuccess(data.user);
 }

@@ -195,6 +195,25 @@ async function confirmSubscriptionActivation() {
     await attachLessonsToSubscription(created.id, activationCtx.studentId, startDate);
     await recomputeSubscriptionUsage(created.id);
 
+    // Push the student about their new subscription. Per AM: only the student
+    // is notified — the teacher just created it themselves and obviously knows.
+    // We look up students.profile_id; if it's null (e.g. minor without their
+    // own account), there's no user to push to and we silently skip.
+    try {
+      const { data: studentRec } = await db.from('students')
+        .select('profile_id, first_name, last_name')
+        .eq('id', activationCtx.studentId).maybeSingle();
+      if (studentRec && studentRec.profile_id && typeof sendPush === 'function') {
+        sendPush([studentRec.profile_id], {
+          title: 'Новый абонемент',
+          body: `${totalLessons} уроков — до ${formatDate(endDate)}`,
+          tag: `sub-new-${created.id}`,
+        });
+      }
+    } catch (e) {
+      console.warn('[push] new-sub notify failed:', e && e.message);
+    }
+
     invalidateSubscriptionCache(activationCtx.studentId);
     const sid = activationCtx.studentId; // snapshot before close clears the context
     closeSubscriptionActivation();
@@ -369,9 +388,16 @@ async function attachLessonsToSubscription(subscriptionId, studentId, startDateO
 async function recomputeSubscriptionUsage(subscriptionId) {
   try {
     const { data: sub } = await db.from('subscriptions')
-      .select('id, student_id, teacher_id, start_date, end_date, status, total_lessons')
+      .select('id, student_id, teacher_id, start_date, end_date, status, total_lessons, used_lessons, transfers_used')
       .eq('id', subscriptionId).single();
     if (!sub) return;
+
+    // Snapshot the OLD "remaining" before recompute, so we can detect a
+    // transition into the 1-left state and fire push exactly once. If the
+    // function runs again with no change to used/transfers, oldRemaining and
+    // newRemaining will both be 1, and the transition guard ("old > 1")
+    // prevents duplicate sends.
+    const oldRemaining = sub.total_lessons - (sub.used_lessons || 0) - (sub.transfers_used || 0);
 
     // Lazy expiry: if active but past end_date — mark as expired.
     const todayStr = formatDate(new Date());
@@ -437,6 +463,30 @@ async function recomputeSubscriptionUsage(subscriptionId) {
       used_lessons: used,
       transfers_used: transfers
     }).eq('id', subscriptionId);
+
+    // Push when the subscription transitions to exactly 1 lesson left.
+    // Mirror the AM rule: notify BOTH the student and the teacher. Skip if
+    // status isn't 'active' (expired/refunded subs shouldn't ping) and skip
+    // if oldRemaining was already <=1 (avoids re-pinging on idempotent
+    // recomputes that don't actually move the count).
+    const newRemaining = sub.total_lessons - used - transfers;
+    if (sub.status === 'active' && newRemaining === 1 && oldRemaining > 1) {
+      const { data: studentRec } = await db.from('students')
+        .select('profile_id, first_name, last_name')
+        .eq('id', sub.student_id).maybeSingle();
+      const userIds = [sub.teacher_id];
+      // students.profile_id is null for kids without their own account — only
+      // push to the student if they have a linked profile (= a user account).
+      if (studentRec && studentRec.profile_id) userIds.push(studentRec.profile_id);
+      const studName = studentRec ? `${studentRec.first_name} ${studentRec.last_name}`.trim() : 'Ученик';
+      if (typeof sendPush === 'function') {
+        sendPush(userIds, {
+          title: 'Абонемент скоро закончится',
+          body: `${studName} — остался 1 урок`,
+          tag: `sub-low-${sub.id}`,
+        });
+      }
+    }
 
     invalidateSubscriptionCache(sub.student_id);
   } catch (e) {

@@ -135,3 +135,19 @@ async function sendPush(userIds, payload) {
     console.warn('[push] invoke threw:', e && e.message);
   }
 }
+
+// Broadcast a Web Push notification to ALL active users with the given role.
+// Resolution happens server-side in the Edge Function via service_role, so
+// this works even when the caller has restrictive RLS on profiles (e.g. a
+// newly-registered pending user notifying admins about their own request).
+async function sendPushToRole(role, payload) {
+  if (!role || !payload || !payload.title) return;
+  try {
+    const { error } = await db.functions.invoke('send-push', {
+      body: { broadcast_role: role, payload },
+    });
+    if (error) console.warn('[push] invoke send-push role:', error.message || error);
+  } catch (e) {
+    console.warn('[push] invoke threw:', e && e.message);
+  }
+}

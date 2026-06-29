@@ -83,22 +83,51 @@ serve(async (req) => {
   const { data: { user }, error: authErr } = await userClient.auth.getUser();
   if (authErr || !user) return json(401, { error: "invalid auth" });
 
-  let body: { user_ids?: string[]; payload?: Record<string, unknown> };
+  let body: {
+    user_ids?: string[];
+    broadcast_role?: string;
+    payload?: Record<string, unknown>;
+  };
   try {
     body = await req.json();
   } catch {
     return json(400, { error: "invalid json" });
   }
 
-  const userIds = Array.isArray(body.user_ids) ? body.user_ids : [];
+  const directIds = Array.isArray(body.user_ids) ? body.user_ids : [];
+  const broadcastRole = body.broadcast_role;
   const payload = body.payload;
-  if (userIds.length === 0 || !payload || typeof payload !== "object") {
-    return json(400, { error: "user_ids[] and payload required" });
+  if ((directIds.length === 0 && !broadcastRole) || !payload || typeof payload !== "object") {
+    return json(400, { error: "user_ids[] or broadcast_role + payload required" });
   }
 
   // Service-role client to bypass RLS — we need to read subscription rows
-  // that belong to OTHER users (e.g. a teacher pinging students).
+  // that belong to OTHER users (e.g. a teacher pinging students), and resolve
+  // broadcast_role targets without depending on the caller's privileges (a
+  // pending user must be able to fan out to admins even though their own RLS
+  // policies might forbid SELECTing those profile rows).
   const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+  // Resolve final target user_id set: direct ids + (if requested) all active
+  // users with the broadcast role. De-duped via Set so a user that appears
+  // in both lists doesn't get the notification twice.
+  const targetSet = new Set<string>(directIds);
+  if (broadcastRole) {
+    const { data: roleTargets, error: roleErr } = await admin
+      .from("profiles")
+      .select("id")
+      .eq("role", broadcastRole)
+      .eq("status", "active");
+    if (roleErr) {
+      console.warn("[send-push] broadcast role resolve failed:", roleErr);
+    } else {
+      for (const t of (roleTargets || [])) targetSet.add(t.id);
+    }
+  }
+  const userIds = Array.from(targetSet);
+  if (userIds.length === 0) {
+    return json(200, { sent: 0, failed: 0, deleted: 0 });
+  }
 
   const { data: subs, error: subsErr } = await admin
     .from("push_subscriptions")
