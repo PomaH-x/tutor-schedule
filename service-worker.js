@@ -1,5 +1,5 @@
 // Bump CACHE_NAME on every deploy so clients refetch assets.
-const CACHE_NAME = 'tutor-schedule-v84';
+const CACHE_NAME = 'tutor-schedule-v85';
 
 // Compute base path dynamically so the SW works under any URL,
 // including GitHub Pages subpaths like /tutor-schedule/tutor-schedule/.

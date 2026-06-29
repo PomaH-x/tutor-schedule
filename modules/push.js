@@ -109,3 +109,29 @@ async function teardownPushSubscription() {
     console.warn('[push] teardown failed:', e && e.message);
   }
 }
+
+// Fire a Web Push notification to one or more users by invoking the
+// `send-push` Edge Function. Used by the three AM-approved trigger scenarios:
+//   - new registration → admins
+//   - subscription has 1 lesson left → student + teacher
+//   - new subscription enrolled → student
+//
+// Best-effort: silently warns on failure. Pushes are NOT critical to app
+// function — if the Edge Function is down or the user has no subscriptions,
+// the app keeps working, the user just doesn't see a notification.
+//
+// payload shape: { title, body, url?, tag? }
+//   - tag is optional; if set, the browser collapses notifications with the
+//     same tag (e.g. multiple "abonement ending" pings should show as one).
+async function sendPush(userIds, payload) {
+  if (!Array.isArray(userIds) || userIds.length === 0) return;
+  if (!payload || !payload.title) return;
+  try {
+    const { error } = await db.functions.invoke('send-push', {
+      body: { user_ids: userIds, payload },
+    });
+    if (error) console.warn('[push] invoke send-push:', error.message || error);
+  } catch (e) {
+    console.warn('[push] invoke threw:', e && e.message);
+  }
+}
