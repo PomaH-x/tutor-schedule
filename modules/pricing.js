@@ -228,6 +228,7 @@ async function loadPayroll() {
   // Hydrate from cache ONLY when offline. Online users get fresh data on
   // every navigation to this tab.
   const isFreshLoad = !payrollFreshlyLoadedWeeks.has(ws);
+  let didHydrateFromCache = false;
   if (isFreshLoad && !navigator.onLine) {
     const cached = (typeof cacheGet === 'function') ? cacheGet('payroll:' + ws) : null;
     if (cached && cached.lessons) {
@@ -236,6 +237,7 @@ async function loadPayroll() {
         cached.soldSubs || [], cached.refundedSubs || [],
         cached.subsById || {}, cached.isAdmin
       );
+      didHydrateFromCache = true;
     }
   }
 
@@ -269,7 +271,13 @@ async function loadPayroll() {
     lessons = res[0].data; cancellations = res[1].data;
     soldSubs = res[2].data; refundedSubs = res[3].data;
   } catch (_) {
-    return; // network failed; cached view (if any) stays on screen
+    // Network failed. If we already painted a cached view, leave it on
+    // screen (better than wiping). Otherwise render an empty pass so the
+    // panel doesn't stay forever in the "loading" / blank state — same
+    // behaviour as pre-cache. The signature guard in renderPayroll makes
+    // this a no-op if the panel is already empty.
+    if (!didHydrateFromCache) renderPayroll([], [], [], [], {}, isAdmin);
+    return;
   }
 
   // Collect subscription IDs referenced by lesson_students, fetch them separately.
@@ -330,9 +338,30 @@ function ensureTeacherBucket(tId, lesson, cancellation, sub, soldList) {
   return payrollTeacherData[tId];
 }
 
+// Same anti-flicker fingerprint as renderTruants — skip the (expensive)
+// re-render when the same payroll inputs arrive twice. Multiple loadPayroll
+// calls within ~500ms are normal (realtime event → loadLessons → triggers
+// loadPayroll while profile is visible), and re-painting the whole panel
+// caused visible flashing of the numbers.
+let lastPayrollSignature = null;
+
 function renderPayroll(lessons, cancellations, soldSubs, refundedSubs, subsById, isAdmin) {
   const container = document.getElementById('payroll-content');
   if (!container) return;
+
+  // Build a compact fingerprint covering everything that influences the
+  // rendered numbers: lesson ids+statuses+student-counts, cancellation
+  // ids+is_paid, subscription ids, plus the role flag (admin/teacher view
+  // differ in layout).
+  const sig = [
+    (lessons || []).map(l => l.id + ':' + l.status + ':' + ((l.lesson_students || []).length)).join(','),
+    (cancellations || []).map(c => c.id + ':' + (c.is_paid ? '1' : '0')).join(','),
+    (soldSubs || []).map(s => s.id).join(','),
+    (refundedSubs || []).map(s => s.id).join(','),
+    isAdmin ? 'a' : 't',
+  ].join('|');
+  if (sig === lastPayrollSignature) return;
+  lastPayrollSignature = sig;
 
   payrollTeacherData = {};
 

@@ -2443,16 +2443,24 @@ async function loadLessons() {
 
   // Fire-and-forget: heavy recurring↔actual sync runs in background.
   // It won't delay the UI; once it finishes it will resync via realtime / next loadLessons call.
+  // We re-fetch truants AFTER compute completes — but ONLY if the user is
+  // currently looking at the profile screen. Otherwise the call is wasted
+  // bandwidth, and worse, an out-of-sequence render later (when the user
+  // does open the profile) would briefly flash one state then update —
+  // exactly the "blinking" the user reported.
   if (isCurrentWeek && typeof computeAndSyncCancellations === 'function') {
     computeAndSyncCancellations().then(() => {
-      // After recompute, refresh truants only (payroll already loaded below)
-      if (typeof loadTruants === 'function') loadTruants();
+      const stillVisible = document.getElementById('screen-profile')?.classList.contains('active');
+      if (stillVisible && typeof loadTruants === 'function') loadTruants();
     });
   }
 
-  // Dependent views in parallel — no chaining, no awaits before render returns
+  // Dependent views in parallel — only triggered when the relevant section
+  // is actually visible. openProfileScreen fires its own fresh loaders, so
+  // when the user navigates IN they always get fresh data; we don't need
+  // to keep these warmed up while they're elsewhere.
   const refreshes = [];
-  if (typeof loadTruants === 'function') refreshes.push(loadTruants());
+  if (profileVisible && typeof loadTruants === 'function') refreshes.push(loadTruants());
   if (profileVisible && typeof loadPayroll === 'function') refreshes.push(loadPayroll());
   Promise.all(refreshes); // not awaited — UI does not wait for these
 }

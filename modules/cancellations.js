@@ -134,9 +134,15 @@ let truantsFreshlyLoaded = false;
 async function loadTruants() {
   if (!state.profile || state.profile.role === 'student') return;
   const isFreshLoad = !truantsFreshlyLoaded;
+  // Track whether we already painted cached content for this call — controls
+  // what happens on a subsequent network error (see below).
+  let didHydrateFromCache = false;
   if (isFreshLoad && !navigator.onLine) {
     const cached = (typeof cacheGet === 'function') ? cacheGet('truants') : null;
-    if (cached && Array.isArray(cached)) renderTruants(cached);
+    if (cached && Array.isArray(cached)) {
+      renderTruants(cached);
+      didHydrateFromCache = true;
+    }
   }
 
   const isAdmin = state.profile.role === 'admin';
@@ -149,7 +155,14 @@ async function loadTruants() {
   if (!isAdmin) q = q.eq('teacher_id', state.user.id);
   q = q.order('week_start', { ascending: false });
   const { data, error } = await q;
-  if (error) return; // keep what's on screen
+  if (error) {
+    // Online mode: don't leave a stale render on screen — match pre-cache
+    // behaviour where a failed fetch resulted in an empty/render-with-empty
+    // pass. Offline mode: keep the cached view that's already on screen
+    // (better than wiping it for a failure we expected).
+    if (!didHydrateFromCache) renderTruants([]);
+    return;
+  }
   renderTruants(data || []);
   if (typeof cacheSet === 'function') cacheSet('truants', data || []);
   truantsFreshlyLoaded = true;
@@ -188,10 +201,25 @@ function getCancelDuration(c) {
   return 90;
 }
 
+// Fingerprint of the last rendered truants payload. Prevents visible flicker
+// when the same data arrives twice in quick succession (typical sequence:
+// loadTruants from realtime → loadTruants again after computeAndSyncCancellations
+// resolves with no actual change). Re-rendering the same HTML caused the list
+// to "blink" visibly even though logically nothing differed.
+let lastTruantsSignature = null;
+
 function renderTruants(cancellations) {
   const statsEl = document.getElementById('truants-stats');
   const listEl = document.getElementById('truants-list');
   if (!statsEl || !listEl) return;
+
+  // Cheap fingerprint of "what would be rendered". If unchanged since the
+  // last paint, skip the DOM work entirely.
+  const sig = (cancellations || []).map(function(c) {
+    return c.id + ':' + (c.status || '') + ':' + (c.is_paid ? '1' : '0') + ':' + (c.valid_reason ? '1' : '0');
+  }).join('|');
+  if (sig === lastTruantsSignature) return;
+  lastTruantsSignature = sig;
 
   const thisWeek = formatDate(getMonday(new Date()));
   const thisWeekCount = cancellations.filter(c => c.week_start === thisWeek).length;
