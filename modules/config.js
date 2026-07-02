@@ -5,9 +5,9 @@
 // The app picks the fastest at startup (cached), re-measures in background on every load.
 const SB_ENDPOINTS = {
   proxy:  'https://195-19-20-134.nip.io',
-  direct: 'https://wvheehdxcrzgfkvokccm.supabase.co'
+  direct: 'https://saictoquscgabgoierqz.supabase.co'
 };
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind2aGVlaGR4Y3J6Z2Zrdm9rY2NtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU1Nzk2NTksImV4cCI6MjA5MTE1NTY1OX0.-m4Nb8gY_1EoKGzl_UM66UeB2F3vzn5dlC6IAFvNDrA';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNhaWN0b3F1c2NnYWJnb2llcnF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI5ODY3MzAsImV4cCI6MjA5ODU2MjczMH0.aMMV60j-2FTIwwJ3OKYVFDfMKExAQK4cIS81vPeTUDs';
 const VAPID_PUBLIC_KEY = 'BJtYsX_H4uqXQyf0cAYNJclYP1bRmYjkuu0XSfuEFJhumcJb56oRABWzmFjGj1uuMqcBO-PIJGYwkyGMoAROL1w';
 // Synchronous choice: cached winner from the previous load, default — RU proxy
 // (primary audience is in Russia without VPN).
