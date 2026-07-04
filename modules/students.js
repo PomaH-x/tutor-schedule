@@ -489,6 +489,10 @@ async function openStudentDetail(studentId) {
           <button class="btn-link-account" type="button">Привязать аккаунт</button>
         </div>` : ''}
         <div class="form-row">
+          <div class="form-group"><label>Имя</label><input type="text" id="sd-first-name" value="${escapeHtml(student.first_name || '')}" maxlength="30"></div>
+          <div class="form-group"><label>Фамилия</label><input type="text" id="sd-last-name" value="${escapeHtml(student.last_name || '')}" maxlength="30"></div>
+        </div>
+        <div class="form-row">
           <div class="form-group"><label>Предмет</label><select id="sd-subject">${subjectOptions}</select></div>
           <div class="form-group"><label>Класс</label><select id="sd-grade">${gradeOptions}</select></div>
         </div>
@@ -724,6 +728,8 @@ function closeStudentDetail() {
 
 async function saveStudentDetail() {
   if (!studentDetailId) return;
+  const firstName = document.getElementById('sd-first-name').value.trim();
+  const lastName = document.getElementById('sd-last-name').value.trim();
   const typeVal = document.getElementById('sd-type').value;
   const grade = parseInt(document.getElementById('sd-grade').value);
   const parentName = document.getElementById('sd-parent-name').value.trim();
@@ -731,6 +737,15 @@ async function saveStudentDetail() {
   const notes = document.getElementById('sd-note').value.trim();
 
   // ===== Validation =====
+  if (!firstName) { showToast('Введите имя', 'error'); return; }
+  if (!lastName)  { showToast('Введите фамилию', 'error'); return; }
+  if (firstName.length > 30 || lastName.length > 30) {
+    showToast('Имя/фамилия не длиннее 30 символов', 'error'); return;
+  }
+  // Same rule as saveStudent(): Cyrillic / Latin letters, spaces, hyphens, apostrophes
+  const nameRe = /^[A-Za-zА-Яа-яЁё\s\-']+$/;
+  if (!nameRe.test(firstName)) { showToast('Имя содержит недопустимые символы', 'error'); return; }
+  if (!nameRe.test(lastName))  { showToast('Фамилия содержит недопустимые символы', 'error'); return; }
   if (Number.isFinite(grade) && (grade < 1 || grade > 11)) {
     showToast('Класс должен быть от 1 до 11', 'error'); return;
   }
@@ -748,6 +763,8 @@ async function saveStudentDetail() {
   if (btn) btn.disabled = true;
   try {
     const update = {
+      first_name: firstName,
+      last_name: lastName,
       subject: document.getElementById('sd-subject').value,
       grade: Number.isFinite(grade) ? grade : null,
       is_individual: typeVal === 'true' || typeVal === 'online',
@@ -760,6 +777,10 @@ async function saveStudentDetail() {
     };
     const { error } = await db.from('students').update(update).eq('id', studentDetailId);
     if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
+    // Sync local state so renderStudents() picks up the change without a full reload.
+    const idx = state.students.findIndex(s => s.id === studentDetailId);
+    if (idx !== -1) state.students[idx] = { ...state.students[idx], ...update };
+    if (typeof cacheSet === 'function') cacheSet('students', state.students);
     showToast('Сохранено', 'success');
     closeStudentDetail();
     renderStudents(document.getElementById('student-search').value);

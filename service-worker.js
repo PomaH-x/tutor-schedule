@@ -1,5 +1,5 @@
 // Bump CACHE_NAME on every deploy so clients refetch assets.
-const CACHE_NAME = 'tutor-schedule-v88';
+const CACHE_NAME = 'tutor-schedule-v96';
 
 // Compute base path dynamically so the SW works under any URL,
 // including GitHub Pages subpaths like /tutor-schedule/tutor-schedule/.
@@ -32,7 +32,8 @@ const ASSETS = [
   'assets/icon-192.png',
   'assets/icon-512.png',
   'assets/icon-maskable-512.png',
-  'assets/apple-touch-icon.png'
+  'assets/apple-touch-icon.png',
+  'assets/vendor/supabase.min.js'
 ].map(path => BASE + path);
 
 self.addEventListener('install', (event) => {

@@ -223,6 +223,7 @@ async function loadPayroll() {
   const we = new Date(target); we.setDate(we.getDate() + 7);
   const wsIso = target.toISOString();
   const weIso = we.toISOString();
+  const weStr = formatDate(we);
   const isAdmin = state.profile.role === 'admin';
 
   // Hydrate from cache ONLY when offline. Online users get fresh data on
@@ -252,10 +253,13 @@ async function loadPayroll() {
     .eq('week_start', ws).eq('status', 'pending');
   if (!isAdmin) qc = qc.eq('teacher_id', state.user.id);
 
-  // Subscriptions SOLD on this week (by created_at — matches teacher's actual cash receipt date)
+  // Subscriptions SOLD on this week — filtered by start_date (the week the
+  // subscription starts working), NOT created_at. If a teacher activates a
+  // subscription today with a start_date on last week, its commission must
+  // land on last week's payroll, not this week's.
   let qs = db.from('subscriptions')
-    .select('id, teacher_id, student_id, total_lessons, paid_amount, teacher_share, center_share, created_at, student:students(first_name, last_name), pricing:pricing_id(duration_minutes, format, is_individual, is_online)')
-    .gte('created_at', wsIso).lt('created_at', weIso);
+    .select('id, teacher_id, student_id, total_lessons, paid_amount, teacher_share, center_share, start_date, created_at, student:students(first_name, last_name), pricing:pricing_id(duration_minutes, format, is_individual, is_online)')
+    .gte('start_date', ws).lt('start_date', weStr);
   if (!isAdmin) qs = qs.eq('teacher_id', state.user.id);
 
   // Subscriptions REFUNDED on this week (by refunded_at) — they need to roll back center share
@@ -1040,12 +1044,21 @@ async function saveReason() {
   }
 }
 
-// Toggle "Уважительная причина" — visual state, persisted on Save
+// Toggle "Уважительная причина" — visual state, persisted on Save.
+// Wrapped in a confirmation modal so the teacher can't flip it by accident.
 function toggleValidReasonAction() {
   if (!reasonCtx || !reasonCtx.editable) return;
-  reasonCtx.validReason = !reasonCtx.validReason;
-  const btn = document.getElementById('btn-toggle-valid');
-  if (btn) btn.classList.toggle('active', !!reasonCtx.validReason);
+  const turningOn = !reasonCtx.validReason;
+  const text = turningOn
+    ? 'Отметить как уважительную причину? Занятие не будет засчитано и не попадёт в список прогульщиков.'
+    : 'Убрать отметку об уважительной причине? Отмена вернётся к обычной обработке.';
+  const btnLabel = turningOn ? 'Отметить' : 'Убрать';
+  const btnVariant = turningOn ? 'success' : 'danger';
+  showConfirm(text, () => {
+    reasonCtx.validReason = !reasonCtx.validReason;
+    const btn = document.getElementById('btn-toggle-valid');
+    if (btn) btn.classList.toggle('active', !!reasonCtx.validReason);
+  }, btnLabel, btnVariant);
 }
 
 // One-shot "+7 days" — extends active subscription, marks extension_applied_at,

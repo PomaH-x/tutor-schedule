@@ -197,23 +197,34 @@ window.addEventListener('popstate', (ev) => {
 });
 
 async function loadProfile(userId) {
-  const { data, error } = await db
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
-    .single();
-  if (error || !data) {
+  const cached = (typeof cacheGet === 'function') ? cacheGet('profile') : null;
+  const cachedValid = cached && cached.id === userId;
+
+  // Fast offline path: skip the SDK call entirely when the browser knows we
+  // don't have a connection. Otherwise Supabase can spend many seconds on
+  // internal retries even when the request will never succeed.
+  if (!navigator.onLine && cachedValid) return cached;
+
+  // Race the network call against a short timeout — same reason as getSession
+  // in app.js. Users with slow / intermittent connectivity shouldn't wait
+  // 10+ seconds to see something on screen.
+  const netResult = await Promise.race([
+    db.from('profiles').select('*').eq('id', userId).single()
+      .then(r => ({ data: r.data, error: r.error })),
+    new Promise(resolve => setTimeout(() => resolve({ data: null, error: { message: 'timeout' } }), 4000))
+  ]);
+
+  if (netResult.error || !netResult.data) {
     // Network or RLS failure — fall back to the cached profile IF it belongs to
     // this user. Without the id check we could leak a previous user's profile.
-    const cached = cacheGet('profile');
-    if (cached && cached.id === userId) return cached;
+    if (cachedValid) return cached;
     return null;
   }
   // Persist for offline boot. Other cache writes (lessons, students) are gated
   // by cacheEnsureUser(); we write profile BEFORE the user-marker check
   // because the marker uses the id we're about to confirm.
-  cacheSet('profile', data);
-  return data;
+  cacheSet('profile', netResult.data);
+  return netResult.data;
 }
 
 async function updateRegisterForm(role) {

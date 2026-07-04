@@ -33,11 +33,11 @@ async function loadActiveSubscriptionForStudent(studentId, force) {
         if (typeof cacheSet === 'function') cacheSet('sub:' + studentId, active);
         return active;
       }
-      // Fallback: most recent non-active (expired or refunded) — to show context in UI
+      // Fallback: most recent non-active (completed/expired/refunded) — to show context in UI
       const { data: other } = await db.from('subscriptions')
         .select('*, pricing:pricing_id(duration_minutes, is_individual, is_online, format, student_price, teacher_profit, commission)')
         .eq('student_id', studentId)
-        .in('status', ['expired', 'refunded'])
+        .in('status', ['completed', 'expired', 'refunded'])
         .order('end_date', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -399,12 +399,10 @@ async function recomputeSubscriptionUsage(subscriptionId) {
     // prevents duplicate sends.
     const oldRemaining = sub.total_lessons - (sub.used_lessons || 0) - (sub.transfers_used || 0);
 
-    // Lazy expiry: if active but past end_date — mark as expired.
+    // Today in YYYY-MM-DD — used below to derive the new status of the sub
+    // (completed / expired / active) after we recompute used_lessons and
+    // transfers_used against the actual lessons + cancellations.
     const todayStr = formatDate(new Date());
-    if (sub.status === 'active' && sub.end_date < todayStr) {
-      await db.from('subscriptions').update({ status: 'expired' }).eq('id', subscriptionId);
-      sub.status = 'expired';
-    }
 
     // Lessons attached to this subscription
     const { data: links } = await db.from('lesson_students')
@@ -459,10 +457,47 @@ async function recomputeSubscriptionUsage(subscriptionId) {
     }
     // If no templates — transfers stays at 0 (no baseline to compare).
 
+    // Cap used at total_lessons. `used` counts every lesson_students row
+    // attached to this subscription that has already been conducted (plus paid
+    // late cancellations). Sometimes more rows attach than the subscription
+    // has slots for — extra ones from recurring materialisation or manual
+    // admin adjustment. A subscription physically can't consume more slots
+    // than it has, so we clamp here. Without this the UI shows nonsense
+    // ("6 из 4 · осталось 0") and the sub can appear "active" forever.
+    if (used > sub.total_lessons) used = sub.total_lessons;
+
     await db.from('subscriptions').update({
       used_lessons: used,
       transfers_used: transfers
     }).eq('id', subscriptionId);
+
+    // ===== Recompute status =====
+    // Full derived status, not a one-way lazy transition. Symmetric so that
+    // reversing a change (cancelling a lesson that pushed used to total, or
+    // extending end_date past today) naturally moves the sub back to 'active'.
+    // 'refunded' is a terminal, teacher-driven state — never touched here.
+    //
+    // Priority: completed > expired > active. If the student used all lessons,
+    // it's a success even if the calendar deadline also passed — no reason to
+    // display it as "expired".
+    //
+    // NB: `transfers` is a SUBSET of `used` (every transfer-lesson is also a
+    // used-lesson), so the completion check is just `used >= total`, not
+    // `used + transfers >= total` — the latter double-counts.
+    if (sub.status !== 'refunded') {
+      let newStatus;
+      if (used >= sub.total_lessons) {
+        newStatus = 'completed';
+      } else if (sub.end_date < todayStr) {
+        newStatus = 'expired';
+      } else {
+        newStatus = 'active';
+      }
+      if (newStatus !== sub.status) {
+        await db.from('subscriptions').update({ status: newStatus }).eq('id', subscriptionId);
+        sub.status = newStatus;
+      }
+    }
 
     // Push when the subscription transitions to exactly 1 lesson left.
     // Mirror the AM rule: notify BOTH the student and the teacher. Skip if
@@ -531,6 +566,7 @@ function renderSubscriptionPanelHTML(sub, studentId) {
   }
   const isExpired = sub.status === 'expired';
   const isRefunded = sub.status === 'refunded';
+  const isCompleted = sub.status === 'completed';
   const total = sub.total_lessons;
   const used = sub.used_lessons || 0;
   const remaining = Math.max(0, total - used);
@@ -579,6 +615,29 @@ function renderSubscriptionPanelHTML(sub, studentId) {
       </div>
       <div class="sub-panel-meta">
         <span>Срок действия истёк: ${fmt(sub.end_date)}</span>
+      </div>
+      <div class="sub-empty-text" style="margin-top:8px">Для продолжения занятий по абонементу — активируйте новый.</div>
+      <button class="btn-primary btn-sm" id="btn-activate-sub" data-student-id="${studentId}" style="align-self:flex-start">Активировать новый</button>
+    </div>`;
+  }
+
+  if (isCompleted) {
+    // Абонемент завершён «положительно» — все занятия проведены (с учётом переносов).
+    // Визуально переиспользуем стили expired-панели (тот же приглушённый вид),
+    // но бейдж и подпись другие: это НЕ провал, а успешное использование.
+    return `<div class="sub-panel sub-panel-expired">
+      <div class="sub-panel-head">
+        <span class="sub-badge sub-badge-expired">Завершён</span>
+        <span class="sub-panel-type">${total} занятий${durLabel ? ' · ' + durLabel : ''}</span>
+        <span class="sub-panel-amount">${sub.paid_amount} ₽</span>
+        <button class="sub-panel-delete" id="btn-delete-sub" data-sub-id="${sub.id}" title="Удалить абонемент">✕</button>
+      </div>
+      <div class="sub-progress-wrap">
+        <div class="sub-progress-bar sub-progress-bar-muted"><div class="sub-progress-fill sub-progress-fill-muted" style="width:100%"></div></div>
+        <div class="sub-progress-label">Проведено ${used} из ${total}${transfersUsed > 0 ? ` · переносов ${transfersUsed}` : ''}</div>
+      </div>
+      <div class="sub-panel-meta">
+        <span>Все занятия проведены</span>
       </div>
       <div class="sub-empty-text" style="margin-top:8px">Для продолжения занятий по абонементу — активируйте новый.</div>
       <button class="btn-primary btn-sm" id="btn-activate-sub" data-student-id="${studentId}" style="align-self:flex-start">Активировать новый</button>

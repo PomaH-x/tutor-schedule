@@ -69,11 +69,32 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('btn-logout').addEventListener('click', handleLogout);
 
-  const { data: { session } } = await db.auth.getSession();
+  // Boot: resolve auth state without hanging the splash screen when offline.
+  // Supabase's getSession() can do long internal retries when the network is
+  // down, which used to leave the app stuck on the loading logo indefinitely.
+  // Solution: race the SDK call against a 4-second timeout. If we time out
+  // but have a cached profile from a previous session, boot into offline
+  // read-only mode instead of blocking. If there's no cache either, fall
+  // through to the auth screen (which itself works fine offline).
+  const sessionResult = await Promise.race([
+    db.auth.getSession().then(r => ({ session: r?.data?.session || null, timedOut: false })),
+    new Promise(resolve => setTimeout(() => resolve({ session: null, timedOut: true }), 4000))
+  ]);
 
-  if (session?.user) {
+  if (sessionResult.session?.user) {
     // onAuthSuccess will navigate to the appropriate screen (schedule / student)
-    await onAuthSuccess(session.user);
+    await onAuthSuccess(sessionResult.session.user);
+  } else if (sessionResult.timedOut) {
+    const cached = (typeof cacheGet === 'function') ? cacheGet('profile') : null;
+    if (cached?.id) {
+      showToast('Нет соединения — офлайн-режим', 'error');
+      // Mock the minimum shape of the user object that downstream code reads
+      // (only .id is actually used). loadProfile() below will return the
+      // cached profile because it's offline-aware.
+      await onAuthSuccess({ id: cached.id });
+    } else {
+      showScreen('screen-auth');
+    }
   } else {
     // No session — show the auth form
     showScreen('screen-auth');

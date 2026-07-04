@@ -5146,6 +5146,17 @@ input, textarea, select {
   background: var(--accent);
   color: #fff;
 }
+/* Override: "Уважительная причина" в активном состоянии — зелёный,
+   а не общий синий, чтобы визуально отличаться от других переключаемых
+   действий и намекать на «положительное» решение (отмена без последствий). */
+#btn-toggle-valid.active {
+  background: var(--success-soft);
+  border-color: var(--success);
+}
+#btn-toggle-valid.active .reason-action-icon {
+  background: var(--success);
+  color: #fff;
+}
 .reason-action.applied {
   background: var(--success-soft);
   border-color: var(--success);

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="description" content="Совместное управление расписанием занятий репетиторского центра">
-  <title>Умпульс</title>
+  <title>Расписание</title>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#1e6fe8">
   <meta name="mobile-web-app-capable" content="yes">
@@ -39,7 +39,7 @@
       <div class="auth-container">
         <div class="auth-logo">
           <img src="assets/icon.svg" width="48" height="48" alt="УМпульс" style="border-radius:12px;background:#fff">
-          <h1>Умпульс</h1>
+          <h1>Расписание</h1>
         </div>
 
         <div id="auth-step-role" class="auth-step active">
@@ -882,7 +882,10 @@
 
   <div id="toast" class="toast"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- Локальная копия supabase-js v2.110.0. Раньше грузилась с cdn.jsdelivr.net,
+       но CDN-скрипт нельзя надёжно закэшировать в SW (cross-origin, network-only),
+       и при офлайн-старте db не создавался вообще, приложение зависало на splash. -->
+  <script src="./assets/vendor/supabase.min.js"></script>
   <script src="modules/config.js"></script>
   <script src="modules/state.js"></script>
   <script src="modules/cache.js"></script>

@@ -71,6 +71,7 @@ function hasLocalConflict(day, room, slotFrom, slotTo, excludeId, teacherId) {
   const startMin = START_HOUR * 60 + slotFrom * SLOT_MINUTES;
   const endMin = START_HOUR * 60 + slotTo * SLOT_MINUTES;
   return state.lessons.some(l => {
+    if (!isBlockingLesson(l)) return false;
     if (l.id === excludeId || l.room !== room) return false;
     const ls = new Date(l.start_time);
     if (ls.getDate() !== date.getDate() || ls.getMonth() !== date.getMonth() || ls.getFullYear() !== date.getFullYear()) return false;
@@ -81,6 +82,18 @@ function hasLocalConflict(day, room, slotFrom, slotTo, excludeId, teacherId) {
   });
 }
 
+// A lesson participates in conflict checks only if it's actually a live
+// occupancy of the slot: status='active' AND at least one student attached.
+// Any other row (cancelled, or "ghost" with zero students after every kid was
+// removed/cancelled) must NOT block a teacher from creating a new lesson in
+// that slot. Without this filter, a lingering row in state.lessons — caused
+// by a race between the optimistic UI update and the follow-up loadLessons()
+// or by realtime not yet delivering the delete — produced false "преподаватель
+// занят" toasts on visually empty slots.
+function isBlockingLesson(l) {
+  return l && l.status === 'active' && (l.lesson_students || []).length > 0;
+}
+
 // Strict same-room overlap check — used by drag (blocks ANY overlap regardless of teacher).
 function hasRoomOverlapAny(day, room, slotFrom, slotTo, excludeId) {
   const dates = getWeekDates(state.currentWeekStart);
@@ -88,6 +101,7 @@ function hasRoomOverlapAny(day, room, slotFrom, slotTo, excludeId) {
   const startMin = START_HOUR * 60 + slotFrom * SLOT_MINUTES;
   const endMin = START_HOUR * 60 + slotTo * SLOT_MINUTES;
   return state.lessons.some(l => {
+    if (!isBlockingLesson(l)) return false;
     if (l.id === excludeId || l.room !== room) return false;
     const ls = new Date(l.start_time);
     if (ls.getDate() !== date.getDate() || ls.getMonth() !== date.getMonth() || ls.getFullYear() !== date.getFullYear()) return false;
@@ -112,6 +126,7 @@ function getDragConflictType(day, room, slotFrom, slotTo, excludeId, teacherId) 
   const startMin = START_HOUR * 60 + slotFrom * SLOT_MINUTES;
   const endMin = START_HOUR * 60 + slotTo * SLOT_MINUTES;
   const overlapping = state.lessons.filter(l => {
+    if (!isBlockingLesson(l)) return false;
     if (l.id === excludeId || l.room !== room) return false;
     const ls = new Date(l.start_time);
     if (ls.getDate() !== date.getDate() || ls.getMonth() !== date.getMonth() || ls.getFullYear() !== date.getFullYear()) return false;
@@ -140,6 +155,7 @@ function hasTeacherDiffRoomConflict(day, room, slotFrom, slotTo, teacherId, excl
   const startMin = START_HOUR * 60 + slotFrom * SLOT_MINUTES;
   const endMin = START_HOUR * 60 + slotTo * SLOT_MINUTES;
   return state.lessons.some(l => {
+    if (!isBlockingLesson(l)) return false;
     if (l.id === excludeId || l.teacher_id !== teacherId || l.room === room) return false;
     const ls = new Date(l.start_time);
     if (ls.getDate() !== date.getDate() || ls.getMonth() !== date.getMonth() || ls.getFullYear() !== date.getFullYear()) return false;
@@ -165,6 +181,7 @@ function hasAnyConflict(day, room, slotFrom, slotTo, excludeId, teacherId) {
   const startMin = START_HOUR * 60 + slotFrom * SLOT_MINUTES;
   const endMin = START_HOUR * 60 + slotTo * SLOT_MINUTES;
   const overlapping = state.lessons.filter(l => {
+    if (!isBlockingLesson(l)) return false;
     if (l.id === excludeId || l.room !== room) return false;
     const ls = new Date(l.start_time);
     if (ls.getDate() !== date.getDate() || ls.getMonth() !== date.getMonth()) return false;
@@ -1743,6 +1760,11 @@ async function placeTransferredLesson(day, room, slot) {
   // Original lesson's subscription was already counted while it was 'active' in past;
   // since we mark it transferred and create a new lesson, recompute affected subs.
   await recomputeSubscriptionsByLesson(p.originalLessonId);
+  // Optimistic state cleanup — same reason as deleteLesson/cancelLesson:
+  // close the ~250ms–1s window where conflict checks see the still-active
+  // status in state.lessons and falsely mark the freed slot as busy.
+  state.lessons = state.lessons.filter(l => l.id !== p.originalLessonId);
+  renderLessons();
   state.placingLesson = null; hidePlacingBanner(); clearDragHighlight();
   showToast('Занятие перенесено на следующую неделю', 'success'); await loadLessons();
   } finally {
@@ -2939,6 +2961,12 @@ async function deleteLesson() {
     }
     await db.from('lesson_students').delete().eq('lesson_id', lid);
     await db.from('lessons').delete().eq('id', lid);
+    // Optimistic state cleanup: remove the lesson from state.lessons BEFORE the
+    // network loadLessons() finishes. Without this there's a ~250ms–1s window
+    // (network + realtime debounce) where hasTeacherDiffRoomConflict, etc.,
+    // still see the row and produce false "занят" toasts for the freed slot.
+    state.lessons = state.lessons.filter(l => l.id !== lid);
+    renderLessons();
     showToast('Занятие расформировано', 'success'); await loadLessons();
   }, 'Расформировать');
 }
@@ -2957,6 +2985,11 @@ async function cancelLesson() {
   showConfirm('Отменить занятие? Все ученики будут отменены.', async () => {
     await db.from('lessons').update({ status: 'cancelled' }).eq('id', lid);
     await recomputeSubscriptionsByLesson(lid);
+    // Optimistic state cleanup — see deleteLesson() for the same pattern and
+    // rationale. loadLessons() will re-fetch and confirm, but we need the
+    // slot to look "free" to conflict checks IMMEDIATELY, not in 250-1000ms.
+    state.lessons = state.lessons.filter(l => l.id !== lid);
+    renderLessons();
     const ws = lessonWeekStart || formatDate(getMonday(new Date()));
     if (studentIds.length > 0) {
       await db.from('cancellations').insert(
