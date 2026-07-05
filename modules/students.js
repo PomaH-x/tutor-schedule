@@ -243,8 +243,12 @@ function refreshCreateSubjectsEditor() {
 function refreshCreateSubActivation() {
   const toggle = document.getElementById('student-activate-sub-toggle');
   const block = document.getElementById('student-activate-sub-block');
+  const row = document.getElementById('student-activate-sub-toggle-row');
   if (!toggle || !block) return;
   block.style.display = toggle.checked ? '' : 'none';
+  // Mirror the checked state onto the wrapper label so CSS can highlight it
+  // (accent-tinted background). Same visual language as .lesson-student-row.
+  if (row) row.classList.toggle('checked', toggle.checked);
   if (!toggle.checked) return;
 
   // Subject select — filled from the student's own subjects (createSubjects).
@@ -973,14 +977,21 @@ async function openStudentDetail(studentId) {
 
   // Helper: bind buttons that live inside the (re-rendered) subscription panel
   function bindSubPanelButtons() {
+    // With multiple active subscriptions we now have multiple delete/refund
+    // buttons in the DOM at once — bind them all, not just the first.
     const activateSubBtn = body.querySelector('#btn-activate-sub');
     if (activateSubBtn) {
       activateSubBtn.addEventListener('click', () => openSubscriptionActivation(activateSubBtn.dataset.studentId));
     }
-    const deleteSubBtn = body.querySelector('#btn-delete-sub');
-    if (deleteSubBtn) {
-      deleteSubBtn.addEventListener('click', async () => {
-        const subId = deleteSubBtn.dataset.subId;
+    const activateExtraBtn = body.querySelector('#btn-activate-sub-extra');
+    if (activateExtraBtn) {
+      activateExtraBtn.addEventListener('click', () => openSubscriptionActivation(activateExtraBtn.dataset.studentId));
+    }
+    body.querySelectorAll('#btn-delete-sub, .sub-panel-delete').forEach(btn => {
+      if (btn.dataset.bound === '1') return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', async () => {
+        const subId = btn.dataset.subId;
         showConfirm('Удалить абонемент? Связанные занятия останутся в расписании и станут разовыми. Это действие нельзя отменить.', async () => {
           const { error } = await db.from('subscriptions').delete().eq('id', subId);
           if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
@@ -989,11 +1000,12 @@ async function openStudentDetail(studentId) {
           await openStudentDetail(studentId);
         }, 'Удалить');
       });
-    }
-    const refundSubBtn = body.querySelector('#btn-refund-sub');
-    if (refundSubBtn) {
-      refundSubBtn.addEventListener('click', () => openSubscriptionRefund(refundSubBtn.dataset.subId));
-    }
+    });
+    body.querySelectorAll('#btn-refund-sub, .sub-panel-refund').forEach(btn => {
+      if (btn.dataset.bound === '1') return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', () => openSubscriptionRefund(btn.dataset.subId));
+    });
   }
 
   // Kick off the heavy subscription chain in the background — the card is already
@@ -1002,12 +1014,32 @@ async function openStudentDetail(studentId) {
     try {
       await rebindOrphanLessonsForStudents([studentId]);
       await recomputeSubscriptionsForStudents([studentId]);
-      const activeSub = await loadActiveSubscriptionForStudent(studentId, true);
+      const listRes = await loadStudentSubscriptionsList(studentId);
       // Guard: user may have closed the card or opened another one in the meantime.
       if (studentDetailId !== studentId) return;
       const container = document.getElementById('sd-sub-panel-container');
       if (!container) return;
-      container.innerHTML = renderSubscriptionPanelHTML(activeSub, studentId);
+
+      const actives = listRes.active || [];
+      let html = '';
+      if (actives.length > 0) {
+        html = actives.map(sub => renderSubscriptionPanelHTML(sub, studentId)).join('');
+        // Show "activate more" button only if the student has subjects with
+        // no active subscription yet. Prevents opening the activation form
+        // with an empty subject picker.
+        const studentSubjectIds = (student.subjects || [])
+          .map(name => (subjectsList.find(s => s.name === name) || {}).id)
+          .filter(Boolean);
+        const activeSubjectIds = new Set(actives.map(s => s.subject_id).filter(Boolean));
+        const uncovered = studentSubjectIds.filter(id => !activeSubjectIds.has(id));
+        if (uncovered.length > 0) {
+          html += `<button class="btn-secondary btn-sm" id="btn-activate-sub-extra" data-student-id="${studentId}" style="align-self:flex-start;margin-top:6px">+ Активировать ещё один абонемент</button>`;
+        }
+      } else {
+        // No active subs — show the empty state (or last inactive for context).
+        html = renderSubscriptionPanelHTML(listRes.last, studentId);
+      }
+      container.innerHTML = html;
       bindSubPanelButtons();
     } catch (e) {
       console.error('sub panel load failed:', e);

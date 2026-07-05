@@ -20,7 +20,7 @@ async function loadActiveSubscriptionForStudent(studentId, force) {
   try {
     // Try active first
     const { data: active, error: activeErr } = await db.from('subscriptions')
-      .select('*, pricing:pricing_id(duration_minutes, is_individual, is_online, format, student_price, teacher_profit, commission)')
+      .select('*, pricing:pricing_id(duration_minutes, is_individual, is_online, format, student_price, teacher_profit, commission), subject:subject_id(name)')
       .eq('student_id', studentId)
       .eq('status', 'active')
       .order('created_at', { ascending: false })
@@ -60,6 +60,37 @@ function invalidateSubscriptionCache(studentId) {
   else activeSubscriptionsCache = {};
 }
 
+// Load ALL active subscriptions for a student (a student can now hold one
+// subscription per subject) plus, if there are no actives at all, the most
+// recent non-active one to give the UI context (e.g. "last one expired").
+// Returns { active: [subs], last: sub|null }.
+async function loadStudentSubscriptionsList(studentId) {
+  try {
+    const { data: actives } = await db.from('subscriptions')
+      .select('*, pricing:pricing_id(duration_minutes, is_individual, is_online, format, student_price, teacher_profit, commission), subject:subject_id(name)')
+      .eq('student_id', studentId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false });
+    if (actives && actives.length > 0) {
+      return { active: actives, last: null };
+    }
+    // No actives — show the most recent finished one for context (Завершён /
+    // Истёк / Возврат). Same fallback that loadStudentActiveSubscription used
+    // to provide.
+    const { data: last } = await db.from('subscriptions')
+      .select('*, pricing:pricing_id(duration_minutes, is_individual, is_online, format, student_price, teacher_profit, commission), subject:subject_id(name)')
+      .eq('student_id', studentId)
+      .in('status', ['completed', 'expired', 'refunded'])
+      .order('end_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return { active: [], last: last || null };
+  } catch (e) {
+    console.error('loadStudentSubscriptionsList:', e);
+    return { active: [], last: null };
+  }
+}
+
 // --- Activation ---
 
 let activationCtx = null; // { studentId, student, options }
@@ -85,6 +116,20 @@ async function openSubscriptionActivation(studentId) {
     return;
   }
 
+  // Exclude subjects that already have an active subscription — a student
+  // can only hold ONE active subscription per subject. If they want another,
+  // they can wait for the current one to end or close it with a refund.
+  const { data: activeSubs } = await db.from('subscriptions')
+    .select('subject_id')
+    .eq('student_id', studentId)
+    .eq('status', 'active');
+  const coveredSubjectIds = new Set((activeSubs || []).map(s => s.subject_id).filter(Boolean));
+  const availableSubjects = studentSubjects.filter(s => !coveredSubjectIds.has(s.id));
+  if (availableSubjects.length === 0) {
+    showToast('У всех предметов ученика уже активен абонемент. Дождитесь окончания или закройте с возвратом.', 'error');
+    return;
+  }
+
   // Pull ALL subscription pricing options matching the student's format
   // (group/individual/online + price_type). Duration is chosen inside the form.
   const priceType = student.price_type || 'new';
@@ -100,7 +145,7 @@ async function openSubscriptionActivation(studentId) {
     return;
   }
 
-  activationCtx = { studentId, student, options, studentSubjects };
+  activationCtx = { studentId, student, options, studentSubjects: availableSubjects };
 
   document.getElementById('sub-act-student').textContent = `${student.first_name} ${student.last_name}`;
 
@@ -108,11 +153,11 @@ async function openSubscriptionActivation(studentId) {
   // dropdown so the teacher can decide which subject this subscription is
   // for. The chosen name is read back in confirmSubscriptionActivation().
   const subjWrap = document.getElementById('sub-act-subject');
-  if (studentSubjects.length === 1) {
-    subjWrap.textContent = studentSubjects[0].name;
+  if (availableSubjects.length === 1) {
+    subjWrap.textContent = availableSubjects[0].name;
   } else {
     subjWrap.innerHTML = `<select id="sub-act-subject-select">
-      ${studentSubjects.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('')}
+      ${availableSubjects.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('')}
     </select>`;
   }
 
@@ -666,11 +711,19 @@ function renderSubscriptionPanelHTML(sub, studentId) {
   const transfersWarning = transfersLeft === 0;
   const dur = sub.pricing?.duration_minutes;
   const durLabel = dur ? formatTierLabel(dur, sub.pricing?.is_individual) : '';
+  // Subject chip: shown in the panel head so it's immediately clear WHICH
+  // subject this subscription covers. Falls back gracefully for legacy subs
+  // (subject_id = NULL, no subject joined).
+  const subjectName = sub.subject?.name || null;
+  const subjectChip = subjectName
+    ? `<span class="sub-panel-subject">${escapeHtml(subjectName)}</span>`
+    : '';
 
   if (isRefunded) {
     return `<div class="sub-panel sub-panel-refunded">
       <div class="sub-panel-head">
         <span class="sub-badge sub-badge-refunded">Возврат оформлен</span>
+        ${subjectChip}
         <span class="sub-panel-type">${total} занятий${durLabel ? ' · ' + durLabel : ''}</span>
         <span class="sub-panel-amount">${sub.paid_amount} ₽ <span class="sub-refund-tag">после пересчёта</span></span>
         <button class="sub-panel-delete" id="btn-delete-sub" data-sub-id="${sub.id}" title="Удалить запись">✕</button>
@@ -689,6 +742,7 @@ function renderSubscriptionPanelHTML(sub, studentId) {
     return `<div class="sub-panel sub-panel-expired">
       <div class="sub-panel-head">
         <span class="sub-badge sub-badge-expired">Истёк</span>
+        ${subjectChip}
         <span class="sub-panel-type">${total} занятий${durLabel ? ' · ' + durLabel : ''}</span>
         <span class="sub-panel-amount">${sub.paid_amount} ₽</span>
         <button class="sub-panel-refund" id="btn-refund-sub" data-sub-id="${sub.id}" title="Закрыть с возвратом">⤺</button>
@@ -713,6 +767,7 @@ function renderSubscriptionPanelHTML(sub, studentId) {
     return `<div class="sub-panel sub-panel-expired">
       <div class="sub-panel-head">
         <span class="sub-badge sub-badge-expired">Завершён</span>
+        ${subjectChip}
         <span class="sub-panel-type">${total} занятий${durLabel ? ' · ' + durLabel : ''}</span>
         <span class="sub-panel-amount">${sub.paid_amount} ₽</span>
         <button class="sub-panel-delete" id="btn-delete-sub" data-sub-id="${sub.id}" title="Удалить абонемент">✕</button>
@@ -732,6 +787,7 @@ function renderSubscriptionPanelHTML(sub, studentId) {
   return `<div class="sub-panel sub-panel-active">
     <div class="sub-panel-head">
       <span class="sub-badge sub-badge-active">Абонемент</span>
+      ${subjectChip}
       <span class="sub-panel-type">${total} занятий${durLabel ? ' · ' + durLabel : ''}</span>
       <span class="sub-panel-amount">${sub.paid_amount} ₽</span>
       <button class="sub-panel-refund" id="btn-refund-sub" data-sub-id="${sub.id}" title="Закрыть с возвратом">⤺</button>
