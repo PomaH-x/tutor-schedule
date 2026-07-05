@@ -52,7 +52,12 @@ async function loadStudents() {
     list.innerHTML = '<div class="student-card skel-row"></div>'.repeat(5);
   }
   const isAdmin = state.profile.role === 'admin';
-  let query = db.from('students').select('*, teacher:profiles!teacher_id(full_name, short_name)');
+  // Pull student's subjects via the junction table (student_subjects) and the
+  // dictionary (subjects.name). The legacy students.subject column stays for
+  // backward compatibility — used as a fallback when the junction is empty.
+  let query = db.from('students').select(
+    '*, teacher:profiles!teacher_id(full_name, short_name), student_subjects(subject_id, subjects(id, name))'
+  );
   if (!isAdmin) query = query.eq('teacher_id', state.user.id);
   query = query.order('first_name');
   const { data, error } = await query;
@@ -62,7 +67,19 @@ async function loadStudents() {
     }
     return;
   }
-  state.students = data || [];
+  // Flatten the nested join into a plain string array for cheap filtering /
+  // rendering downstream. Falls back to the legacy single-value column if
+  // the junction is empty (should be rare after the migration ran).
+  const rows = (data || []).map(s => {
+    const subjectsFromJoin = (s.student_subjects || [])
+      .map(ss => ss.subjects?.name)
+      .filter(Boolean);
+    return {
+      ...s,
+      subjects: subjectsFromJoin.length ? subjectsFromJoin : (s.subject ? [s.subject] : [])
+    };
+  });
+  state.students = rows;
   renderStudents();
   if (typeof cacheSet === 'function') cacheSet('students', state.students);
   studentsFreshlyLoaded = true;
@@ -82,7 +99,12 @@ function renderStudents(filter = '') {
     );
   }
   if (subjectFilter) {
-    filtered = filtered.filter(s => s.subject === subjectFilter);
+    // Multi-subject support: keep the student if ANY of their subjects match
+    // the filter. Falls back to the legacy s.subject if s.subjects is empty.
+    filtered = filtered.filter(s => {
+      const list = (s.subjects && s.subjects.length) ? s.subjects : (s.subject ? [s.subject] : []);
+      return list.includes(subjectFilter);
+    });
   }
   if (gradeFilter) {
     filtered = filtered.filter(s => s.grade === +gradeFilter);
@@ -153,10 +175,15 @@ function renderStudents(filter = '') {
 
 function studentCardHTML(s) {
   const isUnlinked = !s.profile_id;
+  // Show every subject the student attends as a small chip. Falls back to
+  // the legacy single-value column so cards render correctly on cached data
+  // from before the multi-subject migration reached this client.
+  const list = (s.subjects && s.subjects.length) ? s.subjects : (s.subject ? [s.subject] : []);
+  const chips = list.map(sj => `<span class="student-subject-chip">${escapeHtml(sj)}</span>`).join('');
   return `<div class="student-card ${isUnlinked ? 'student-card-unlinked' : ''}" data-id="${s.id}">
     <div class="student-card-main">
       <span class="student-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}</span>
-      <span class="student-subject">${escapeHtml(s.subject || '')}</span>
+      <div class="student-subject-chips">${chips}</div>
     </div>
     <div class="student-card-meta">
       ${s.grade ? `<span>${escapeHtml(s.grade)} класс</span>` : ''}
@@ -165,24 +192,150 @@ function studentCardHTML(s) {
   </div>`;
 }
 
+// Working state for the "Add student" modal — the chip editor mutates
+// createSubjects; refreshCreateSubjectsEditor() re-renders + syncs the hidden
+// input so modal-guard sees changes.
+let createSubjects = [];
+
+function refreshCreateSubjectsEditor() {
+  const wrap = document.getElementById('student-subjects-editor');
+  if (!wrap) return;
+  const remaining = subjectsList
+    .map(s => s.name)
+    .filter(name => !createSubjects.includes(name));
+  const chips = createSubjects.map(name => `
+    <span class="sd-subject-chip" data-name="${escapeHtml(name)}">
+      ${escapeHtml(name)}
+      <button type="button" class="sd-subject-chip-remove" data-remove="${escapeHtml(name)}" title="Убрать">×</button>
+    </span>`).join('');
+  const addSelect = remaining.length
+    ? `<select class="sd-subjects-add">
+         <option value="">+ Добавить предмет</option>
+         ${remaining.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}
+       </select>`
+    : '<span class="sd-subjects-add-full">Все предметы уже выбраны</span>';
+  wrap.innerHTML = chips + addSelect;
+
+  const hidden = document.getElementById('student-subjects-hidden');
+  if (hidden) hidden.value = createSubjects.join('|');
+
+  wrap.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      createSubjects = createSubjects.filter(s => s !== btn.dataset.remove);
+      refreshCreateSubjectsEditor();
+      refreshCreateSubActivation(); // subject list changed → refresh subject dropdown
+    });
+  });
+  const addSel = wrap.querySelector('.sd-subjects-add');
+  if (addSel) {
+    addSel.addEventListener('change', () => {
+      const name = addSel.value;
+      if (name && !createSubjects.includes(name)) createSubjects.push(name);
+      refreshCreateSubjectsEditor();
+      refreshCreateSubActivation();
+    });
+  }
+}
+
+// Recompute the activation section's contents based on the current form state:
+// the tariff list depends on type/price selectors and the subject select
+// depends on the chosen chip list. Called whenever those inputs change.
+function refreshCreateSubActivation() {
+  const toggle = document.getElementById('student-activate-sub-toggle');
+  const block = document.getElementById('student-activate-sub-block');
+  if (!toggle || !block) return;
+  block.style.display = toggle.checked ? '' : 'none';
+  if (!toggle.checked) return;
+
+  // Subject select — filled from the student's own subjects (createSubjects).
+  const subjSel = document.getElementById('create-sub-subject');
+  if (subjSel) {
+    const prev = subjSel.value;
+    subjSel.innerHTML = createSubjects.length
+      ? createSubjects.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')
+      : '<option value="">(выберите предмет ученика выше)</option>';
+    if (createSubjects.includes(prev)) subjSel.value = prev;
+  }
+
+  // Tariff list — filter pricingList by current student format selectors.
+  const typeVal = document.getElementById('student-is-individual').value;
+  const isIndividual = typeVal === 'true' || typeVal === 'online';
+  const isOnline = typeVal === 'online';
+  const priceType = document.getElementById('student-price-type').value;
+
+  const options = (typeof pricingList !== 'undefined' ? pricingList : []).filter(p => {
+    if (p.format !== 'sub4' && p.format !== 'sub8') return false;
+    if (p.price_type !== priceType) return false;
+    if (isOnline) return p.is_online === true;
+    return !p.is_online && p.is_individual === isIndividual;
+  });
+
+  const wrap = document.getElementById('create-sub-options');
+  if (!wrap) return;
+  if (options.length === 0) {
+    wrap.innerHTML = '<div class="create-sub-empty">Тарифов для выбранного типа занятия / цены пока нет. Добавьте их в админке.</div>';
+    return;
+  }
+  const sorted = [...options].sort((a, b) => {
+    if (a.duration_minutes !== b.duration_minutes) return a.duration_minutes - b.duration_minutes;
+    return a.format === 'sub4' ? -1 : 1;
+  });
+  wrap.innerHTML = sorted.map((o, i) => {
+    const lessons = o.format === 'sub4' ? 4 : 8;
+    const transfers = o.format === 'sub4' ? 1 : 2;
+    const h = o.duration_minutes / 60;
+    const hStr = h === Math.floor(h) ? `${h} ч` : `${h.toString().replace('.', ',')} ч`;
+    return `<label class="sub-act-option">
+      <input type="radio" name="create-sub-format" value="${o.id}" ${i === 0 ? 'checked' : ''}>
+      <div class="sub-act-option-body">
+        <div class="sub-act-option-title">${hStr} · ${lessons} занятий</div>
+        <div class="sub-act-option-meta">
+          <span>Стоимость: <b>${o.student_price} ₽</b></span>
+          <span>Преподавателю: <b>${o.teacher_profit} ₽</b></span>
+          <span>Центру: <b>${o.commission} ₽</b></span>
+          <span>Переносов: <b>${transfers}</b></span>
+        </div>
+      </div>
+    </label>`;
+  }).join('');
+}
+
 function openStudentModal(title, student = null) {
   editingStudentId = student ? student.id : null;
   document.getElementById('modal-student-title').textContent = title;
   document.getElementById('student-first-name').value = student?.first_name || '';
   document.getElementById('student-last-name').value = student?.last_name || '';
-  populateSubjectSelects();
-  document.getElementById('student-subject').value = student?.subject || (subjectsList[0]?.name || '');
   document.getElementById('student-grade').value = student?.grade || 11;
   document.getElementById('student-is-individual').value = student?.is_online ? 'online' : String(student?.is_individual || false);
   document.getElementById('student-price-type').value = student?.price_type || 'new';
+  document.getElementById('student-source').value = student?.source || '';
+  document.getElementById('student-parent-name').value = student?.parent_name || '';
+  document.getElementById('student-parent-phone').value = student?.parent_phone || '';
   document.getElementById('student-notes').value = student?.notes || '';
   document.getElementById('btn-delete-student').style.display = student ? 'block' : 'none';
+
+  // Subject chip editor
+  createSubjects = Array.isArray(student?.subjects) && student.subjects.length
+    ? [...student.subjects]
+    : (student?.subject ? [student.subject] : []);
+  refreshCreateSubjectsEditor();
+
+  // Reset the subscription-activation section
+  const toggle = document.getElementById('student-activate-sub-toggle');
+  if (toggle) toggle.checked = false;
+  const startInput = document.getElementById('create-sub-start');
+  if (startInput) startInput.value = formatDate(new Date());
+  refreshCreateSubActivation();
+
   document.getElementById('modal-overlay').classList.add('active');
+  markPristine('modal-overlay');
 }
 
 function closeStudentModal() {
-  document.getElementById('modal-overlay').classList.remove('active');
-  editingStudentId = null;
+  guardClose('modal-overlay', () => {
+    document.getElementById('modal-overlay').classList.remove('active');
+    editingStudentId = null;
+  });
 }
 
 function openEditStudent(id) {
@@ -193,12 +346,14 @@ function openEditStudent(id) {
 async function saveStudent() {
   const firstName = document.getElementById('student-first-name').value.trim();
   const lastName = document.getElementById('student-last-name').value.trim();
-  const subject = document.getElementById('student-subject').value;
   const grade = parseInt(document.getElementById('student-grade').value);
   const typeVal = document.getElementById('student-is-individual').value;
   const isIndividual = typeVal === 'true' || typeVal === 'online';
   const isOnline = typeVal === 'online';
   const priceType = document.getElementById('student-price-type').value;
+  const source = document.getElementById('student-source').value.trim();
+  const parentName = document.getElementById('student-parent-name').value.trim();
+  const parentPhone = document.getElementById('student-parent-phone').value.trim();
   const notes = document.getElementById('student-notes').value.trim();
 
   // ===== Validation =====
@@ -211,11 +366,34 @@ async function saveStudent() {
   const nameRe = /^[A-Za-zА-Яа-яЁё\s\-']+$/;
   if (!nameRe.test(firstName)) { showToast('Имя содержит недопустимые символы', 'error'); return; }
   if (!nameRe.test(lastName))  { showToast('Фамилия содержит недопустимые символы', 'error'); return; }
-  if (!subject) { showToast('Укажите предмет', 'error'); return; }
+  if (createSubjects.length === 0) { showToast('Укажите хотя бы один предмет', 'error'); return; }
   if (!Number.isFinite(grade) || grade < 1 || grade > 11) {
     showToast('Класс должен быть от 1 до 11', 'error'); return;
   }
   if (notes.length > 1000) { showToast('Примечание слишком длинное (макс 1000 символов)', 'error'); return; }
+  if (parentName && parentName.length > 60) { showToast('ФИО родителя слишком длинное', 'error'); return; }
+  if (parentPhone) {
+    const digits = parentPhone.replace(/\D/g, '');
+    if (digits.length < 10 || digits.length > 12) {
+      showToast('Телефон родителя: 10–12 цифр', 'error'); return;
+    }
+  }
+
+  // Validate the activation section if enabled
+  const activateToggle = document.getElementById('student-activate-sub-toggle');
+  const willActivate = activateToggle && activateToggle.checked;
+  let activationData = null;
+  if (willActivate) {
+    const subSubject = document.getElementById('create-sub-subject').value;
+    const subStart = document.getElementById('create-sub-start').value;
+    const pickedRadio = document.querySelector('input[name="create-sub-format"]:checked');
+    if (!subSubject) { showToast('Выберите предмет для абонемента', 'error'); return; }
+    if (!subStart) { showToast('Выберите дату начала абонемента', 'error'); return; }
+    if (!pickedRadio) { showToast('Выберите тариф абонемента', 'error'); return; }
+    const pricing = pricingList.find(p => p.id === pickedRadio.value);
+    if (!pricing) { showToast('Тариф не найден', 'error'); return; }
+    activationData = { subject: subSubject, startDate: subStart, pricing };
+  }
 
   // Double-click guard for the save button
   const btn = document.getElementById('btn-save-student');
@@ -223,24 +401,81 @@ async function saveStudent() {
   btn.disabled = true;
 
   try {
+    // Legacy fallback: students.subject = first chosen subject. Real list of
+    // subjects lives in student_subjects (junction).
     const record = {
-      first_name: firstName, last_name: lastName, subject, grade,
-      is_individual: isIndividual, is_online: isOnline, price_type: priceType,
-      notes: notes || null, teacher_id: state.user.id
+      first_name: firstName,
+      last_name: lastName,
+      subject: createSubjects[0] || null,
+      grade,
+      is_individual: isIndividual,
+      is_online: isOnline,
+      price_type: priceType,
+      source: source || null,
+      parent_name: parentName || null,
+      parent_phone: parentPhone || null,
+      notes: notes || null,
+      teacher_id: state.user.id
     };
 
-    let error;
-    if (editingStudentId) {
-      ({ error } = await db.from('students').update(record).eq('id', editingStudentId));
-    } else {
-      ({ error } = await db.from('students').insert(record));
+    // Step 1: insert the student. .select().single() gives us the new id.
+    const { data: newStudent, error } = await db.from('students').insert(record).select().single();
+    if (error) { showToast('Ошибка сохранения: ' + error.message, 'error'); return; }
+
+    // Step 2: link every subject via student_subjects. Uses subject NAMES
+    // for the UI and looks up subject_id from subjectsList (dictionary).
+    const nameToId = {};
+    subjectsList.forEach(s => { nameToId[s.name] = s.id; });
+    const rows = createSubjects
+      .map(name => nameToId[name] ? { student_id: newStudent.id, subject_id: nameToId[name] } : null)
+      .filter(Boolean);
+    if (rows.length) {
+      // upsert with ignoreDuplicates keeps this idempotent — should never fire
+      // on a fresh insert, but the guard is cheap.
+      const { error: ssErr } = await db.from('student_subjects')
+        .upsert(rows, { onConflict: 'student_id,subject_id', ignoreDuplicates: true });
+      if (ssErr) {
+        showToast('Ученик добавлен, но предметы не привязались: ' + ssErr.message, 'error');
+        // Don't return — the student itself is saved; the user can add subjects manually
+      }
     }
 
-    if (error) { showToast('Ошибка сохранения', 'error'); return; }
+    // Step 3: optional subscription activation
+    if (activationData) {
+      const subjectId = nameToId[activationData.subject] || null;
+      const pricing = activationData.pricing;
+      const totalLessons = pricing.format === 'sub4' ? 4 : 8;
+      const totalTransfers = pricing.format === 'sub4' ? 1 : 2;
+      // End date = start + 4 or 8 weeks (matches openSubscriptionActivation semantics)
+      const start = new Date(activationData.startDate);
+      const end = new Date(start);
+      end.setDate(end.getDate() + (pricing.format === 'sub4' ? 28 : 56));
 
-    const isEdit = !!editingStudentId;
+      const subRow = {
+        student_id: newStudent.id,
+        teacher_id: state.user.id,
+        pricing_id: pricing.id,
+        subject_id: subjectId,
+        total_lessons: totalLessons,
+        total_transfers: totalTransfers,
+        used_lessons: 0,
+        transfers_used: 0,
+        paid_amount: pricing.student_price,
+        teacher_share: pricing.teacher_profit,
+        center_share: pricing.commission,
+        start_date: activationData.startDate,
+        end_date: formatDate(end),
+        status: 'active'
+      };
+      const { error: subErr } = await db.from('subscriptions').insert(subRow);
+      if (subErr) {
+        showToast('Ученик добавлен, но абонемент не активирован: ' + subErr.message, 'error');
+      }
+    }
+
+    markPristine('modal-overlay');
     closeStudentModal();
-    showToast(isEdit ? 'Ученик отредактирован' : 'Ученик добавлен', 'success');
+    showToast(willActivate ? 'Ученик добавлен, абонемент активирован' : 'Ученик добавлен', 'success');
     await loadStudents();
   } finally {
     btn.disabled = false;
@@ -308,6 +543,16 @@ function initStudents() {
   document.getElementById('btn-cancel-student').addEventListener('click', closeStudentModal);
   document.getElementById('btn-modal-close').addEventListener('click', closeStudentModal);
   document.getElementById('btn-delete-student').addEventListener('click', deleteStudent);
+
+  // Reactivity inside the "Add student" modal: the tariff list depends on
+  // the student's format selectors (type / price), and the subscription
+  // subject dropdown depends on which subject chips are currently chosen.
+  const activateToggle = document.getElementById('student-activate-sub-toggle');
+  if (activateToggle) activateToggle.addEventListener('change', refreshCreateSubActivation);
+  const typeSel = document.getElementById('student-is-individual');
+  if (typeSel) typeSel.addEventListener('change', refreshCreateSubActivation);
+  const priceSel = document.getElementById('student-price-type');
+  if (priceSel) priceSel.addEventListener('change', refreshCreateSubActivation);
 
   document.getElementById('btn-confirm-cancel').addEventListener('click', closeConfirm);
   document.getElementById('btn-confirm-ok').addEventListener('click', () => {
@@ -378,6 +623,57 @@ function initStudents() {
 }
 
 let studentDetailId = null;
+// Working copy of the student's subjects while the detail modal is open —
+// the chip editor mutates this in place. `originalStudentSubjects` is the
+// snapshot at open time, used by saveStudentDetail() to compute the insert/
+// delete diff against student_subjects.
+let sdSubjects = [];
+let originalStudentSubjects = [];
+
+// Render (or re-render) the subject chip editor inside the student-detail
+// modal. Each chip has an ✕ to remove; the trailing <select> lists remaining
+// dictionary subjects, and picking one adds it to sdSubjects.
+function renderSdSubjectsEditor() {
+  const wrap = document.getElementById('sd-subjects-editor');
+  if (!wrap) return;
+  const remaining = subjectsList
+    .map(s => s.name)
+    .filter(name => !sdSubjects.includes(name));
+  const chips = sdSubjects.map(name => `
+    <span class="sd-subject-chip" data-name="${escapeHtml(name)}">
+      ${escapeHtml(name)}
+      <button type="button" class="sd-subject-chip-remove" data-remove="${escapeHtml(name)}" title="Убрать">×</button>
+    </span>`).join('');
+  const addSelect = remaining.length
+    ? `<select class="sd-subjects-add">
+         <option value="">+ Добавить предмет</option>
+         ${remaining.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}
+       </select>`
+    : '<span class="sd-subjects-add-full">Все предметы уже выбраны</span>';
+  wrap.innerHTML = chips + addSelect;
+
+  // Persist the current list into the hidden input — modal-guard snapshots
+  // input values, so this is how it detects "the subjects list changed".
+  const hidden = document.getElementById('sd-subjects-hidden');
+  if (hidden) hidden.value = sdSubjects.join('|');
+
+  wrap.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const name = btn.dataset.remove;
+      sdSubjects = sdSubjects.filter(s => s !== name);
+      renderSdSubjectsEditor();
+    });
+  });
+  const addSel = wrap.querySelector('.sd-subjects-add');
+  if (addSel) {
+    addSel.addEventListener('change', () => {
+      const name = addSel.value;
+      if (!name) return;
+      if (!sdSubjects.includes(name)) sdSubjects.push(name);
+      renderSdSubjectsEditor();
+    });
+  }
+}
 
 async function openStudentDetail(studentId) {
   studentDetailId = studentId;
@@ -385,7 +681,7 @@ async function openStudentDetail(studentId) {
   // Saves ~2 round-trips on slow connections.
   const [studentRes, lessonsRes, paymentsRes, missedRes] = await Promise.all([
     db.from('students')
-      .select('*, teacher:profiles!teacher_id(full_name, color)')
+      .select('*, teacher:profiles!teacher_id(full_name, color), student_subjects(subject_id, subjects(id, name))')
       .eq('id', studentId).single(),
     db.from('lessons')
       .select('id, start_time, end_time, status, subject, week_start, lesson_students!inner(student_id)')
@@ -404,6 +700,14 @@ async function openStudentDetail(studentId) {
   ]);
   const student = studentRes.data;
   if (!student) { showToast('Ученик не найден', 'error'); return; }
+  // Flatten the junction join the same way loadStudents() does — otherwise
+  // the chip editor falls back to the single legacy students.subject column
+  // and shows only ONE subject even when the junction has more, which then
+  // causes duplicate-key errors on save when the user adds "another" subject
+  // that in fact already exists in student_subjects.
+  student.subjects = (student.student_subjects || [])
+    .map(ss => ss.subjects?.name)
+    .filter(Boolean);
   const lessons = lessonsRes.data;
   const payments = paymentsRes.data;
 
@@ -469,15 +773,12 @@ async function openStudentDetail(studentId) {
   });
 
   // Build select options
-  const subjectOptions = subjectsList.map(s =>
-    `<option value="${escapeHtml(s.name)}" ${s.name === (student.subject || '') ? 'selected' : ''}>${escapeHtml(s.name)}</option>`
-  ).join('');
   const gradeOptions = [5,6,7,8,9,10,11].map(g =>
     `<option value="${g}" ${g === (student.grade || 11) ? 'selected' : ''}>${g}</option>`
   ).join('');
-  const sourceOptions = [
-    ['','— Не указан —'],['auto','Авто'],['youla','Юла'],['recommend','Рекомендации'],['vk','ВКонтакте'],['other','Другое']
-  ].map(([v,l]) => `<option value="${v}" ${(student.source||'') === v ? 'selected' : ''}>${l}</option>`).join('');
+  // "Источник" стал свободным текстовым полем — раньше был select с фиксированным
+  // списком (auto/youla/recommend/vk/other), но администратору полезнее иметь
+  // возможность записать любой источник ("Instagram", "мама подруги", "Avito", …).
 
   const body = document.getElementById('student-detail-body');
 
@@ -493,7 +794,14 @@ async function openStudentDetail(studentId) {
           <div class="form-group"><label>Фамилия</label><input type="text" id="sd-last-name" value="${escapeHtml(student.last_name || '')}" maxlength="30"></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Предмет</label><select id="sd-subject">${subjectOptions}</select></div>
+          <div class="form-group">
+            <label>Предметы</label>
+            <div id="sd-subjects-editor" class="sd-subjects-editor"></div>
+            <!-- Hidden input keeps the modal-guard "dirty" logic happy: chips
+                 are a JS-state list, not a real form field, so we serialise the
+                 list here and modal-guard snapshots it like any other value. -->
+            <input type="hidden" id="sd-subjects-hidden" data-guard-key="sd-subjects">
+          </div>
           <div class="form-group"><label>Класс</label><select id="sd-grade">${gradeOptions}</select></div>
         </div>
         <div class="form-row">
@@ -512,7 +820,7 @@ async function openStudentDetail(studentId) {
           </div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Источник</label><select id="sd-source">${sourceOptions}</select></div>
+          <div class="form-group"><label>Источник</label><input type="text" id="sd-source" value="${escapeHtml(student.source || '')}" placeholder="откуда пришёл (Avito, ВК, …)" maxlength="60"></div>
         </div>
         <div class="form-row">
           <div class="form-group"><label>ФИО родителя</label><input type="text" id="sd-parent-name" value="${escapeHtml(student.parent_name || '')}" placeholder="Иванова Мария Сергеевна"></div>
@@ -631,7 +939,16 @@ async function openStudentDetail(studentId) {
   document.getElementById('student-detail-title').textContent =
     `${student.first_name} ${student.last_name}`;
 
+  // Snapshot the student's current subjects into the module-level array —
+  // this is what the chip editor mutates, and what saveStudentDetail() diffs
+  // against `originalStudentSubjects` to compute inserts/deletes.
+  sdSubjects = Array.isArray(student.subjects) && student.subjects.length
+    ? [...student.subjects]
+    : (student.subject ? [student.subject] : []);
+  originalStudentSubjects = [...sdSubjects];
+
   body.innerHTML = html;
+  renderSdSubjectsEditor();
 
   body.querySelectorAll('[data-approve]').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -719,11 +1036,16 @@ async function openStudentDetail(studentId) {
   });
 
   document.getElementById('student-detail-overlay').classList.add('active');
+  // Snapshot the form now that all fields carry their loaded initial values.
+  // Any subsequent user edit is what the guard compares against on close.
+  markPristine('student-detail-overlay');
 }
 
 function closeStudentDetail() {
-  document.getElementById('student-detail-overlay').classList.remove('active');
-  studentDetailId = null;
+  guardClose('student-detail-overlay', () => {
+    document.getElementById('student-detail-overlay').classList.remove('active');
+    studentDetailId = null;
+  });
 }
 
 async function saveStudentDetail() {
@@ -762,26 +1084,72 @@ async function saveStudentDetail() {
   if (btn && btn.disabled) return;
   if (btn) btn.disabled = true;
   try {
+    // Legacy fallback: keep students.subject as the first selected subject
+    // so any old code path reading the single-value column still gets a
+    // sensible answer. Empty list → null.
+    const primarySubject = sdSubjects[0] || null;
     const update = {
       first_name: firstName,
       last_name: lastName,
-      subject: document.getElementById('sd-subject').value,
+      subject: primarySubject,
       grade: Number.isFinite(grade) ? grade : null,
       is_individual: typeVal === 'true' || typeVal === 'online',
       is_online: typeVal === 'online',
       price_type: document.getElementById('sd-price-type').value,
-      source: document.getElementById('sd-source').value || null,
+      source: (document.getElementById('sd-source').value || '').trim() || null,
       parent_name: parentName || null,
       parent_phone: parentPhone || null,
       notes: notes || null
     };
     const { error } = await db.from('students').update(update).eq('id', studentDetailId);
     if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
+
+    // === Diff student_subjects: insert added, delete removed ===
+    // We compare by subject NAME (what the UI works with) and translate to
+    // subject_id via subjectsList — since the junction table uses uuid FKs.
+    const nameToId = {};
+    subjectsList.forEach(s => { nameToId[s.name] = s.id; });
+    const added   = sdSubjects.filter(n => !originalStudentSubjects.includes(n));
+    const removed = originalStudentSubjects.filter(n => !sdSubjects.includes(n));
+
+    if (added.length) {
+      const rows = added
+        .map(name => nameToId[name] ? { student_id: studentDetailId, subject_id: nameToId[name] } : null)
+        .filter(Boolean);
+      if (rows.length) {
+        // upsert instead of insert — an "added" subject may already exist in
+        // the junction table (e.g. left over from a failed earlier save),
+        // and the unique (student_id, subject_id) constraint would raise
+        // "duplicate key value" on plain insert. ignoreDuplicates keeps the
+        // save idempotent.
+        const { error: insErr } = await db.from('student_subjects')
+          .upsert(rows, { onConflict: 'student_id,subject_id', ignoreDuplicates: true });
+        if (insErr) { showToast('Ошибка добавления предметов: ' + insErr.message, 'error'); return; }
+      }
+    }
+    if (removed.length) {
+      const idsToDrop = removed.map(n => nameToId[n]).filter(Boolean);
+      if (idsToDrop.length) {
+        const { error: delErr } = await db.from('student_subjects')
+          .delete()
+          .eq('student_id', studentDetailId)
+          .in('subject_id', idsToDrop);
+        if (delErr) { showToast('Ошибка удаления предметов: ' + delErr.message, 'error'); return; }
+      }
+    }
+
     // Sync local state so renderStudents() picks up the change without a full reload.
     const idx = state.students.findIndex(s => s.id === studentDetailId);
-    if (idx !== -1) state.students[idx] = { ...state.students[idx], ...update };
+    if (idx !== -1) {
+      state.students[idx] = {
+        ...state.students[idx],
+        ...update,
+        subjects: [...sdSubjects]
+      };
+    }
     if (typeof cacheSet === 'function') cacheSet('students', state.students);
     showToast('Сохранено', 'success');
+    markPristine('student-detail-overlay');
     closeStudentDetail();
     renderStudents(document.getElementById('student-search').value);
   } finally {

@@ -153,11 +153,14 @@ function openPricingModal(pricing = null) {
   document.getElementById('pricing-commission').value = pricing?.commission || '';
   document.getElementById('btn-delete-pricing').style.display = pricing ? 'block' : 'none';
   document.getElementById('pricing-overlay').classList.add('active');
+  markPristine('pricing-overlay');
 }
 
 function closePricingModal() {
-  document.getElementById('pricing-overlay').classList.remove('active');
-  editingPricingId = null;
+  guardClose('pricing-overlay', () => {
+    document.getElementById('pricing-overlay').classList.remove('active');
+    editingPricingId = null;
+  });
 }
 
 async function savePricing() {
@@ -194,6 +197,7 @@ async function savePricing() {
     return;
   }
 
+  markPristine('pricing-overlay');
   closePricingModal();
   showToast('Тариф сохранён', 'success');
   await loadPricing();
@@ -202,6 +206,7 @@ async function savePricing() {
 
 async function deletePricingEntry() {
   if (!editingPricingId) return;
+  markPristine('pricing-overlay');
   const id = editingPricingId; closePricingModal();
   showConfirm('Удалить тариф?', async () => {
     await db.from('pricing').delete().eq('id', id);
@@ -901,12 +906,18 @@ async function openReasonModal(cancellationId, editable) {
   document.getElementById('btn-cancel-reason').textContent = editable ? 'Отмена' : 'Закрыть';
 
   document.getElementById('reason-overlay').classList.add('active');
+  // Only guard editable sessions — a read-only reason view has no "unsaved
+  // changes" concept and the extra confirm dialog would only annoy the user.
+  if (editable) markPristine('reason-overlay');
+  else clearPristine('reason-overlay');
 }
 
 function closeReasonModal() {
-  document.getElementById('reason-overlay').classList.remove('active');
-  document.getElementById('reason-image-input').value = '';
-  reasonCtx = null;
+  guardClose('reason-overlay', () => {
+    document.getElementById('reason-overlay').classList.remove('active');
+    document.getElementById('reason-image-input').value = '';
+    reasonCtx = null;
+  });
 }
 
 async function refreshReasonImagePreview() {
@@ -1034,6 +1045,7 @@ async function saveReason() {
     if (reasonCtx.studentId) await recomputeSubscriptionsByStudent(reasonCtx.studentId);
 
     showToast('Причина сохранена', 'success');
+    markPristine('reason-overlay');
     closeReasonModal();
     await loadPayroll();
   } catch (e) {

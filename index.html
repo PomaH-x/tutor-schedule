@@ -545,12 +545,15 @@
           <button class="btn-modal-close" id="btn-modal-close">×</button>
         </div>
         <div class="modal-body">
-          <input type="text" id="student-first-name" placeholder="Имя">
-          <input type="text" id="student-last-name" placeholder="Фамилия">
+          <div class="form-row">
+            <div class="form-group"><label>Имя</label><input type="text" id="student-first-name" placeholder="Имя" maxlength="30"></div>
+            <div class="form-group"><label>Фамилия</label><input type="text" id="student-last-name" placeholder="Фамилия" maxlength="30"></div>
+          </div>
           <div class="form-row">
             <div class="form-group">
-              <label>Предмет</label>
-              <select id="student-subject"></select>
+              <label>Предметы</label>
+              <div id="student-subjects-editor" class="sd-subjects-editor"></div>
+              <input type="hidden" id="student-subjects-hidden" data-guard-key="student-subjects">
             </div>
             <div class="form-group">
               <label>Класс</label>
@@ -582,7 +585,43 @@
               </select>
             </div>
           </div>
-          <textarea id="student-notes" placeholder="Примечание (опционально)" rows="2"></textarea>
+          <div class="form-row">
+            <div class="form-group"><label>Источник</label><input type="text" id="student-source" placeholder="откуда пришёл (Avito, ВК, …)" maxlength="60"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>ФИО родителя</label><input type="text" id="student-parent-name" placeholder="Иванова Мария Сергеевна" maxlength="60"></div>
+            <div class="form-group"><label>Телефон родителя</label><input type="text" id="student-parent-phone" placeholder="+7 (999) 000-00-00"></div>
+          </div>
+          <div class="form-group"><label>Примечание</label><textarea id="student-notes" rows="2" placeholder="Опционально"></textarea></div>
+
+          <!-- Optional: activate a subscription right away. Toggled off by
+               default. When on, the picker below appears with tariffs
+               filtered to the student's format (group/individual/online +
+               price_type) and constrained to the subjects they have. -->
+          <div class="create-sub-section">
+            <label class="create-sub-toggle">
+              <input type="checkbox" id="student-activate-sub-toggle">
+              <span>Активировать абонемент сразу</span>
+            </label>
+            <div id="student-activate-sub-block" style="display:none">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Предмет абонемента</label>
+                  <select id="create-sub-subject"></select>
+                </div>
+                <div class="form-group">
+                  <label>Дата начала</label>
+                  <input type="date" id="create-sub-start">
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Тариф</label>
+                <div id="create-sub-options" class="create-sub-options">
+                  <div class="create-sub-empty">Тарифов для выбранного типа занятия / цены пока нет.</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn-danger" id="btn-delete-student" style="display:none">Удалить</button>
@@ -745,6 +784,25 @@
       </div>
     </div>
 
+    <!-- "Which subject?" picker — shown on top of the lesson modal when
+         adding a student who has more than one subject. z-index 200 (like
+         confirm-overlay) so it stacks above lesson-overlay (z-index 100). -->
+    <div id="subject-picker-overlay" class="modal-overlay">
+      <div class="modal modal-sm" style="max-width:340px">
+        <div class="modal-header">
+          <h3 id="subject-picker-title">Какой предмет?</h3>
+        </div>
+        <div class="modal-body" style="padding:16px">
+          <div id="subject-picker-options" class="subject-picker-options"></div>
+        </div>
+        <div class="modal-footer">
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-subject-picker-cancel">Отмена</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="reason-overlay" class="modal-overlay">
       <div class="modal modal-sm" style="max-width:400px">
         <div class="modal-header">
@@ -889,6 +947,7 @@
   <script src="modules/config.js"></script>
   <script src="modules/state.js"></script>
   <script src="modules/cache.js"></script>
+  <script src="modules/modal-guard.js"></script>
   <script src="modules/auth.js"></script>
   <script src="modules/toast.js"></script>
   <script src="modules/schedule.js"></script>

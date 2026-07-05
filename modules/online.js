@@ -244,10 +244,13 @@ function openOnlineCreateModal() {
   document.getElementById('online-end').value = '16:00';
   loadOnlineStudents();
   document.getElementById('online-create-overlay').classList.add('active');
+  markPristine('online-create-overlay');
 }
 
 function closeOnlineModal() {
-  document.getElementById('online-create-overlay').classList.remove('active');
+  guardClose('online-create-overlay', () => {
+    document.getElementById('online-create-overlay').classList.remove('active');
+  });
 }
 
 async function loadOnlineStudents() {
@@ -294,6 +297,7 @@ async function saveOnlineLesson() {
   // card and syncOnlinePinnedToWeeks fills +2 weeks ahead automatically.
   const weeks = [currentWs];
 
+  markPristine('online-create-overlay');
   closeOnlineModal();
 
   for (const weekStart of weeks) {

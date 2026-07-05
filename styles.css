@@ -2997,6 +2997,120 @@ input, textarea, select {
   color: var(--text-secondary);
 }
 
+/* Chips: subjects list on the student card. Wraps to multiple lines when a
+   student has many subjects. Compact enough that a card with one subject
+   still looks visually equivalent to the pre-multi-subject layout. */
+.student-subject-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.student-subject-chip {
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* ===== Subject chip editor (student detail modal) ===== */
+/* Editable list of subjects a student attends. Chips are removable pills,
+   the trailing <select> lets you add another one from the dictionary. */
+.sd-subjects-editor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input, var(--bg-elevated));
+  min-height: 40px;
+}
+.sd-subject-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 2px 4px 2px 10px;
+  line-height: 1.6;
+}
+.sd-subject-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 50%;
+}
+.sd-subject-chip-remove:hover {
+  background: var(--bg-surface);
+  color: var(--danger);
+}
+.sd-subjects-add {
+  flex: 0 0 auto;
+  min-width: 160px;
+  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+.sd-subjects-add-full {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 2px 8px;
+}
+
+/* ===== Create-student modal: "activate subscription" section ===== */
+/* Optional block that appears at the bottom of the "Add student" form when
+   the teacher wants to activate a subscription right at creation. Kept
+   visually separated with a top border so it reads as a distinct step. */
+.create-sub-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+.create-sub-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 6px 0;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.create-sub-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+.create-sub-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.create-sub-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  text-align: center;
+}
+
 .student-card-meta {
   display: flex;
   gap: 12px;
@@ -3020,6 +3134,30 @@ input, textarea, select {
 #confirm-overlay,
 #cancel-confirm-overlay {
   z-index: 200;
+}
+
+/* Subject picker sits on top of the lesson modal — same z-index as confirm
+   dialogs. Its options are big tap-targets so it works well on mobile. */
+#subject-picker-overlay { z-index: 200; }
+.subject-picker-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.subject-picker-option {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
+}
+.subject-picker-option:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
 .modal-overlay.active {
@@ -3167,6 +3305,17 @@ input, textarea, select {
   display: flex;
   gap: 8px;
   margin-left: auto;
+}
+
+/* Equal-width buttons in the confirm dialogs (delete confirmations, unsaved-
+   changes prompts, etc). Without flex:1 the "Отмена" button would be much
+   narrower than a long danger label like "Закрыть без сохранения", which
+   looks unbalanced. */
+#confirm-overlay .modal-footer button,
+#cancel-confirm-overlay .modal-footer button {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: normal;
 }
 
 .btn-secondary {

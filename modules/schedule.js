@@ -2424,7 +2424,7 @@ async function loadLessons() {
 
   showScheduleSkeleton(); // shimmer placeholder if we have nothing to show
   const { data, error } = await db.from('lessons')
-    .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), lesson_students(student_id, student:students(first_name, last_name, subject, is_individual, is_online, price_type)), original_start_time, original_end_time, transferred_from_id')
+    .select('*, teacher:profiles!teacher_id(short_name, color, full_name, max_group_size), lesson_students(student_id, subject_id, student:students(first_name, last_name, subject, is_individual, is_online, price_type)), original_start_time, original_end_time, transferred_from_id')
     .eq('week_start', ws).eq('status', 'active');
   if (error) {
     // Toast only if we have NOTHING on screen for this week
@@ -2490,9 +2490,24 @@ async function loadLessons() {
 function buildModalTitle(di, room, sf, st) { return `${DAYS_FULL[di]} · ${ROOM_FULL[room - 1]} · ${slotToTime(sf)}–${slotToTime(st)}`; }
 
 async function loadTeacherStudentsForModal(tid) {
-  const { data } = await db.from('students').select('id, first_name, last_name, subject, is_individual, is_online, price_type').eq('teacher_id', tid).order('first_name');
+  const { data } = await db.from('students')
+    .select('id, first_name, last_name, subject, is_individual, is_online, price_type, student_subjects(subject_id, subjects(id, name))')
+    .eq('teacher_id', tid).order('first_name');
   const seen = new Set();
   allTeacherStudents = (data || []).filter(s => { if (seen.has(s.id)) return false; seen.add(s.id); return true; });
+  // Flatten junction join into a plain [{id, name}] per student — used by
+  // the "which subject?" picker when the student has more than one.
+  allTeacherStudents.forEach(s => {
+    s.subjectList = (s.student_subjects || [])
+      .map(ss => ss.subjects)
+      .filter(Boolean);
+    // Legacy fallback: if the junction is empty but the old text column has
+    // something, look up its id from the dictionary so the picker still works.
+    if (s.subjectList.length === 0 && s.subject && typeof subjectsList !== 'undefined') {
+      const found = subjectsList.find(sj => sj.name === s.subject);
+      if (found) s.subjectList = [{ id: found.id, name: found.name }];
+    }
+  });
 
   // Read active subscriptions (no rebind/recompute here — those are heavy and run only
   // in openStudentDetail / when lessons actually change. Reading is enough for the modal.)
@@ -2540,6 +2555,47 @@ async function loadTeacherStudentsForModal(tid) {
   });
 }
 
+// Which subject was assigned to each currently-selected student in the lesson
+// modal. Lives in state.lessonModal.selectedSubjects (Map<student_id,
+// subject_id>) — mirrors selectedIds. Populated at open time (for edit) or
+// as the teacher picks students (for create).
+
+// Show the "Which subject?" mini-modal on top of the lesson modal.
+// options: [{id, name}] — subjects available for this student.
+// Callback receives the chosen subject id (never null; cancel just closes).
+function showSubjectPicker(studentName, options, onPick) {
+  const overlay = document.getElementById('subject-picker-overlay');
+  const listWrap = document.getElementById('subject-picker-options');
+  document.getElementById('subject-picker-title').textContent =
+    `Какой предмет для ${studentName}?`;
+  listWrap.innerHTML = options
+    .map(o => `<button type="button" class="subject-picker-option" data-id="${o.id}">${escapeHtml(o.name)}</button>`)
+    .join('');
+  const close = () => overlay.classList.remove('active');
+  listWrap.querySelectorAll('.subject-picker-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id;
+      close();
+      onPick(id);
+    });
+  });
+  document.getElementById('btn-subject-picker-cancel').onclick = close;
+  overlay.classList.add('active');
+}
+
+// Decide the subject for a student the teacher is about to add. If they have
+// one subject we assign silently; more than one → show the picker; none →
+// error toast (should be caught earlier by student creation validation).
+function pickSubjectForStudent(student, onPick) {
+  const opts = student.subjectList || [];
+  if (opts.length === 0) {
+    showToast(`У ${student.first_name} ${student.last_name} нет предметов. Добавьте в карточке.`, 'error');
+    return;
+  }
+  if (opts.length === 1) { onPick(opts[0].id); return; }
+  showSubjectPicker(`${student.first_name} ${student.last_name}`, opts, onPick);
+}
+
 function openLessonModal(sel) {
   document.getElementById('lesson-modal-title').textContent = buildModalTitle(sel.day, sel.room, sel.slotFrom, sel.slotTo);
   document.getElementById('btn-delete-lesson').style.display = 'none';
@@ -2547,7 +2603,11 @@ function openLessonModal(sel) {
   document.getElementById('lesson-student-search').parentElement.style.display = 'block';
   document.getElementById('lesson-current-students').innerHTML = '';
   document.getElementById('lesson-current-students').style.display = 'none';
-  state.lessonModal = { mode: 'create', day: sel.day, room: sel.room, slotFrom: sel.slotFrom, slotTo: sel.slotTo, selectedIds: new Set() };
+  state.lessonModal = {
+    mode: 'create', day: sel.day, room: sel.room, slotFrom: sel.slotFrom, slotTo: sel.slotTo,
+    selectedIds: new Set(),
+    selectedSubjects: new Map() // student_id → subject_id
+  };
   loadTeacherStudentsForModal(state.user.id).then(() => {
     renderLessonStudentsList('');
     document.getElementById('lesson-overlay').classList.add('active');
@@ -2573,7 +2633,14 @@ async function openEditLessonModal(lesson) {
   document.getElementById('btn-save-lesson').style.display = canEdit ? 'block' : 'none';
   document.getElementById('lesson-student-search').parentElement.style.display = canEdit ? 'block' : 'none';
   const selectedIds = new Set((lesson.lesson_students || []).map(ls => ls.student_id));
-  state.lessonModal = { mode: 'edit', lessonId: lesson.id, teacherId: lesson.teacher_id, day: di, room: lesson.room, slotFrom: ss, slotTo: es, selectedIds };
+  // Load the subject_id assigned to each student — this is the multi-subject
+  // storage (`lesson_students.subject_id`) that replaces the old "one subject
+  // per lesson" model.
+  const selectedSubjects = new Map();
+  (lesson.lesson_students || []).forEach(ls => {
+    if (ls.subject_id) selectedSubjects.set(ls.student_id, ls.subject_id);
+  });
+  state.lessonModal = { mode: 'edit', lessonId: lesson.id, teacherId: lesson.teacher_id, day: di, room: lesson.room, slotFrom: ss, slotTo: es, selectedIds, selectedSubjects };
   // Show overlay immediately (no wait for DB load) — populate lists once loaded
   document.getElementById('lesson-overlay').classList.add('active');
   document.getElementById('lesson-student-search').value = '';
@@ -2595,12 +2662,19 @@ function renderCurrentStudents() {
   const selected = allTeacherStudents.filter(s => m.selectedIds.has(s.id));
   if (selected.length === 0) { ct.style.display = 'none'; ct.innerHTML = ''; return; }
   ct.style.display = 'block';
-  const sl = (s) => s || '';
+  const nameToId = {};
+  if (typeof subjectsList !== 'undefined') subjectsList.forEach(sj => { nameToId[sj.id] = sj.name; });
+  // Format: "Егор Мирошенко · ЕГЭ Информатика" — chosen subject as inline
+  // separator. Falls back to legacy s.subject if lesson_students.subject_id
+  // hasn't been set yet (very old rows before the migration).
   ct.innerHTML = `<label class="lesson-label">Текущие ученики</label>` + selected.map(s => {
     const cancelBtn = canEdit && (m.mode === 'edit') ? `<button class="cs-cancel" data-student-id="${s.id}" title="Отменить ученика">✕</button>` : '';
+    const subjectId = m.selectedSubjects && m.selectedSubjects.get(s.id);
+    const subjectName = subjectId ? nameToId[subjectId] : (s.subject || '');
+    const subjectPart = subjectName ? ` · ${escapeHtml(subjectName)}` : '';
     return `<div class="current-student-row" data-student-id="${s.id}">
       ${canEdit && (m.mode === 'edit' || m.mode === 'rec-edit') ? '<button class="cs-transfer-btn" type="button" title="Перенести ученика"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>' : ''}
-      <span class="cs-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)} <span class="lesson-student-subject">${escapeHtml(sl(s.subject))}</span>${s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : ''}</span>
+      <span class="cs-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}<span class="lesson-student-subject">${subjectPart}</span>${s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : ''}</span>
       ${cancelBtn}
       ${canEdit ? `<button class="cs-remove" data-student-id="${s.id}" title="Убрать из списка"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>` : ''}
     </div>`;
@@ -2610,7 +2684,9 @@ function renderCurrentStudents() {
     ct.querySelectorAll('.cs-remove').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        m.selectedIds.delete(btn.dataset.studentId);
+        const sid = btn.dataset.studentId;
+        m.selectedIds.delete(sid);
+        if (m.selectedSubjects) m.selectedSubjects.delete(sid);
         renderCurrentStudents();
         renderLessonStudentsList(document.getElementById('lesson-student-search').value.trim());
       });
@@ -2636,6 +2712,7 @@ function renderCurrentStudents() {
             if (idx !== -1) { removedLs = lessonRef.lesson_students[idx]; lessonRef.lesson_students.splice(idx, 1); }
           }
           m.selectedIds.delete(sid);
+          if (m.selectedSubjects) m.selectedSubjects.delete(sid);
           const isEmpty = m.selectedIds.size === 0;
           if (isEmpty && lessonRef) state.lessons = state.lessons.filter(l => l.id !== lessonId);
           renderLessons();
@@ -2852,10 +2929,42 @@ function renderLessonStudentsList(filter) {
           }
           const maxG = getMaxGroup(m.teacherId || state.user.id);
           if (m.selectedIds.size >= maxG) { cb.checked = false; showToast(`Максимум ${maxG} учеников`, 'error'); return; }
-          m.selectedIds.add(id);
-        } else { m.selectedIds.delete(id); }
-        cb.closest('.lesson-student-row').classList.toggle('checked', cb.checked);
-        renderCurrentStudents();
+
+          // Ask which subject if the student has more than one. For a single-
+          // subject student we assign silently; for multi, the mini-modal
+          // pops up (blocking selection until the teacher picks one).
+          // The checkbox is optimistically checked — we roll it back if the
+          // teacher cancels the picker so the visual state matches reality.
+          const student = allStudents.find(s => s.id === id);
+          const opts = (student && student.subjectList) || [];
+          if (opts.length === 0) {
+            cb.checked = false;
+            showToast(`У ${student.first_name} ${student.last_name} нет предметов`, 'error');
+            return;
+          }
+          if (opts.length === 1) {
+            m.selectedIds.add(id);
+            m.selectedSubjects.set(id, opts[0].id);
+            cb.closest('.lesson-student-row').classList.toggle('checked', true);
+            renderCurrentStudents();
+            return;
+          }
+          // Multi-subject: show picker. Roll back checkbox until user commits.
+          showSubjectPicker(`${student.first_name} ${student.last_name}`, opts, (subjectId) => {
+            m.selectedIds.add(id);
+            m.selectedSubjects.set(id, subjectId);
+            cb.closest('.lesson-student-row').classList.toggle('checked', true);
+            renderCurrentStudents();
+          });
+          // If the user closes the picker without picking, they can just try again.
+          // Keep the checkbox unchecked for now so state and UI agree.
+          cb.checked = false;
+        } else {
+          m.selectedIds.delete(id);
+          if (m.selectedSubjects) m.selectedSubjects.delete(id);
+          cb.closest('.lesson-student-row').classList.toggle('checked', false);
+          renderCurrentStudents();
+        }
       });
     });
   }
@@ -2910,17 +3019,33 @@ async function saveLesson() {
   }
 
   if (m.mode === 'create' || m.mode === 'rec-create') {
-    const lessonSubject = selectedStudents.length > 0 ? (selectedStudents[0].subject || null) : null;
-    const { data, error } = await db.from('lessons').insert({ teacher_id: state.user.id, room: m.room, week_start: ws, start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active', subject: lessonSubject }).select().single();
+    // The lessons.subject text column stays as a summary for the grid card —
+    // set to the first attached student's subject. Per-student granularity is
+    // stored in lesson_students.subject_id below.
+    const firstSid = sids[0];
+    const firstSubjectId = firstSid ? m.selectedSubjects.get(firstSid) : null;
+    const firstSubjectName = firstSubjectId
+      ? (subjectsList.find(sj => sj.id === firstSubjectId) || {}).name || null
+      : null;
+    const { data, error } = await db.from('lessons').insert({ teacher_id: state.user.id, room: m.room, week_start: ws, start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active', subject: firstSubjectName }).select().single();
     if (error) { showToast('Ошибка', 'error'); btn.disabled = false; return; }
     if (sids.length > 0) {
-      await db.from('lesson_students').insert(sids.map(sid => ({ lesson_id: data.id, student_id: sid })));
+      const rows = sids.map(sid => ({
+        lesson_id: data.id,
+        student_id: sid,
+        subject_id: m.selectedSubjects.get(sid) || null
+      }));
+      await db.from('lesson_students').insert(rows);
       for (const sid of sids) await attachActiveSubscriptionIfAny(data.id, sid, state.user.id);
     }
     showToast('Занятие создано', 'success');
   } else {
-    const lessonSubject = selectedStudents.length > 0 ? (selectedStudents[0].subject || null) : null;
-    const { error } = await db.from('lessons').update({ room: m.room, start_time: sTime.toISOString(), end_time: eTime.toISOString(), subject: lessonSubject }).eq('id', m.lessonId);
+    const firstSid = sids[0];
+    const firstSubjectId = firstSid ? m.selectedSubjects.get(firstSid) : null;
+    const firstSubjectName = firstSubjectId
+      ? (subjectsList.find(sj => sj.id === firstSubjectId) || {}).name || null
+      : null;
+    const { error } = await db.from('lessons').update({ room: m.room, start_time: sTime.toISOString(), end_time: eTime.toISOString(), subject: firstSubjectName }).eq('id', m.lessonId);
     if (error) { showToast('Ошибка', 'error'); btn.disabled = false; return; }
     // Snapshot subscriptions before deleting links so we can recompute them after
     const { data: oldLinks } = await db.from('lesson_students').select('subscription_id').eq('lesson_id', m.lessonId);
@@ -2928,7 +3053,12 @@ async function saveLesson() {
 
     await db.from('lesson_students').delete().eq('lesson_id', m.lessonId);
     if (sids.length > 0) {
-      await db.from('lesson_students').insert(sids.map(sid => ({ lesson_id: m.lessonId, student_id: sid })));
+      const rows = sids.map(sid => ({
+        lesson_id: m.lessonId,
+        student_id: sid,
+        subject_id: m.selectedSubjects.get(sid) || null
+      }));
+      await db.from('lesson_students').insert(rows);
       for (const sid of sids) await attachActiveSubscriptionIfAny(m.lessonId, sid, state.user.id);
     }
     for (const subId of oldSubIds) await recomputeSubscriptionUsage(subId);

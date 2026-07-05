@@ -66,9 +66,24 @@ let activationCtx = null; // { studentId, student, options }
 
 async function openSubscriptionActivation(studentId) {
   const { data: student } = await db.from('students')
-    .select('id, first_name, last_name, subject, is_individual, is_online, price_type')
+    .select('id, first_name, last_name, subject, is_individual, is_online, price_type, student_subjects(subject_id, subjects(id, name))')
     .eq('id', studentId).single();
   if (!student) { showToast('Ученик не найден', 'error'); return; }
+
+  // Flatten the junction join into a plain [{id, name}] list — that's what
+  // the subject picker below iterates over. Falls back to the legacy single-
+  // value column if the junction is empty.
+  const studentSubjects = (student.student_subjects || [])
+    .map(ss => ss.subjects)
+    .filter(Boolean);
+  if (studentSubjects.length === 0 && student.subject) {
+    const legacy = subjectsList.find(s => s.name === student.subject);
+    if (legacy) studentSubjects.push({ id: legacy.id, name: legacy.name });
+  }
+  if (studentSubjects.length === 0) {
+    showToast('У ученика нет предметов. Добавьте хотя бы один в карточке ученика.', 'error');
+    return;
+  }
 
   // Pull ALL subscription pricing options matching the student's format
   // (group/individual/online + price_type). Duration is chosen inside the form.
@@ -85,10 +100,22 @@ async function openSubscriptionActivation(studentId) {
     return;
   }
 
-  activationCtx = { studentId, student, options };
+  activationCtx = { studentId, student, options, studentSubjects };
 
   document.getElementById('sub-act-student').textContent = `${student.first_name} ${student.last_name}`;
-  document.getElementById('sub-act-subject').textContent = student.subject || '—';
+
+  // "Предмет" — either a plain span (one subject → nothing to pick) or a
+  // dropdown so the teacher can decide which subject this subscription is
+  // for. The chosen name is read back in confirmSubscriptionActivation().
+  const subjWrap = document.getElementById('sub-act-subject');
+  if (studentSubjects.length === 1) {
+    subjWrap.textContent = studentSubjects[0].name;
+  } else {
+    subjWrap.innerHTML = `<select id="sub-act-subject-select">
+      ${studentSubjects.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('')}
+    </select>`;
+  }
+
   const typeLabel = student.is_online ? 'Онлайн' : (student.is_individual ? 'Индивидуальное' : 'Групповое');
   document.getElementById('sub-act-type').textContent = typeLabel;
 
@@ -125,6 +152,7 @@ async function openSubscriptionActivation(studentId) {
 
   document.getElementById('sub-act-start').value = formatDate(new Date());
   document.getElementById('subscription-activation-overlay').classList.add('active');
+  markPristine('subscription-activation-overlay');
 }
 
 function refreshActivationDurationVisibility() {
@@ -141,8 +169,10 @@ function refreshActivationDurationVisibility() {
 }
 
 function closeSubscriptionActivation() {
-  document.getElementById('subscription-activation-overlay').classList.remove('active');
-  activationCtx = null;
+  guardClose('subscription-activation-overlay', () => {
+    document.getElementById('subscription-activation-overlay').classList.remove('active');
+    activationCtx = null;
+  });
 }
 
 async function confirmSubscriptionActivation() {
@@ -151,6 +181,22 @@ async function confirmSubscriptionActivation() {
   if (!pickedRadio) { showToast('Выберите тип абонемента', 'error'); return; }
   const pricing = activationCtx.options.find(o => o.id === pickedRadio.value);
   if (!pricing) return;
+
+  // Which subject is this subscription for?
+  //   - Student with one subject → we baked the name into the span at open time;
+  //     read it directly from activationCtx (no user choice to make).
+  //   - Student with multiple subjects → we injected a <select>; pull the
+  //     chosen value from there.
+  let subjectName;
+  if (activationCtx.studentSubjects.length === 1) {
+    subjectName = activationCtx.studentSubjects[0].name;
+  } else {
+    const subjSel = document.getElementById('sub-act-subject-select');
+    subjectName = subjSel ? subjSel.value : null;
+  }
+  if (!subjectName) { showToast('Выберите предмет абонемента', 'error'); return; }
+  const subjectRec = activationCtx.studentSubjects.find(s => s.name === subjectName);
+  const subjectId = subjectRec ? subjectRec.id : null;
 
   const startDateStr = document.getElementById('sub-act-start').value;
   if (!startDateStr) { showToast('Укажите дату начала', 'error'); return; }
@@ -177,6 +223,7 @@ async function confirmSubscriptionActivation() {
       student_id: activationCtx.studentId,
       teacher_id: state.user.id,
       pricing_id: pricing.id,
+      subject_id: subjectId,
       total_lessons: totalLessons,
       total_transfers: totalTransfers,
       used_lessons: 0,
@@ -216,6 +263,7 @@ async function confirmSubscriptionActivation() {
 
     invalidateSubscriptionCache(activationCtx.studentId);
     const sid = activationCtx.studentId; // snapshot before close clears the context
+    markPristine('subscription-activation-overlay');
     closeSubscriptionActivation();
     showToast('Абонемент активирован', 'success');
     // Reopen the student detail to refresh the panel immediately
@@ -289,23 +337,39 @@ async function recomputeSubscriptionsByIds(ids) {
 // within its validity period — attach. Direct query, no cache, no fallback to expired.
 async function attachActiveSubscriptionIfAny(lessonId, studentId, teacherId) {
   try {
-    const { data: sub } = await db.from('subscriptions')
-      .select('id, status, teacher_id, start_date, end_date')
+    // Read the subject assigned to this student on this specific lesson —
+    // stored on the link row itself now that a lesson can have multiple
+    // students, each on a different subject.
+    const { data: link } = await db.from('lesson_students')
+      .select('subject_id, lesson:lessons(start_time)')
+      .eq('lesson_id', lessonId).eq('student_id', studentId).maybeSingle();
+    if (!link || !link.lesson) return;
+    const linkSubjectId = link.subject_id || null;
+
+    // Pull ALL active subs for this student+teacher — we'll pick the right
+    // one on the client. Ordered so the newest one wins ties.
+    const { data: subs } = await db.from('subscriptions')
+      .select('id, status, teacher_id, start_date, end_date, subject_id')
       .eq('student_id', studentId)
       .eq('teacher_id', teacherId)
       .eq('status', 'active')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (!sub) return;
+      .order('created_at', { ascending: false });
+    if (!subs || subs.length === 0) return;
 
-    const { data: lesson } = await db.from('lessons')
-      .select('start_time').eq('id', lessonId).maybeSingle();
-    if (!lesson) return;
-    const ls = new Date(lesson.start_time);
-    const e = new Date(sub.end_date);
-    e.setHours(23, 59, 59, 999);
-    if (ls < new Date(sub.start_date) || ls > e) return;
+    const ls = new Date(link.lesson.start_time);
+    const inWindow = (sub) => {
+      const e = new Date(sub.end_date); e.setHours(23, 59, 59, 999);
+      return ls >= new Date(sub.start_date) && ls <= e;
+    };
+
+    // Priority selection:
+    //   1. exact subject match (sub.subject_id === link.subject_id),
+    //   2. legacy sub with NULL subject_id (backward compat with pre-reform data).
+    // A sub with subject_id set that DOESN'T match this link's subject is
+    // never chosen — that's the whole point of tying subs to a subject.
+    let sub = subs.find(s => s.subject_id && s.subject_id === linkSubjectId && inWindow(s));
+    if (!sub) sub = subs.find(s => !s.subject_id && inWindow(s));
+    if (!sub) return;
 
     await db.from('lesson_students')
       .update({ subscription_id: sub.id })
@@ -324,19 +388,29 @@ async function attachActiveSubscriptionIfAny(lessonId, studentId, teacherId) {
 async function rebindOrphanLessonsForStudents(studentIds) {
   if (!Array.isArray(studentIds) || studentIds.length === 0) return;
   const { data: subs } = await db.from('subscriptions')
-    .select('id, student_id, teacher_id, start_date, end_date')
+    .select('id, student_id, teacher_id, start_date, end_date, subject_id')
     .in('student_id', studentIds)
     .eq('status', 'active');
+
   for (const sub of (subs || [])) {
     const startIso = sub.start_date + 'T00:00:00';
     const endIso = sub.end_date + 'T23:59:59';
     const { data: orphans } = await db.from('lesson_students')
-      .select('lesson_id, lesson:lessons(id, teacher_id, start_time)')
+      .select('lesson_id, subject_id, lesson:lessons(id, teacher_id, start_time)')
       .eq('student_id', sub.student_id)
       .is('subscription_id', null);
+
+    // Subject gate — same rules as attachLessonsToSubscription (see there).
+    const subjectMatches = (linkSubjectId) => {
+      if (!sub.subject_id) return true;
+      if (!linkSubjectId) return false;
+      return linkSubjectId === sub.subject_id;
+    };
+
     const targetIds = (orphans || [])
       .filter(r => r.lesson && r.lesson.teacher_id === sub.teacher_id)
       .filter(r => r.lesson.start_time >= startIso && r.lesson.start_time <= endIso)
+      .filter(r => subjectMatches(r.subject_id))
       .map(r => r.lesson_id);
     if (targetIds.length === 0) continue;
     await db.from('lesson_students')
@@ -350,19 +424,30 @@ async function rebindOrphanLessonsForStudents(studentIds) {
 // Find lessons of this student in the period (start_date..end_date) that have
 // no subscription bound yet and bind them. Called right after activation.
 async function attachLessonsToSubscription(subscriptionId, studentId, startDateObj) {
-  const { data: sub } = await db.from('subscriptions').select('end_date, teacher_id').eq('id', subscriptionId).single();
+  const { data: sub } = await db.from('subscriptions')
+    .select('end_date, teacher_id, subject_id')
+    .eq('id', subscriptionId).single();
   if (!sub) return;
   const endIso = sub.end_date + 'T23:59:59';
   const startIso = formatDate(startDateObj) + 'T00:00:00';
 
-  // Lessons of this student at this teacher in date window
+  // Read subject_id straight from the junction row rather than translating
+  // lesson.subject (text) — the junction is now the source of truth.
   const { data: ls } = await db.from('lesson_students')
-    .select('lesson_id, subscription_id, lesson:lessons(id, teacher_id, start_time, status)')
+    .select('lesson_id, subscription_id, subject_id, lesson:lessons(id, teacher_id, start_time, status)')
     .eq('student_id', studentId)
     .is('subscription_id', null);
+
+  const subjectMatches = (linkSubjectId) => {
+    if (!sub.subject_id) return true; // legacy sub — attach anything
+    if (!linkSubjectId) return false; // sub is bound to a subject, link has none — skip
+    return linkSubjectId === sub.subject_id;
+  };
+
   const targetIds = (ls || [])
     .filter(r => r.lesson && r.lesson.teacher_id === sub.teacher_id)
     .filter(r => r.lesson.start_time >= startIso && r.lesson.start_time <= endIso)
+    .filter(r => subjectMatches(r.subject_id))
     .map(r => r.lesson_id);
 
   if (targetIds.length === 0) return;
@@ -734,11 +819,14 @@ async function openSubscriptionRefund(subscriptionId) {
   usedInput.oninput = refreshRefundCalc;
 
   document.getElementById('subscription-refund-overlay').classList.add('active');
+  markPristine('subscription-refund-overlay');
 }
 
 function closeSubscriptionRefund() {
-  document.getElementById('subscription-refund-overlay').classList.remove('active');
-  refundCtx = null;
+  guardClose('subscription-refund-overlay', () => {
+    document.getElementById('subscription-refund-overlay').classList.remove('active');
+    refundCtx = null;
+  });
 }
 
 // Round refund up to multiples of 50 — center pays human-friendly amounts in cash
@@ -820,6 +908,7 @@ async function confirmSubscriptionRefund() {
     if (error) throw error;
 
     invalidateSubscriptionCache(sub.student_id);
+    markPristine('subscription-refund-overlay');
     closeSubscriptionRefund();
     showToast(`Возврат оформлен: ${refund} ₽ ученику`, 'success');
 

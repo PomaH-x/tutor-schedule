@@ -49,6 +49,23 @@ async function computeAndSyncCancellations() {
 
   const toInsert = [], toMakeUp = [], toReopen = [];
 
+  // "Concrete" cancellations = those created directly by an action rather than
+  // by this template-vs-actual reconciliation. Two sources:
+  //   - clicking ✕ on a student in the lesson modal (.cs-cancel)
+  //   - cancelling the whole lesson (cancelLesson)
+  // Both write a row with recurring_lesson_id=NULL and lesson_start_time set.
+  // We need to know how many of them exist per student, per week, so we
+  // don't re-issue a template-based cancellation that would duplicate one
+  // that's already recorded. (This was the source of the "prigulschiki from
+  // thin air" — a ✕ click created its row, then computeAndSync built a
+  // second row keyed by recurring_lesson_id, and the student appeared twice.)
+  const concreteCountByStudent = {};
+  (existing || []).forEach(c => {
+    if (!c.recurring_lesson_id && !c.dismissed_at) {
+      concreteCountByStudent[c.student_id] = (concreteCountByStudent[c.student_id] || 0) + 1;
+    }
+  });
+
   for (const sid in recurringByStudent) {
     const rlIds = recurringByStudent[sid];
     const activeCount = (activeByStudent[sid] || []).length;
@@ -59,13 +76,18 @@ async function computeAndSyncCancellations() {
     const totalMissed = cancelledCount + Math.max(0, missedFromAbsence - cancelledCount);
     const missed = Math.max(cancelledCount, missedFromAbsence);
 
+    // Subtract concrete cancellations already on the books — they already cover
+    // that many misses, no need to auto-create recurring-based duplicates.
+    const alreadyConcrete = concreteCountByStudent[sid] || 0;
+    const remainingMissed = Math.max(0, missed - alreadyConcrete);
+
     for (let i = 0; i < rlIds.length; i++) {
       const rlId = rlIds[i];
       const key = `${sid}-${rlId}`;
       const ex = existingMap[key];
       // dismissed_at means an admin manually removed this truant — never recreate / reopen it
       if (ex && ex.dismissed_at) continue;
-      if (i < missed) {
+      if (i < remainingMissed) {
         if (!ex) toInsert.push({ student_id: sid, teacher_id: teacherId, week_start: ws, recurring_lesson_id: rlId, status: 'pending' });
         else if (ex.status === 'made_up') toReopen.push(ex.id);
       } else {

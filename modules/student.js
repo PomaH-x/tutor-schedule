@@ -450,12 +450,15 @@ function openPaymentModal(lessonId, amount, teacherId) {
   document.getElementById('payment-amount').textContent = amount + ' ₽';
   document.querySelectorAll('input[name="payment-method"]').forEach(r => r.checked = false);
   document.getElementById('payment-overlay').classList.add('active');
+  markPristine('payment-overlay');
 }
 
 function closePaymentModal() {
-  document.getElementById('payment-overlay').classList.remove('active');
-  pendingPaymentLessonId = null;
-  pendingPaymentTeacherId = null;
+  guardClose('payment-overlay', () => {
+    document.getElementById('payment-overlay').classList.remove('active');
+    pendingPaymentLessonId = null;
+    pendingPaymentTeacherId = null;
+  });
 }
 
 async function submitPayment() {
@@ -477,6 +480,7 @@ async function submitPayment() {
 
   if (error) { console.error(error); showToast('Ошибка отправки заявки', 'error'); return; }
 
+  markPristine('payment-overlay');
   closePaymentModal();
   showToast('Заявка на оплату отправлена', 'success');
   await renderStudentSchedule();
