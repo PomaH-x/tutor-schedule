@@ -3345,15 +3345,29 @@ input, textarea, select {
   margin-left: auto;
 }
 
-/* Equal-width buttons in the confirm dialogs (delete confirmations, unsaved-
-   changes prompts, etc). Without flex:1 the "Отмена" button would be much
-   narrower than a long danger label like "Закрыть без сохранения", which
-   looks unbalanced. */
-#confirm-overlay .modal-footer button,
-#cancel-confirm-overlay .modal-footer button {
-  flex: 1 1 0;
+/* Buttons in the confirm dialogs.
+   Previous rule set flex:1 on both, which made "Отмена" and long labels like
+   "Закрыть без сохранения" equal-width. Roman wants the main action to take
+   whatever remaining width there is, and "Отмена" to just fit its own text.
+   That way the main action reads as the emphasised choice, not squeezed. */
+#confirm-overlay .modal-footer .btn-secondary,
+#cancel-confirm-overlay .modal-footer .btn-secondary {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+#confirm-overlay .modal-footer .btn-danger,
+#confirm-overlay .modal-footer .btn-primary,
+#cancel-confirm-overlay .modal-footer .btn-danger,
+#cancel-confirm-overlay .modal-footer .btn-primary,
+#cancel-confirm-overlay .modal-footer .btn-cancel-action {
+  flex: 1 1 auto;
   min-width: 0;
-  white-space: normal;
+  white-space: nowrap;
+  /* Shrink the danger label a bit — long copy like "Закрыть без сохранения"
+     looks too heavy at the default 14px; 12px fits without truncation and
+     stays readable at any zoom level. Short labels ("Удалить") still look
+     fine at this size. */
+  font-size: 12px;
 }
 
 .btn-secondary {
@@ -4689,6 +4703,14 @@ input, textarea, select {
 
 /* ===== SUBSCRIPTIONS ===== */
 
+/* Container that holds one or more subscription panels stacked vertically.
+   Without a gap they visually merge into one block when there are 2+ of them. */
+#sd-sub-panel-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 /* Empty state in student card */
 .sub-panel-empty {
   display: flex;
@@ -4723,6 +4745,36 @@ input, textarea, select {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+/* Two-row head for the active-subscription panel (per Roman's UI request):
+     Row 1: subject name (large, on the left) + action buttons (right).
+     Row 2: lesson count · duration · total price (muted).
+   The old single-row layout jammed the subject bange between other pills. */
+.sub-panel-head-two-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sub-panel-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.sub-panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.sub-panel-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.sub-panel-head-row-secondary {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .sub-badge {

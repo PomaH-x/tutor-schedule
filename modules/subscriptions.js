@@ -539,14 +539,20 @@ async function recomputeSubscriptionUsage(subscriptionId) {
       .select('student_id, lesson:lessons(id, status, start_time, end_time)')
       .eq('subscription_id', subscriptionId);
 
-    const now = new Date().toISOString();
     let used = 0;
     const lessonsForTransferCalc = [];
     (links || []).forEach(r => {
       if (!r.lesson) return;
-      if (r.lesson.status === 'active' && r.lesson.end_time < now) used++;
-      // Collect all attached lessons (active or any) to compare with recurring schedule
+      // A scheduled slot consumes a subscription slot regardless of whether
+      // the lesson time has passed yet. Rationale: the teacher plans the
+      // week ahead, and if they've allocated all 4 slots — even to future
+      // dates — the subscription is effectively "full" and shouldn't accept
+      // more auto-attached lessons. Cancelling a lesson reverses this
+      // (status flips to 'cancelled' or the row is deleted), so the usage
+      // stays consistent with what the teacher actually intends.
       if (r.lesson.status === 'active') {
+        used++;
+        // Collect all attached lessons to compare with recurring schedule
         lessonsForTransferCalc.push(r.lesson);
       }
     });
@@ -784,14 +790,23 @@ function renderSubscriptionPanelHTML(sub, studentId) {
     </div>`;
   }
 
+  // Active panel uses a two-row head (per Roman's request):
+  //   Row 1: subject name (or "Абонемент" fallback) + action buttons on the right
+  //   Row 2: lesson count · duration · price
+  // The old "АБОНЕМЕНТ" badge is dropped for active panels — it was tautological.
   return `<div class="sub-panel sub-panel-active">
-    <div class="sub-panel-head">
-      <span class="sub-badge sub-badge-active">Абонемент</span>
-      ${subjectChip}
-      <span class="sub-panel-type">${total} занятий${durLabel ? ' · ' + durLabel : ''}</span>
-      <span class="sub-panel-amount">${sub.paid_amount} ₽</span>
-      <button class="sub-panel-refund" id="btn-refund-sub" data-sub-id="${sub.id}" title="Закрыть с возвратом">⤺</button>
-      <button class="sub-panel-delete" id="btn-delete-sub" data-sub-id="${sub.id}" title="Удалить абонемент">✕</button>
+    <div class="sub-panel-head-two-rows">
+      <div class="sub-panel-head-row">
+        <span class="sub-panel-title">${escapeHtml(subjectName || 'Абонемент')}</span>
+        <div class="sub-panel-actions">
+          <button class="sub-panel-refund" id="btn-refund-sub" data-sub-id="${sub.id}" title="Закрыть с возвратом">⤺</button>
+          <button class="sub-panel-delete" id="btn-delete-sub" data-sub-id="${sub.id}" title="Удалить абонемент">✕</button>
+        </div>
+      </div>
+      <div class="sub-panel-head-row sub-panel-head-row-secondary">
+        <span class="sub-panel-type">${total} занятий${durLabel ? ' · ' + durLabel : ''}</span>
+        <span class="sub-panel-amount">${sub.paid_amount} ₽</span>
+      </div>
     </div>
     <div class="sub-progress-wrap">
       <div class="sub-progress-bar"><div class="sub-progress-fill" style="width:${pct}%"></div></div>
