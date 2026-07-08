@@ -3036,9 +3036,50 @@ async function saveLesson() {
         subject_id: m.selectedSubjects.get(sid) || null
       }));
       await db.from('lesson_students').insert(rows);
-      for (const sid of sids) await attachActiveSubscriptionIfAny(data.id, sid, state.user.id);
     }
+
+    // === Optimistic UI: show the new lesson on the grid IMMEDIATELY and free
+    // the modal, before we chase all the subscription bookkeeping. Without
+    // this, the teacher waits ~1s while attachActiveSubscriptionIfAny (per
+    // student) + recompute + loadLessons run in sequence. The BG chain
+    // reconciles state with the server; if something races, the next
+    // loadLessons wins.
+    const optimisticLesson = {
+      ...data,
+      teacher: {
+        short_name: state.profile?.short_name || '',
+        color: state.profile?.color || null,
+        full_name: state.profile?.full_name || '',
+        max_group_size: state.profile?.max_group_size || 3
+      },
+      lesson_students: sids.map(sid => {
+        const student = allTeacherStudents.find(s => s.id === sid);
+        return {
+          student_id: sid,
+          subject_id: m.selectedSubjects.get(sid) || null,
+          student: student ? {
+            first_name: student.first_name, last_name: student.last_name,
+            subject: student.subject, is_individual: student.is_individual,
+            is_online: student.is_online, price_type: student.price_type
+          } : null
+        };
+      })
+    };
+    state.lessons.push(optimisticLesson);
+    renderLessons();
+    btn.disabled = false;
+    closeLessonModal();
     showToast('Занятие создано', 'success');
+
+    // Background: subscriptions attach + a follow-up loadLessons to fold in
+    // whatever the server calculated (subscription_id, transfer counters).
+    (async () => {
+      try {
+        for (const sid of sids) await attachActiveSubscriptionIfAny(data.id, sid, state.user.id);
+        await loadLessons();
+      } catch (e) { console.error('saveLesson bg:', e); }
+    })();
+    return;
   } else {
     const firstSid = sids[0];
     const firstSubjectId = firstSid ? m.selectedSubjects.get(firstSid) : null;
@@ -3059,12 +3100,48 @@ async function saveLesson() {
         subject_id: m.selectedSubjects.get(sid) || null
       }));
       await db.from('lesson_students').insert(rows);
-      for (const sid of sids) await attachActiveSubscriptionIfAny(m.lessonId, sid, state.user.id);
     }
-    for (const subId of oldSubIds) await recomputeSubscriptionUsage(subId);
+
+    // Optimistic in-place update of the lesson in state — same idea as the
+    // create path above. Rebuild lesson_students from the modal's map so the
+    // grid re-renders without waiting for the network roundtrip.
+    const li = state.lessons.findIndex(l => l.id === m.lessonId);
+    if (li !== -1) {
+      const cur = state.lessons[li];
+      state.lessons[li] = {
+        ...cur,
+        room: m.room,
+        start_time: sTime.toISOString(),
+        end_time: eTime.toISOString(),
+        subject: firstSubjectName,
+        lesson_students: sids.map(sid => {
+          const student = allTeacherStudents.find(s => s.id === sid);
+          return {
+            student_id: sid,
+            subject_id: m.selectedSubjects.get(sid) || null,
+            student: student ? {
+              first_name: student.first_name, last_name: student.last_name,
+              subject: student.subject, is_individual: student.is_individual,
+              is_online: student.is_online, price_type: student.price_type
+            } : null
+          };
+        })
+      };
+    }
+    renderLessons();
+    btn.disabled = false;
+    closeLessonModal();
     showToast('Занятие обновлено', 'success');
+
+    (async () => {
+      try {
+        for (const sid of sids) await attachActiveSubscriptionIfAny(m.lessonId, sid, state.user.id);
+        for (const subId of oldSubIds) await recomputeSubscriptionUsage(subId);
+        await loadLessons();
+      } catch (e) { console.error('saveLesson edit bg:', e); }
+    })();
+    return;
   }
-  btn.disabled = false; closeLessonModal(); await loadLessons();
 }
 
 async function deleteLesson() {

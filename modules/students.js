@@ -426,61 +426,72 @@ async function saveStudent() {
     const { data: newStudent, error } = await db.from('students').insert(record).select().single();
     if (error) { showToast('Ошибка сохранения: ' + error.message, 'error'); return; }
 
-    // Step 2: link every subject via student_subjects. Uses subject NAMES
-    // for the UI and looks up subject_id from subjectsList (dictionary).
-    const nameToId = {};
-    subjectsList.forEach(s => { nameToId[s.name] = s.id; });
-    const rows = createSubjects
-      .map(name => nameToId[name] ? { student_id: newStudent.id, subject_id: nameToId[name] } : null)
-      .filter(Boolean);
-    if (rows.length) {
-      // upsert with ignoreDuplicates keeps this idempotent — should never fire
-      // on a fresh insert, but the guard is cheap.
-      const { error: ssErr } = await db.from('student_subjects')
-        .upsert(rows, { onConflict: 'student_id,subject_id', ignoreDuplicates: true });
-      if (ssErr) {
-        showToast('Ученик добавлен, но предметы не привязались: ' + ssErr.message, 'error');
-        // Don't return — the student itself is saved; the user can add subjects manually
-      }
-    }
-
-    // Step 3: optional subscription activation
-    if (activationData) {
-      const subjectId = nameToId[activationData.subject] || null;
-      const pricing = activationData.pricing;
-      const totalLessons = pricing.format === 'sub4' ? 4 : 8;
-      const totalTransfers = pricing.format === 'sub4' ? 1 : 2;
-      // End date = start + 4 or 8 weeks (matches openSubscriptionActivation semantics)
-      const start = new Date(activationData.startDate);
-      const end = new Date(start);
-      end.setDate(end.getDate() + (pricing.format === 'sub4' ? 28 : 56));
-
-      const subRow = {
-        student_id: newStudent.id,
-        teacher_id: state.user.id,
-        pricing_id: pricing.id,
-        subject_id: subjectId,
-        total_lessons: totalLessons,
-        total_transfers: totalTransfers,
-        used_lessons: 0,
-        transfers_used: 0,
-        paid_amount: pricing.student_price,
-        teacher_share: pricing.teacher_profit,
-        center_share: pricing.commission,
-        start_date: activationData.startDate,
-        end_date: formatDate(end),
-        status: 'active'
-      };
-      const { error: subErr } = await db.from('subscriptions').insert(subRow);
-      if (subErr) {
-        showToast('Ученик добавлен, но абонемент не активирован: ' + subErr.message, 'error');
-      }
-    }
-
+    // === Optimistic UI: close the modal and drop the new student into the
+    // list right after the student itself is persisted. Everything else
+    // (subject links, optional subscription, full reload) chases in the
+    // background — the teacher sees the card immediately instead of waiting
+    // through 2-4 extra network calls.
+    const optimistic = {
+      ...newStudent,
+      subjects: [...createSubjects],
+      teacher: { full_name: state.profile?.full_name || '', short_name: state.profile?.short_name || '' }
+    };
+    state.students.push(optimistic);
+    if (typeof cacheSet === 'function') cacheSet('students', state.students);
     markPristine('modal-overlay');
     closeStudentModal();
     showToast(willActivate ? 'Ученик добавлен, абонемент активирован' : 'Ученик добавлен', 'success');
-    await loadStudents();
+    renderStudents(document.getElementById('student-search').value);
+
+    // Background chain: subjects → subscription → refresh from server.
+    (async () => {
+      try {
+        // Step 2: link every subject via student_subjects. Uses subject NAMES
+        // for the UI and looks up subject_id from subjectsList (dictionary).
+        const nameToId = {};
+        subjectsList.forEach(s => { nameToId[s.name] = s.id; });
+        const rows = createSubjects
+          .map(name => nameToId[name] ? { student_id: newStudent.id, subject_id: nameToId[name] } : null)
+          .filter(Boolean);
+        if (rows.length) {
+          const { error: ssErr } = await db.from('student_subjects')
+            .upsert(rows, { onConflict: 'student_id,subject_id', ignoreDuplicates: true });
+          if (ssErr) console.error('student_subjects insert failed:', ssErr.message);
+        }
+
+        // Step 3: optional subscription activation
+        if (activationData) {
+          const subjectId = nameToId[activationData.subject] || null;
+          const pricing = activationData.pricing;
+          const totalLessons = pricing.format === 'sub4' ? 4 : 8;
+          const totalTransfers = pricing.format === 'sub4' ? 1 : 2;
+          const start = new Date(activationData.startDate);
+          const end = new Date(start);
+          end.setDate(end.getDate() + (pricing.format === 'sub4' ? 28 : 56));
+          const subRow = {
+            student_id: newStudent.id,
+            teacher_id: state.user.id,
+            pricing_id: pricing.id,
+            subject_id: subjectId,
+            total_lessons: totalLessons,
+            total_transfers: totalTransfers,
+            used_lessons: 0,
+            transfers_used: 0,
+            paid_amount: pricing.student_price,
+            teacher_share: pricing.teacher_profit,
+            center_share: pricing.commission,
+            start_date: activationData.startDate,
+            end_date: formatDate(end),
+            status: 'active'
+          };
+          const { error: subErr } = await db.from('subscriptions').insert(subRow);
+          if (subErr) console.error('subscription insert failed:', subErr.message);
+        }
+
+        // Finally: re-fetch to reconcile any server-side computed fields.
+        await loadStudents();
+      } catch (e) { console.error('saveStudent bg:', e); }
+    })();
   } finally {
     btn.disabled = false;
   }
@@ -1144,33 +1155,10 @@ async function saveStudentDetail() {
     const added   = sdSubjects.filter(n => !originalStudentSubjects.includes(n));
     const removed = originalStudentSubjects.filter(n => !sdSubjects.includes(n));
 
-    if (added.length) {
-      const rows = added
-        .map(name => nameToId[name] ? { student_id: studentDetailId, subject_id: nameToId[name] } : null)
-        .filter(Boolean);
-      if (rows.length) {
-        // upsert instead of insert — an "added" subject may already exist in
-        // the junction table (e.g. left over from a failed earlier save),
-        // and the unique (student_id, subject_id) constraint would raise
-        // "duplicate key value" on plain insert. ignoreDuplicates keeps the
-        // save idempotent.
-        const { error: insErr } = await db.from('student_subjects')
-          .upsert(rows, { onConflict: 'student_id,subject_id', ignoreDuplicates: true });
-        if (insErr) { showToast('Ошибка добавления предметов: ' + insErr.message, 'error'); return; }
-      }
-    }
-    if (removed.length) {
-      const idsToDrop = removed.map(n => nameToId[n]).filter(Boolean);
-      if (idsToDrop.length) {
-        const { error: delErr } = await db.from('student_subjects')
-          .delete()
-          .eq('student_id', studentDetailId)
-          .in('subject_id', idsToDrop);
-        if (delErr) { showToast('Ошибка удаления предметов: ' + delErr.message, 'error'); return; }
-      }
-    }
-
-    // Sync local state so renderStudents() picks up the change without a full reload.
+    // === Optimistic UI: state is already updated locally to reflect the save,
+    // and the modal closes immediately. student_subjects diff runs in the
+    // background — it's an idempotent upsert/delete so a retry-safe error
+    // is fine (won't corrupt anything).
     const idx = state.students.findIndex(s => s.id === studentDetailId);
     if (idx !== -1) {
       state.students[idx] = {
@@ -1184,6 +1172,34 @@ async function saveStudentDetail() {
     markPristine('student-detail-overlay');
     closeStudentDetail();
     renderStudents(document.getElementById('student-search').value);
+
+    // Background: student_subjects diff. Errors go to console — the student
+    // record itself is already saved, and the teacher can retry adding/
+    // removing subjects from the card next time it's opened.
+    (async () => {
+      try {
+        if (added.length) {
+          const rows = added
+            .map(name => nameToId[name] ? { student_id: studentDetailId, subject_id: nameToId[name] } : null)
+            .filter(Boolean);
+          if (rows.length) {
+            const { error: insErr } = await db.from('student_subjects')
+              .upsert(rows, { onConflict: 'student_id,subject_id', ignoreDuplicates: true });
+            if (insErr) console.error('student_subjects add failed:', insErr.message);
+          }
+        }
+        if (removed.length) {
+          const idsToDrop = removed.map(n => nameToId[n]).filter(Boolean);
+          if (idsToDrop.length) {
+            const { error: delErr } = await db.from('student_subjects')
+              .delete()
+              .eq('student_id', studentDetailId)
+              .in('subject_id', idsToDrop);
+            if (delErr) console.error('student_subjects remove failed:', delErr.message);
+          }
+        }
+      } catch (e) { console.error('saveStudentDetail bg:', e); }
+    })();
   } finally {
     if (btn) btn.disabled = false;
   }
