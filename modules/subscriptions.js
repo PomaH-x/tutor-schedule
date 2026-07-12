@@ -153,11 +153,17 @@ async function openSubscriptionActivation(studentId) {
   // dropdown so the teacher can decide which subject this subscription is
   // for. The chosen name is read back in confirmSubscriptionActivation().
   const subjWrap = document.getElementById('sub-act-subject');
+  // If the caller preselected a subject (via students.js pendingActivationSubject
+  // — set when the teacher just added a chip and confirmed "activate for it"),
+  // honour it: if it's available, pick it; otherwise fall through to defaults.
+  const preselect = (typeof pendingActivationSubject !== 'undefined')
+    ? pendingActivationSubject : null;
+  if (typeof pendingActivationSubject !== 'undefined') pendingActivationSubject = null; // consume once
   if (availableSubjects.length === 1) {
     subjWrap.textContent = availableSubjects[0].name;
   } else {
     subjWrap.innerHTML = `<select id="sub-act-subject-select">
-      ${availableSubjects.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('')}
+      ${availableSubjects.map(s => `<option value="${escapeHtml(s.name)}" ${preselect === s.name ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}
     </select>`;
   }
 

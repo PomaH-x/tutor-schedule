@@ -594,32 +594,18 @@
           </div>
           <div class="form-group"><label>Примечание</label><textarea id="student-notes" rows="2" placeholder="Опционально"></textarea></div>
 
-          <!-- Optional: activate a subscription right away. Toggled off by
-               default. When on, the picker below appears with tariffs
-               filtered to the student's format (group/individual/online +
-               price_type) and constrained to the subjects they have. -->
+          <!-- Subscription activation section. Toggled by the "+ Абонемент"
+               button below: click it and a new activation card appears in
+               the list. Each card is a (subject × tariff × start_date) combo,
+               and any number of them can be queued up before hitting Save.
+               All get persisted on save; can be removed one by one via ✕. -->
           <div class="create-sub-section">
-            <label class="create-sub-toggle" id="student-activate-sub-toggle-row">
-              <span>Активировать абонемент сразу</span>
-              <input type="checkbox" id="student-activate-sub-toggle">
-            </label>
-            <div id="student-activate-sub-block" style="display:none">
-              <div class="form-row">
-                <div class="form-group">
-                  <label>Предмет абонемента</label>
-                  <select id="create-sub-subject"></select>
-                </div>
-                <div class="form-group">
-                  <label>Дата начала</label>
-                  <input type="date" id="create-sub-start">
-                </div>
-              </div>
-              <div class="form-group">
-                <label>Тариф</label>
-                <div id="create-sub-options" class="create-sub-options">
-                  <div class="create-sub-empty">Тарифов для выбранного типа занятия / цены пока нет.</div>
-                </div>
-              </div>
+            <div id="student-activations-list" class="student-activations-list"></div>
+            <button type="button" id="btn-add-activation" class="btn-add-activation" style="display:none">
+              + Активировать абонемент
+            </button>
+            <div id="student-activations-hint" class="create-sub-empty" style="display:none">
+              Добавьте предметы выше — потом можно будет активировать абонемент.
             </div>
           </div>
         </div>

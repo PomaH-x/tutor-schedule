@@ -223,7 +223,7 @@ function refreshCreateSubjectsEditor() {
     btn.addEventListener('click', () => {
       createSubjects = createSubjects.filter(s => s !== btn.dataset.remove);
       refreshCreateSubjectsEditor();
-      refreshCreateSubActivation(); // subject list changed → refresh subject dropdown
+      refreshActivationsUI(); // subject list changed → drop stale activations, update selects
     });
   });
   const addSel = wrap.querySelector('.sd-subjects-add');
@@ -232,7 +232,7 @@ function refreshCreateSubjectsEditor() {
       const name = addSel.value;
       if (name && !createSubjects.includes(name)) createSubjects.push(name);
       refreshCreateSubjectsEditor();
-      refreshCreateSubActivation();
+      refreshActivationsUI();
     });
   }
 }
@@ -240,68 +240,159 @@ function refreshCreateSubjectsEditor() {
 // Recompute the activation section's contents based on the current form state:
 // the tariff list depends on type/price selectors and the subject select
 // depends on the chosen chip list. Called whenever those inputs change.
-function refreshCreateSubActivation() {
-  const toggle = document.getElementById('student-activate-sub-toggle');
-  const block = document.getElementById('student-activate-sub-block');
-  const row = document.getElementById('student-activate-sub-toggle-row');
-  if (!toggle || !block) return;
-  block.style.display = toggle.checked ? '' : 'none';
-  // Mirror the checked state onto the wrapper label so CSS can highlight it
-  // (accent-tinted background). Same visual language as .lesson-student-row.
-  if (row) row.classList.toggle('checked', toggle.checked);
-  if (!toggle.checked) return;
+// Working list of subscription activations queued up in the "Add student"
+// modal. Each entry is a plain object; refreshActivationsUI() re-renders
+// the block whenever this array changes.
+//   { id: local uid, subject: string, pricingId: string|null, startDate: 'YYYY-MM-DD' }
+let createActivations = [];
+let createActivationsSeq = 0;
 
-  // Subject select — filled from the student's own subjects (createSubjects).
-  const subjSel = document.getElementById('create-sub-subject');
-  if (subjSel) {
-    const prev = subjSel.value;
-    subjSel.innerHTML = createSubjects.length
-      ? createSubjects.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')
-      : '<option value="">(выберите предмет ученика выше)</option>';
-    if (createSubjects.includes(prev)) subjSel.value = prev;
-  }
-
-  // Tariff list — filter pricingList by current student format selectors.
-  const typeVal = document.getElementById('student-is-individual').value;
+function currentTariffOptions() {
+  const typeVal = document.getElementById('student-is-individual')?.value;
   const isIndividual = typeVal === 'true' || typeVal === 'online';
   const isOnline = typeVal === 'online';
-  const priceType = document.getElementById('student-price-type').value;
-
-  const options = (typeof pricingList !== 'undefined' ? pricingList : []).filter(p => {
+  const priceType = document.getElementById('student-price-type')?.value;
+  return (typeof pricingList !== 'undefined' ? pricingList : []).filter(p => {
     if (p.format !== 'sub4' && p.format !== 'sub8') return false;
     if (p.price_type !== priceType) return false;
     if (isOnline) return p.is_online === true;
     return !p.is_online && p.is_individual === isIndividual;
-  });
-
-  const wrap = document.getElementById('create-sub-options');
-  if (!wrap) return;
-  if (options.length === 0) {
-    wrap.innerHTML = '<div class="create-sub-empty">Тарифов для выбранного типа занятия / цены пока нет. Добавьте их в админке.</div>';
-    return;
-  }
-  const sorted = [...options].sort((a, b) => {
+  }).sort((a, b) => {
     if (a.duration_minutes !== b.duration_minutes) return a.duration_minutes - b.duration_minutes;
     return a.format === 'sub4' ? -1 : 1;
   });
-  wrap.innerHTML = sorted.map((o, i) => {
-    const lessons = o.format === 'sub4' ? 4 : 8;
-    const transfers = o.format === 'sub4' ? 1 : 2;
-    const h = o.duration_minutes / 60;
-    const hStr = h === Math.floor(h) ? `${h} ч` : `${h.toString().replace('.', ',')} ч`;
-    return `<label class="sub-act-option">
-      <input type="radio" name="create-sub-format" value="${o.id}" ${i === 0 ? 'checked' : ''}>
-      <div class="sub-act-option-body">
-        <div class="sub-act-option-title">${hStr} · ${lessons} занятий</div>
-        <div class="sub-act-option-meta">
-          <span>Стоимость: <b>${o.student_price} ₽</b></span>
-          <span>Преподавателю: <b>${o.teacher_profit} ₽</b></span>
-          <span>Центру: <b>${o.commission} ₽</b></span>
-          <span>Переносов: <b>${transfers}</b></span>
+}
+
+function tariffLabel(o) {
+  const lessons = o.format === 'sub4' ? 4 : 8;
+  const h = o.duration_minutes / 60;
+  const hStr = h === Math.floor(h) ? `${h} ч` : `${h.toString().replace('.', ',')} ч`;
+  return `${hStr} · ${lessons} занятий · ${o.student_price} ₽`;
+}
+
+// Re-render the activations block: hint / add button visibility + one card per
+// queued activation. Called whenever subjects change, activations change,
+// or format/price-type selectors change.
+function refreshActivationsUI() {
+  const list = document.getElementById('student-activations-list');
+  const addBtn = document.getElementById('btn-add-activation');
+  const hint = document.getElementById('student-activations-hint');
+  if (!list || !addBtn || !hint) return;
+
+  // No subjects → hide the whole section (nothing to activate for)
+  if (createSubjects.length === 0) {
+    list.innerHTML = '';
+    addBtn.style.display = 'none';
+    hint.style.display = createActivations.length === 0 ? '' : 'none';
+    createActivations = []; // clear stale entries whose subject is no longer in the list
+    return;
+  }
+  hint.style.display = 'none';
+
+  // Drop activations whose subject was just removed from createSubjects
+  const before = createActivations.length;
+  createActivations = createActivations.filter(a => createSubjects.includes(a.subject));
+  if (createActivations.length !== before) {
+    // Fall through — we'll re-render with the trimmed list
+  }
+
+  // Which subjects still need an activation slot? A subject can appear only
+  // ONCE in the activations queue (matches the "one active sub per subject"
+  // rule enforced elsewhere).
+  const usedSubjects = new Set(createActivations.map(a => a.subject));
+  const remainingSubjects = createSubjects.filter(s => !usedSubjects.has(s));
+
+  const options = currentTariffOptions();
+
+  list.innerHTML = createActivations.map(a => {
+    // Subject select: this activation's subject + any not-yet-used subjects
+    const subjectChoices = [a.subject, ...remainingSubjects];
+    const subjectOpts = subjectChoices
+      .map(name => `<option value="${escapeHtml(name)}" ${name === a.subject ? 'selected' : ''}>${escapeHtml(name)}</option>`)
+      .join('');
+    const dateVal = a.startDate || formatDate(new Date());
+
+    const tariffBody = options.length === 0
+      ? '<div class="create-sub-empty">Тарифов для выбранного типа занятия / цены пока нет.</div>'
+      : options.map((o, i) => {
+          const checked = a.pricingId ? (o.id === a.pricingId) : (i === 0);
+          return `<label class="sub-act-option">
+            <input type="radio" name="activation-tariff-${a.id}" value="${o.id}" ${checked ? 'checked' : ''}>
+            <span class="sub-act-option-title">${tariffLabel(o)}</span>
+          </label>`;
+        }).join('');
+
+    return `<div class="activation-card" data-id="${a.id}">
+      <div class="activation-card-head">
+        <div class="activation-card-title">Абонемент</div>
+        <button type="button" class="activation-card-remove" data-remove="${a.id}" title="Убрать">×</button>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Предмет</label>
+          <select class="activation-subject" data-id="${a.id}">${subjectOpts}</select>
+        </div>
+        <div class="form-group">
+          <label>Дата начала</label>
+          <input type="date" class="activation-start" data-id="${a.id}" value="${dateVal}">
         </div>
       </div>
-    </label>`;
+      <div class="form-group">
+        <label>Тариф</label>
+        <div class="create-sub-options">${tariffBody}</div>
+      </div>
+    </div>`;
   }).join('');
+
+  // Add button: only show when there are still subjects not covered by any activation
+  addBtn.style.display = remainingSubjects.length > 0 ? '' : 'none';
+
+  // Wire up: remove card
+  list.querySelectorAll('.activation-card-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      createActivations = createActivations.filter(a => a.id !== btn.dataset.remove);
+      refreshActivationsUI();
+    });
+  });
+  // Wire up: change subject
+  list.querySelectorAll('.activation-subject').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const entry = createActivations.find(a => a.id === sel.dataset.id);
+      if (entry) { entry.subject = sel.value; refreshActivationsUI(); }
+    });
+  });
+  // Wire up: change start date
+  list.querySelectorAll('.activation-start').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const entry = createActivations.find(a => a.id === inp.dataset.id);
+      if (entry) entry.startDate = inp.value;
+    });
+  });
+  // Wire up: change tariff radio
+  createActivations.forEach(a => {
+    list.querySelectorAll(`input[name="activation-tariff-${a.id}"]`).forEach(r => {
+      r.addEventListener('change', () => {
+        a.pricingId = r.value;
+      });
+    });
+    // Also seed pricingId if the radio defaulted to the first option
+    if (!a.pricingId && options.length > 0) a.pricingId = options[0].id;
+  });
+}
+
+// Public entry point for the "+ Активировать абонемент" button — appends one
+// blank activation card with the first available subject preselected.
+function addActivationEntry() {
+  const usedSubjects = new Set(createActivations.map(a => a.subject));
+  const nextSubject = createSubjects.find(s => !usedSubjects.has(s));
+  if (!nextSubject) return; // all subjects already have an activation queued
+  createActivations.push({
+    id: 'act-' + (++createActivationsSeq),
+    subject: nextSubject,
+    pricingId: null,
+    startDate: formatDate(new Date())
+  });
+  refreshActivationsUI();
 }
 
 function openStudentModal(title, student = null) {
@@ -324,12 +415,10 @@ function openStudentModal(title, student = null) {
     : (student?.subject ? [student.subject] : []);
   refreshCreateSubjectsEditor();
 
-  // Reset the subscription-activation section
-  const toggle = document.getElementById('student-activate-sub-toggle');
-  if (toggle) toggle.checked = false;
-  const startInput = document.getElementById('create-sub-start');
-  if (startInput) startInput.value = formatDate(new Date());
-  refreshCreateSubActivation();
+  // Reset the subscription-activation list — teacher builds it from scratch
+  // each time a new student is added.
+  createActivations = [];
+  refreshActivationsUI();
 
   document.getElementById('modal-overlay').classList.add('active');
   markPristine('modal-overlay');
@@ -383,21 +472,18 @@ async function saveStudent() {
     }
   }
 
-  // Validate the activation section if enabled
-  const activateToggle = document.getElementById('student-activate-sub-toggle');
-  const willActivate = activateToggle && activateToggle.checked;
-  let activationData = null;
-  if (willActivate) {
-    const subSubject = document.getElementById('create-sub-subject').value;
-    const subStart = document.getElementById('create-sub-start').value;
-    const pickedRadio = document.querySelector('input[name="create-sub-format"]:checked');
-    if (!subSubject) { showToast('Выберите предмет для абонемента', 'error'); return; }
-    if (!subStart) { showToast('Выберите дату начала абонемента', 'error'); return; }
-    if (!pickedRadio) { showToast('Выберите тариф абонемента', 'error'); return; }
-    const pricing = pricingList.find(p => p.id === pickedRadio.value);
+  // Validate the activation list. Each entry is (subject × tariff × date);
+  // missing tariff or date on any entry aborts save with a clear message.
+  const activationEntries = [];
+  for (const a of createActivations) {
+    if (!a.subject) { showToast('Выберите предмет для абонемента', 'error'); return; }
+    if (!a.startDate) { showToast(`Укажите дату начала для абонемента по «${a.subject}»`, 'error'); return; }
+    if (!a.pricingId) { showToast(`Выберите тариф для абонемента по «${a.subject}»`, 'error'); return; }
+    const pricing = pricingList.find(p => p.id === a.pricingId);
     if (!pricing) { showToast('Тариф не найден', 'error'); return; }
-    activationData = { subject: subSubject, startDate: subStart, pricing };
+    activationEntries.push({ subject: a.subject, startDate: a.startDate, pricing });
   }
+  const willActivate = activationEntries.length > 0;
 
   // Double-click guard for the save button
   const btn = document.getElementById('btn-save-student');
@@ -440,7 +526,13 @@ async function saveStudent() {
     if (typeof cacheSet === 'function') cacheSet('students', state.students);
     markPristine('modal-overlay');
     closeStudentModal();
-    showToast(willActivate ? 'Ученик добавлен, абонемент активирован' : 'Ученик добавлен', 'success');
+    // Toast phrasing depends on whether we activated 0, 1, or many subs.
+    const toastMsg = activationEntries.length === 0
+      ? 'Ученик добавлен'
+      : activationEntries.length === 1
+        ? 'Ученик добавлен, абонемент активирован'
+        : `Ученик добавлен, активировано абонементов: ${activationEntries.length}`;
+    showToast(toastMsg, 'success');
     renderStudents(document.getElementById('student-search').value);
 
     // Background chain: subjects → subscription → refresh from server.
@@ -459,13 +551,15 @@ async function saveStudent() {
           if (ssErr) console.error('student_subjects insert failed:', ssErr.message);
         }
 
-        // Step 3: optional subscription activation
-        if (activationData) {
-          const subjectId = nameToId[activationData.subject] || null;
-          const pricing = activationData.pricing;
+        // Step 3: create every queued subscription. Errors go to console —
+        // the student itself is saved by this point; teacher can retry
+        // activation manually from the student card if any single insert fails.
+        for (const entry of activationEntries) {
+          const subjectId = nameToId[entry.subject] || null;
+          const pricing = entry.pricing;
           const totalLessons = pricing.format === 'sub4' ? 4 : 8;
           const totalTransfers = pricing.format === 'sub4' ? 1 : 2;
-          const start = new Date(activationData.startDate);
+          const start = new Date(entry.startDate);
           const end = new Date(start);
           end.setDate(end.getDate() + (pricing.format === 'sub4' ? 28 : 56));
           const subRow = {
@@ -480,12 +574,12 @@ async function saveStudent() {
             paid_amount: pricing.student_price,
             teacher_share: pricing.teacher_profit,
             center_share: pricing.commission,
-            start_date: activationData.startDate,
+            start_date: entry.startDate,
             end_date: formatDate(end),
             status: 'active'
           };
           const { error: subErr } = await db.from('subscriptions').insert(subRow);
-          if (subErr) console.error('subscription insert failed:', subErr.message);
+          if (subErr) console.error(`subscription insert failed (${entry.subject}):`, subErr.message);
         }
 
         // Finally: re-fetch to reconcile any server-side computed fields.
@@ -560,14 +654,14 @@ function initStudents() {
   document.getElementById('btn-delete-student').addEventListener('click', deleteStudent);
 
   // Reactivity inside the "Add student" modal: the tariff list depends on
-  // the student's format selectors (type / price), and the subscription
-  // subject dropdown depends on which subject chips are currently chosen.
-  const activateToggle = document.getElementById('student-activate-sub-toggle');
-  if (activateToggle) activateToggle.addEventListener('change', refreshCreateSubActivation);
+  // the student's format selectors (type / price), and the activations
+  // block reacts to subject and format changes.
+  const addActivationBtn = document.getElementById('btn-add-activation');
+  if (addActivationBtn) addActivationBtn.addEventListener('click', addActivationEntry);
   const typeSel = document.getElementById('student-is-individual');
-  if (typeSel) typeSel.addEventListener('change', refreshCreateSubActivation);
+  if (typeSel) typeSel.addEventListener('change', refreshActivationsUI);
   const priceSel = document.getElementById('student-price-type');
-  if (priceSel) priceSel.addEventListener('change', refreshCreateSubActivation);
+  if (priceSel) priceSel.addEventListener('change', refreshActivationsUI);
 
   document.getElementById('btn-confirm-cancel').addEventListener('click', closeConfirm);
   document.getElementById('btn-confirm-ok').addEventListener('click', () => {
@@ -667,28 +761,125 @@ function renderSdSubjectsEditor() {
     : '<span class="sd-subjects-add-full">Все предметы уже выбраны</span>';
   wrap.innerHTML = chips + addSelect;
 
-  // Persist the current list into the hidden input — modal-guard snapshots
-  // input values, so this is how it detects "the subjects list changed".
-  const hidden = document.getElementById('sd-subjects-hidden');
-  if (hidden) hidden.value = sdSubjects.join('|');
-
   wrap.querySelectorAll('[data-remove]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const name = btn.dataset.remove;
-      sdSubjects = sdSubjects.filter(s => s !== name);
-      renderSdSubjectsEditor();
-    });
+    btn.addEventListener('click', () => removeStudentSubjectImmediate(btn.dataset.remove));
   });
   const addSel = wrap.querySelector('.sd-subjects-add');
   if (addSel) {
     addSel.addEventListener('change', () => {
       const name = addSel.value;
       if (!name) return;
-      if (!sdSubjects.includes(name)) sdSubjects.push(name);
-      renderSdSubjectsEditor();
+      addStudentSubjectImmediate(name);
     });
   }
 }
+
+// Add a subject to the currently-open student's card IMMEDIATELY:
+// write to student_subjects in the DB, sync local state, re-render, then
+// offer to activate a subscription for that subject.
+async function addStudentSubjectImmediate(subjectName) {
+  if (!studentDetailId) return;
+  if (sdSubjects.includes(subjectName)) return; // already present
+  const subjectRec = subjectsList.find(s => s.name === subjectName);
+  if (!subjectRec) { showToast('Предмет не найден в справочнике', 'error'); return; }
+
+  // Optimistic UI: add the chip right away
+  sdSubjects.push(subjectName);
+  renderSdSubjectsEditor();
+
+  // Persist to DB
+  const { error } = await db.from('student_subjects')
+    .upsert(
+      { student_id: studentDetailId, subject_id: subjectRec.id },
+      { onConflict: 'student_id,subject_id', ignoreDuplicates: true }
+    );
+  if (error) {
+    // Roll back on failure so what the user sees matches the DB
+    sdSubjects = sdSubjects.filter(s => s !== subjectName);
+    renderSdSubjectsEditor();
+    showToast('Не удалось добавить предмет: ' + error.message, 'error');
+    return;
+  }
+
+  // Sync the student list cache so the card chip on the students screen
+  // updates without a full reload.
+  const idx = state.students.findIndex(s => s.id === studentDetailId);
+  if (idx !== -1) {
+    const s = state.students[idx];
+    if (!s.subjects) s.subjects = [];
+    if (!s.subjects.includes(subjectName)) s.subjects.push(subjectName);
+    if (typeof cacheSet === 'function') cacheSet('students', state.students);
+  }
+  // Snapshot the "original" set to include this subject too — the guard
+  // shouldn't ask "unsaved changes" for a subject we've already committed.
+  if (!originalStudentSubjects.includes(subjectName)) {
+    originalStudentSubjects.push(subjectName);
+  }
+
+  // Offer to activate a subscription for the newly added subject. This is
+  // where АМ wants the "one predmet → one subscription" flow to click into
+  // place naturally: adding a subject is a strong signal the teacher will
+  // want to sell a subscription for it next.
+  showConfirm(
+    `Активировать абонемент по «${subjectName}»?`,
+    () => {
+      // Close the detail modal so the activation modal is the topmost UI —
+      // otherwise it would open behind, above the card. On confirm cancel
+      // the student's card is reopened automatically after activation.
+      const detailOverlay = document.getElementById('student-detail-overlay');
+      const wasOpen = detailOverlay && detailOverlay.classList.contains('active');
+      // Preselect subject for the activation form
+      pendingActivationSubject = subjectName;
+      if (typeof openSubscriptionActivation === 'function') {
+        openSubscriptionActivation(studentDetailId);
+      }
+    },
+    'Активировать',
+    'success'
+  );
+}
+
+async function removeStudentSubjectImmediate(subjectName) {
+  if (!studentDetailId) return;
+  if (!sdSubjects.includes(subjectName)) return;
+  const subjectRec = subjectsList.find(s => s.name === subjectName);
+  if (!subjectRec) { showToast('Предмет не найден в справочнике', 'error'); return; }
+
+  showConfirm(
+    `Убрать предмет «${subjectName}» у ученика?`,
+    async () => {
+      // Optimistic UI
+      const prevList = [...sdSubjects];
+      sdSubjects = sdSubjects.filter(s => s !== subjectName);
+      renderSdSubjectsEditor();
+
+      const { error } = await db.from('student_subjects')
+        .delete()
+        .eq('student_id', studentDetailId)
+        .eq('subject_id', subjectRec.id);
+      if (error) {
+        sdSubjects = prevList;
+        renderSdSubjectsEditor();
+        showToast('Не удалось убрать предмет: ' + error.message, 'error');
+        return;
+      }
+
+      // Sync students list state
+      const idx = state.students.findIndex(s => s.id === studentDetailId);
+      if (idx !== -1 && Array.isArray(state.students[idx].subjects)) {
+        state.students[idx].subjects = state.students[idx].subjects.filter(s => s !== subjectName);
+        if (typeof cacheSet === 'function') cacheSet('students', state.students);
+      }
+      originalStudentSubjects = originalStudentSubjects.filter(s => s !== subjectName);
+    },
+    'Убрать'
+  );
+}
+
+// Preselected subject name for the very next openSubscriptionActivation()
+// call. Consumed and cleared inside that function. Only used by the
+// "just added a subject → activate right away?" flow above.
+let pendingActivationSubject = null;
 
 async function openStudentDetail(studentId) {
   studentDetailId = studentId;
@@ -812,10 +1003,6 @@ async function openStudentDetail(studentId) {
           <div class="form-group">
             <label>Предметы</label>
             <div id="sd-subjects-editor" class="sd-subjects-editor"></div>
-            <!-- Hidden input keeps the modal-guard "dirty" logic happy: chips
-                 are a JS-state list, not a real form field, so we serialise the
-                 list here and modal-guard snapshots it like any other value. -->
-            <input type="hidden" id="sd-subjects-hidden" data-guard-key="sd-subjects">
           </div>
           <div class="form-group"><label>Класс</label><select id="sd-grade">${gradeOptions}</select></div>
         </div>
@@ -1147,24 +1334,16 @@ async function saveStudentDetail() {
     const { error } = await db.from('students').update(update).eq('id', studentDetailId);
     if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
 
-    // === Diff student_subjects: insert added, delete removed ===
-    // We compare by subject NAME (what the UI works with) and translate to
-    // subject_id via subjectsList — since the junction table uses uuid FKs.
-    const nameToId = {};
-    subjectsList.forEach(s => { nameToId[s.name] = s.id; });
-    const added   = sdSubjects.filter(n => !originalStudentSubjects.includes(n));
-    const removed = originalStudentSubjects.filter(n => !sdSubjects.includes(n));
-
-    // === Optimistic UI: state is already updated locally to reflect the save,
-    // and the modal closes immediately. student_subjects diff runs in the
-    // background — it's an idempotent upsert/delete so a retry-safe error
-    // is fine (won't corrupt anything).
+    // Subject list is no longer diffed here — chips are saved immediately
+    // when the teacher adds/removes them (see add/removeStudentSubjectImmediate).
+    // saveStudentDetail() only persists the plain fields (name, class, notes …).
     const idx = state.students.findIndex(s => s.id === studentDetailId);
     if (idx !== -1) {
       state.students[idx] = {
         ...state.students[idx],
-        ...update,
-        subjects: [...sdSubjects]
+        ...update
+        // NB: don't overwrite .subjects here — it may be more up-to-date than
+        // the modal (immediate saves race with save button; last write wins).
       };
     }
     if (typeof cacheSet === 'function') cacheSet('students', state.students);
@@ -1172,34 +1351,6 @@ async function saveStudentDetail() {
     markPristine('student-detail-overlay');
     closeStudentDetail();
     renderStudents(document.getElementById('student-search').value);
-
-    // Background: student_subjects diff. Errors go to console — the student
-    // record itself is already saved, and the teacher can retry adding/
-    // removing subjects from the card next time it's opened.
-    (async () => {
-      try {
-        if (added.length) {
-          const rows = added
-            .map(name => nameToId[name] ? { student_id: studentDetailId, subject_id: nameToId[name] } : null)
-            .filter(Boolean);
-          if (rows.length) {
-            const { error: insErr } = await db.from('student_subjects')
-              .upsert(rows, { onConflict: 'student_id,subject_id', ignoreDuplicates: true });
-            if (insErr) console.error('student_subjects add failed:', insErr.message);
-          }
-        }
-        if (removed.length) {
-          const idsToDrop = removed.map(n => nameToId[n]).filter(Boolean);
-          if (idsToDrop.length) {
-            const { error: delErr } = await db.from('student_subjects')
-              .delete()
-              .eq('student_id', studentDetailId)
-              .in('subject_id', idsToDrop);
-            if (delErr) console.error('student_subjects remove failed:', delErr.message);
-          }
-        }
-      } catch (e) { console.error('saveStudentDetail bg:', e); }
-    })();
   } finally {
     if (btn) btn.disabled = false;
   }
