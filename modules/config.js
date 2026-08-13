@@ -7,10 +7,10 @@
 const SUPABASE_URL = 'https://wvheehdxcrzgfkvokccm.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind2aGVlaGR4Y3J6Z2Zrdm9rY2NtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU1Nzk2NTksImV4cCI6MjA5MTE1NTY1OX0.-m4Nb8gY_1EoKGzl_UM66UeB2F3vzn5dlC6IAFvNDrA';
 
-// TODO: replace after `npx web-push generate-vapid-keys` and setting the matching
-// private key in the new project's Edge Function secrets. Until then push stays
-// bound to the old key pair and notifications will not be delivered.
-const VAPID_PUBLIC_KEY = 'BJtYsX_H4uqXQyf0cAYNJclYP1bRmYjkuu0XSfuEFJhumcJb56oRABWzmFjGj1uuMqcBO-PIJGYwkyGMoAROL1w';
+// Public half of the VAPID pair generated for this project. The matching private
+// key lives only in this project's Edge Function secrets (VAPID_PRIVATE_KEY).
+// Changing this invalidates every existing push subscription.
+const VAPID_PUBLIC_KEY = 'BMO2VlnD8SenOLZ05QtRd26q0lMz0nArSHrQyYOy7aGKO9CXecMa-JNXIJizm8BoFoFNf7fhzuEg1NUYG5f0zh8';
 
 // One-time cleanup: installed PWAs still hold the old endpoint winner from the
 // proxy race. Nothing reads it now, but clearing avoids a stale value resurfacing
