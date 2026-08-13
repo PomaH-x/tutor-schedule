@@ -3258,6 +3258,40 @@ input, textarea, select {
   border-color: var(--accent);
 }
 
+/* Transfer reason picker — two big tap-targets stacked vertically. Each
+   option has a title and a small hint that explains the consequence of
+   the choice (whether the subscription's transfer counter will tick or not). */
+#transfer-reason-overlay { z-index: 200; }
+.transfer-reason-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.transfer-reason-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
+}
+.transfer-reason-option:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.transfer-reason-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
 .modal-overlay.active {
   display: flex;
 }
@@ -4674,6 +4708,35 @@ input, textarea, select {
 
 .sd-table tr:last-child td {
   border-bottom: none;
+}
+
+/* Editable cells in the history table (per АМ) — click to edit inline.
+   Hover cue tells the user the cell reacts to clicks; when an input/select
+   takes the cell over, the surrounding padding shrinks so the control fits
+   the row height cleanly. */
+.sd-table td.sd-cell {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.sd-table td.sd-cell:hover {
+  background: var(--bg-elevated);
+}
+.sd-table td.sd-cell input,
+.sd-table td.sd-cell select {
+  width: 100%;
+  min-width: 60px;
+  padding: 2px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.sd-table td.sd-cell input[type="date"],
+.sd-table td.sd-cell input[type="time"] {
+  color-scheme: dark; /* readable picker on the dark theme */
 }
 
 .sd-payments {

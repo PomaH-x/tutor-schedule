@@ -1745,9 +1745,24 @@ async function placeTransferredLesson(day, room, slot) {
   const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
   const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
 
+  // Transferring a whole lesson is a deliberate, infrequent action — always
+  // ask for the initiative, regardless of whether any student on the lesson
+  // has an active subscription. Rationale: a lesson may have a mix of
+  // subscription-holding and pay-per-lesson students, and skipping the picker
+  // when the subscription check misses the mark (say, because state was
+  // stale or the check hit a transient error) means the wrong flag gets
+  // written silently. Explicit is safer here.
+  const reason = await askTransferReason();
+  if (reason === null) {
+    placementInFlight = false;
+    return;
+  }
+  const byTeacher = reason;
+
   const { data, error } = await db.from('lessons').insert({
     teacher_id: p.teacherId, room, week_start: formatDate(state.currentWeekStart),
-    start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active', transferred_from_id: p.originalLessonId
+    start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active',
+    transferred_from_id: p.originalLessonId, transfer_by_teacher: byTeacher
   }).select().single();
   if (error) { showToast('Ошибка переноса', 'error'); return; }
   if (p.studentIds.length > 0) {
@@ -1794,6 +1809,16 @@ async function placeTransferredStudent(day, room, slot) {
 
     if (!(await checkTransferLimit([p.studentId]))) return;
 
+    // Ask "who initiated?" only if this student holds an active subscription;
+    // for pay-per-lesson students there's no transfer counter to spend, so
+    // no need to interrupt the flow (per АМ).
+    let byTeacher = false;
+    if (await studentsHaveActiveSubscription([p.studentId])) {
+      const reason = await askTransferReason();
+      if (reason === null) return;
+      byTeacher = reason;
+    }
+
     const dates = getWeekDates(state.currentWeekStart); const date = dates[day];
     const sTime = new Date(date); sTime.setHours(START_HOUR + Math.floor(slot * SLOT_MINUTES / 60), (slot * SLOT_MINUTES) % 60, 0, 0);
     const eTime = new Date(date); eTime.setHours(START_HOUR + Math.floor(end * SLOT_MINUTES / 60), (end * SLOT_MINUTES) % 60, 0, 0);
@@ -1813,6 +1838,9 @@ async function placeTransferredStudent(day, room, slot) {
     const origWs = p.originalWeekStart || formatDate(getMonday(new Date()));
 
     if (rpcRes) {
+      // Persist the transfer-reason flag on the new lesson so recompute
+      // knows whether to count this as a "transfer" against the subscription.
+      await applyTransferReasonToLesson(rpcRes.new_lesson_id, byTeacher);
       // Sub recompute + cancellation insert run in parallel — they don't depend on each other
       await Promise.all([
         recomputeSubscriptionsByIds(rpcRes.affected_sub_ids),
@@ -1826,7 +1854,8 @@ async function placeTransferredStudent(day, room, slot) {
       // Legacy fallback
       const { data, error } = await db.from('lessons').insert({
         teacher_id: p.teacherId, room, week_start: formatDate(state.currentWeekStart),
-        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active',
+        transfer_by_teacher: byTeacher
       }).select().single();
       if (error) { showToast('Ошибка', 'error'); return; }
       await db.from('lesson_students').insert({ lesson_id: data.id, student_id: p.studentId });
@@ -1940,6 +1969,14 @@ async function placeStudentOnCell(day, room, slot) {
       return;
     }
 
+    // Ask "who initiated?" only if the student holds an active subscription.
+    let byTeacher = false;
+    if (await studentsHaveActiveSubscription([s.studentId])) {
+      const reason = await askTransferReason();
+      if (reason === null) { cancelStudentDrag(); return; }
+      byTeacher = reason;
+    }
+
     // Fast path: one RPC does INSERT lesson + move lesson_students + cleanup + attach sub
     const rpcRes = await rpcPlaceStudentOnNewLesson({
       p_student_id: s.studentId,
@@ -1952,6 +1989,7 @@ async function placeStudentOnCell(day, room, slot) {
     });
 
     if (rpcRes) {
+      await applyTransferReasonToLesson(rpcRes.new_lesson_id, byTeacher);
       // Recompute affected subscriptions in parallel (single concurrent batch)
       recomputeSubscriptionsByIds(rpcRes.affected_sub_ids); // fire-and-forget; cache invalidation also happens inside
     } else {
@@ -1959,7 +1997,8 @@ async function placeStudentOnCell(day, room, slot) {
       // iteration 3 — kept verbatim so the app keeps working pre-migration.
       const { data, error } = await db.from('lessons').insert({
         teacher_id: s.teacherId, room, week_start: formatDate(state.currentWeekStart),
-        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active',
+        transfer_by_teacher: byTeacher
       }).select().single();
       if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
       await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
@@ -2012,6 +2051,14 @@ async function placeStudentOnLesson(targetLessonId) {
     const sTime = new Date(tStart);
     const eTime = new Date(tStart.getTime() + s.slotLength * SLOT_MINUTES * 60 * 1000);
 
+    // Ask "who initiated?" only if the student holds an active subscription.
+    let byTeacher = false;
+    if (await studentsHaveActiveSubscription([s.studentId])) {
+      const reason = await askTransferReason();
+      if (reason === null) { cancelStudentDrag(); return; }
+      byTeacher = reason;
+    }
+
     // Fast path: one RPC handles INSERT lesson + move + cleanup + attach sub
     const rpcRes = await rpcPlaceStudentOnNewLesson({
       p_student_id: s.studentId,
@@ -2024,12 +2071,14 @@ async function placeStudentOnLesson(targetLessonId) {
     });
 
     if (rpcRes) {
+      await applyTransferReasonToLesson(rpcRes.new_lesson_id, byTeacher);
       recomputeSubscriptionsByIds(rpcRes.affected_sub_ids);
     } else {
       // Legacy fallback
       const { data, error } = await db.from('lessons').insert({
         teacher_id: s.teacherId, room: tl.room, week_start: formatDate(state.currentWeekStart),
-        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active'
+        start_time: sTime.toISOString(), end_time: eTime.toISOString(), status: 'active',
+        transfer_by_teacher: byTeacher
       }).select().single();
       if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
       await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
@@ -2560,6 +2609,68 @@ async function loadTeacherStudentsForModal(tid) {
 // subject_id>) — mirrors selectedIds. Populated at open time (for edit) or
 // as the teacher picks students (for create).
 
+// Persist the "who initiated" flag onto the newly-created lesson after a
+// transfer completes. Called immediately after every successful transfer
+// insertion. If the RPC path was used, we pull the returned new_lesson_id;
+// if the fallback INSERT path ran, we get the id from that INSERT.
+async function applyTransferReasonToLesson(lessonId, byTeacher) {
+  if (!lessonId) return;
+  try {
+    const { error } = await db.from('lessons')
+      .update({ transfer_by_teacher: !!byTeacher })
+      .eq('id', lessonId);
+    if (error) console.error('applyTransferReasonToLesson:', error);
+  } catch (e) {
+    console.error('applyTransferReasonToLesson:', e);
+  }
+}
+
+// Do any of these students currently hold an active subscription? Only in
+// that case does the transfer-reason picker make sense: for a "разовое"
+// (pay-per-lesson) student there's no transfer counter to spend, so asking
+// "по чьей инициативе?" is just noise (per АМ's request).
+async function studentsHaveActiveSubscription(studentIds) {
+  if (!Array.isArray(studentIds) || studentIds.length === 0) return false;
+  try {
+    const { data, error } = await db.from('subscriptions')
+      .select('id')
+      .in('student_id', studentIds)
+      .eq('status', 'active')
+      .limit(1);
+    if (error) { console.error('studentsHaveActiveSubscription:', error); return false; }
+    return (data || []).length > 0;
+  } catch (e) {
+    console.error('studentsHaveActiveSubscription:', e);
+    return false;
+  }
+}
+
+// Ask the teacher who initiated a transfer. Resolves to `true` if the
+// transfer was on the teacher's initiative (subscription transfer counter
+// is NOT incremented) or `false` if on the student's fault (counter IS
+// incremented). Resolves to `null` if the teacher cancelled — caller should
+// abort the transfer in that case.
+function askTransferReason() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('transfer-reason-overlay');
+    if (!overlay) { resolve(null); return; }
+    const close = (val) => {
+      overlay.classList.remove('active');
+      // Detach listeners to avoid leaks if the picker is invoked repeatedly
+      overlay.querySelectorAll('.transfer-reason-option').forEach(btn => {
+        btn.onclick = null;
+      });
+      document.getElementById('btn-transfer-reason-cancel').onclick = null;
+      resolve(val);
+    };
+    overlay.querySelectorAll('.transfer-reason-option').forEach(btn => {
+      btn.onclick = () => close(btn.dataset.byTeacher === 'true');
+    });
+    document.getElementById('btn-transfer-reason-cancel').onclick = () => close(null);
+    overlay.classList.add('active');
+  });
+}
+
 // Show the "Which subject?" mini-modal on top of the lesson modal.
 // options: [{id, name}] — subjects available for this student.
 // Callback receives the chosen subject id (never null; cancel just closes).
@@ -2863,18 +2974,11 @@ function renderLessonStudentsList(filter) {
   let allStudents = allTeacherStudents;
   if (search) allStudents = allStudents.filter(s => s.first_name.toLowerCase().includes(search) || s.last_name.toLowerCase().includes(search));
 
-  // Filter by active subscription's lesson duration.
-  // Lesson duration in this modal = (slotTo - slotFrom) * 30 minutes.
-  // A student with an active subscription can only attend lessons matching that subscription's duration.
-  // Students without an active subscription pay per single lesson — no duration restriction.
-  // Always keep already-selected students visible (so user can deselect them).
-  const lessonDurationMin = (m.slotTo - m.slotFrom) * 30;
-  allStudents = allStudents.filter(s => {
-    if (m.selectedIds.has(s.id)) return true; // never hide already-checked
-    const sub = studentActiveSub[s.id];
-    if (!sub) return true;
-    return sub.pricing?.duration_minutes === lessonDurationMin;
-  });
+  // Filter by lesson duration was here — removed per АМ:
+  // раньше ученик с активным абонементом длительности X скрывался при
+  // создании занятия длительности Y. Это вводило в заблуждение (казалось,
+  // что ученика вообще нет в базе). Теперь показываем всех, а учитель сам
+  // решает, стоит ли добавлять ученика с абонементом другой длительности.
 
   const truantStudents = allStudents.filter(s => truantIds.has(s.id));
   const regularStudents = allStudents.filter(s => !truantIds.has(s.id));
@@ -2890,13 +2994,16 @@ function renderLessonStudentsList(filter) {
       const ch = m.selectedIds.has(s.id);
       const indBadge = s.is_individual ? '<span class="lesson-ind-badge">Инд.</span>' : '';
       const onlBadge = s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : '';
-      const subBadge = studentActiveSub[s.id] ? '<span class="lesson-sub-badge" title="Активный абонемент">Абн.</span>' : '';
+      // Абонемент-бейдж намеренно убран (АМ): он вводил в заблуждение
+      // — учитель мог решить, что абонемент этому конкретному занятию
+      // уже привязан, хотя бейдж лишь показывал, что у ученика есть
+      // хоть какой-то активный абонемент.
       const cancels = pendingCancels[s.id] || [];
       const dateBadges = cancels.map(c => {
         const timeStr = getCancelTimeStr(c);
         return timeStr ? `<span class="modal-truant-date">${timeStr}</span>` : '';
       }).filter(Boolean).join('');
-      html += `<label class="lesson-student-row truant-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}${indBadge}${onlBadge}${subBadge}${dateBadges}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
+      html += `<label class="lesson-student-row truant-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}${indBadge}${onlBadge}${dateBadges}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
     });
     html += '</div>';
   }
@@ -2906,9 +3013,9 @@ function renderLessonStudentsList(filter) {
     const ch = m.selectedIds.has(s.id);
     const indBadge = s.is_individual ? '<span class="lesson-ind-badge">Инд.</span>' : '';
     const onlBadge = s.is_online ? '<span class="lesson-online-badge">Онл.</span>' : '';
-    const subBadge = studentActiveSub[s.id] ? '<span class="lesson-sub-badge" title="Активный абонемент">Абн.</span>' : '';
+    // Абонемент-бейдж намеренно убран (АМ): см. комментарий в truant-блоке выше.
     const weekBadge = buildStudentWeekBadge(s.id);
-    html += `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}${indBadge}${onlBadge}${subBadge}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
+    html += `<label class="lesson-student-row${ch ? ' checked' : ''}"><span class="lesson-student-name">${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}${indBadge}${onlBadge}${weekBadge}</span>${canEdit ? `<input type="checkbox" class="lesson-checkbox" data-id="${s.id}" data-individual="${s.is_individual || false}" ${ch ? 'checked' : ''}>` : (ch ? '<span class="lesson-check-mark">✓</span>' : '')}</label>`;
   });
 
   list.innerHTML = html;

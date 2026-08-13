@@ -745,11 +745,20 @@ function renderPayrollHTML(isAdmin) {
 }
 
 function updatePayrollTotals() {
+  // If no filter pills are rendered (happens when there's only one teacher,
+  // so the filter row is skipped), fall back to summing ALL teachers. Without
+  // this the "Общая выручка" showed 0₽ even though the single teacher's block
+  // below had real numbers, because the loop only picked pills with .active.
+  const pills = document.querySelectorAll('.payroll-filter-pill');
+  const useFilter = pills.length > 0;
   const checked = new Set();
-  document.querySelectorAll('.payroll-filter-pill.active').forEach(btn => checked.add(btn.dataset.tid));
+  if (useFilter) {
+    document.querySelectorAll('.payroll-filter-pill.active').forEach(btn => checked.add(btn.dataset.tid));
+  }
   let rev = 0, prof = 0, comm = 0;
   Object.entries(payrollTeacherData).forEach(([tId, data]) => {
-    if (checked.has(tId)) { rev += data.revenue; prof += data.profit; comm += data.commission; }
+    const include = useFilter ? checked.has(tId) : true;
+    if (include) { rev += data.revenue; prof += data.profit; comm += data.commission; }
   });
   const el = document.getElementById('payroll-total');
   if (el) {

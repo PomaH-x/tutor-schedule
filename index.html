@@ -770,6 +770,36 @@
       </div>
     </div>
 
+    <!-- Transfer reason picker — asked whenever a lesson (or an individual
+         student) is moved to another slot/week. "По инициативе преподавателя"
+         does not increment the subscription's transfers_used counter;
+         "По вине ученика" does. Same z-index (200) as confirm-overlay so it
+         stacks above the schedule grid clicks. -->
+    <div id="transfer-reason-overlay" class="modal-overlay">
+      <div class="modal modal-sm" style="max-width:360px">
+        <div class="modal-header">
+          <h3>По чьей инициативе перенос?</h3>
+        </div>
+        <div class="modal-body" style="padding:16px">
+          <div class="transfer-reason-options">
+            <button type="button" class="transfer-reason-option" data-by-teacher="true">
+              По инициативе преподавателя
+              <span class="transfer-reason-hint">Не расходует перенос из абонемента</span>
+            </button>
+            <button type="button" class="transfer-reason-option" data-by-teacher="false">
+              По вине ученика
+              <span class="transfer-reason-hint">Расходует перенос из абонемента</span>
+            </button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div class="modal-footer-right">
+            <button class="btn-secondary" id="btn-transfer-reason-cancel">Отмена</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- "Which subject?" picker — shown on top of the lesson modal when
          adding a student who has more than one subject. z-index 200 (like
          confirm-overlay) so it stacks above lesson-overlay (z-index 100). -->

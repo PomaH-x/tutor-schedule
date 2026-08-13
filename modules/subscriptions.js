@@ -97,7 +97,7 @@ let activationCtx = null; // { studentId, student, options }
 
 async function openSubscriptionActivation(studentId) {
   const { data: student } = await db.from('students')
-    .select('id, first_name, last_name, subject, is_individual, is_online, price_type, student_subjects(subject_id, subjects(id, name))')
+    .select('id, first_name, last_name, subject, teacher_id, is_individual, is_online, price_type, student_subjects(subject_id, subjects(id, name))')
     .eq('id', studentId).single();
   if (!student) { showToast('Ученик не найден', 'error'); return; }
 
@@ -153,17 +153,11 @@ async function openSubscriptionActivation(studentId) {
   // dropdown so the teacher can decide which subject this subscription is
   // for. The chosen name is read back in confirmSubscriptionActivation().
   const subjWrap = document.getElementById('sub-act-subject');
-  // If the caller preselected a subject (via students.js pendingActivationSubject
-  // — set when the teacher just added a chip and confirmed "activate for it"),
-  // honour it: if it's available, pick it; otherwise fall through to defaults.
-  const preselect = (typeof pendingActivationSubject !== 'undefined')
-    ? pendingActivationSubject : null;
-  if (typeof pendingActivationSubject !== 'undefined') pendingActivationSubject = null; // consume once
   if (availableSubjects.length === 1) {
     subjWrap.textContent = availableSubjects[0].name;
   } else {
     subjWrap.innerHTML = `<select id="sub-act-subject-select">
-      ${availableSubjects.map(s => `<option value="${escapeHtml(s.name)}" ${preselect === s.name ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}
+      ${availableSubjects.map(s => `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)}</option>`).join('')}
     </select>`;
   }
 
@@ -270,9 +264,26 @@ async function confirmSubscriptionActivation() {
   const btn = document.getElementById('btn-sub-act-confirm');
   btn.disabled = true;
   try {
+    // Administrator gets full amount — no commission to the centre
+    // (per АМ: у админа всегда нулевая комиссия). This check is on the
+    // subscription's teacher (=student's teacher), NOT on the currently
+    // logged-in user — otherwise an admin activating a subscription for
+    // ANOTHER teacher's student would zero out that other teacher's
+    // commission, which is the bug you (Roman) hit before.
+    const subTeacherId = activationCtx.student.teacher_id;
+    // Look up role of the subscription's teacher from DB — one extra SELECT
+    // per activation is cheap and this cleanly handles the case where the
+    // activating user (may be admin) is not the same as the subscription's
+    // teacher (may be a regular teacher).
+    const { data: subTeacherProfile } = await db.from('profiles')
+      .select('role').eq('id', subTeacherId).maybeSingle();
+    const isAdminTeacher = subTeacherProfile?.role === 'admin';
+    const teacherShare = isAdminTeacher ? pricing.student_price : pricing.teacher_profit;
+    const centerShare  = isAdminTeacher ? 0 : pricing.commission;
+
     const { data: created, error } = await db.from('subscriptions').insert({
       student_id: activationCtx.studentId,
-      teacher_id: state.user.id,
+      teacher_id: subTeacherId, // ← student's teacher, not the activating user
       pricing_id: pricing.id,
       subject_id: subjectId,
       total_lessons: totalLessons,
@@ -280,8 +291,8 @@ async function confirmSubscriptionActivation() {
       used_lessons: 0,
       transfers_used: 0,
       paid_amount: pricing.student_price,
-      teacher_share: pricing.teacher_profit,
-      center_share: pricing.commission,
+      teacher_share: teacherShare,
+      center_share: centerShare,
       start_date: formatDate(startDate),
       end_date: formatDate(endDate),
       status: 'active'
@@ -542,7 +553,7 @@ async function recomputeSubscriptionUsage(subscriptionId) {
 
     // Lessons attached to this subscription
     const { data: links } = await db.from('lesson_students')
-      .select('student_id, lesson:lessons(id, status, start_time, end_time)')
+      .select('student_id, lesson:lessons(id, status, start_time, end_time, transfer_by_teacher)')
       .eq('subscription_id', subscriptionId);
 
     let used = 0;
@@ -594,7 +605,11 @@ async function recomputeSubscriptionUsage(subscriptionId) {
         const d = new Date(l.start_time);
         const dow = d.getDay() === 0 ? 6 : d.getDay() - 1; // Mon=0..Sun=6 to match recurring schema
         const key = `${dow}-${d.getHours()}:${d.getMinutes().toString().padStart(2, '0')}`;
-        if (!templateKeys.has(key)) transfers++;
+        // Slot doesn't match a recurring template → this is a transfer.
+        // But "по инициативе преподавателя" transfers don't count against
+        // the subscription's transfer budget (per АМ) — only "по вине ученика"
+        // does. Absent flag (older rows) defaults to false = student's fault.
+        if (!templateKeys.has(key) && !l.transfer_by_teacher) transfers++;
       });
     }
     // If no templates — transfers stays at 0 (no baseline to compare).

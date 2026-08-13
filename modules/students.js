@@ -562,6 +562,11 @@ async function saveStudent() {
           const start = new Date(entry.startDate);
           const end = new Date(start);
           end.setDate(end.getDate() + (pricing.format === 'sub4' ? 28 : 56));
+          // Admin keeps full amount, no commission — mirrors the check in
+          // confirmSubscriptionActivation() (per АМ).
+          const isAdminTeacher = state.profile?.role === 'admin';
+          const teacherShare = isAdminTeacher ? pricing.student_price : pricing.teacher_profit;
+          const centerShare  = isAdminTeacher ? 0 : pricing.commission;
           const subRow = {
             student_id: newStudent.id,
             teacher_id: state.user.id,
@@ -572,8 +577,8 @@ async function saveStudent() {
             used_lessons: 0,
             transfers_used: 0,
             paid_amount: pricing.student_price,
-            teacher_share: pricing.teacher_profit,
-            center_share: pricing.commission,
+            teacher_share: teacherShare,
+            center_share: centerShare,
             start_date: entry.startDate,
             end_date: formatDate(end),
             status: 'active'
@@ -742,6 +747,440 @@ let originalStudentSubjects = [];
 // Render (or re-render) the subject chip editor inside the student-detail
 // modal. Each chip has an ✕ to remove; the trailing <select> lists remaining
 // dictionary subjects, and picking one adds it to sdSubjects.
+// Refresh the subscription panels section inside the currently-open student
+// card. Called both by the initial card render (post-load) and by the chip
+// editor after adding/removing subjects — since new/removed subjects change
+// which "+ Активировать ещё один абонемент" button should appear.
+// ============================================================================
+// Inline editing for the "История занятий" table in the student card.
+// Click any editable cell (.sd-cell) — the cell body is replaced by an input
+// or a <select> pre-filled with the current value. change/blur commits the
+// change; Escape or blur without change reverts.
+// ============================================================================
+
+// SELECT lessons from DB to check whether a new (date, time, duration, room)
+// slot would collide with another active lesson for the same teacher.
+// Excludes the lesson being edited itself. Returns the conflicting lesson or
+// null. Reads directly from the DB because the edit might move the lesson
+// into a different week — state.lessons only holds the current week.
+async function findLessonConflict(teacherId, room, sIso, eIso, excludeLessonId) {
+  try {
+    const { data, error } = await db.from('lessons')
+      .select('id, start_time, end_time, status')
+      .eq('teacher_id', teacherId)
+      .eq('room', room)
+      .eq('status', 'active')
+      .neq('id', excludeLessonId)
+      // Overlap condition: existing.start < new.end AND existing.end > new.start
+      .lt('start_time', eIso)
+      .gt('end_time', sIso)
+      .limit(1);
+    if (error) { console.error('findLessonConflict:', error); return null; }
+    return (data && data[0]) || null;
+  } catch (e) { console.error('findLessonConflict:', e); return null; }
+}
+
+// Formatter helpers — used to render the edited cell back to its "display"
+// state after a successful save. Kept small and inline to match the way
+// buildLessonsTable() renders originally.
+function formatCellDate(iso) {
+  const d = new Date(iso + 'T00:00:00');
+  const dd = d.getDate().toString().padStart(2, '0');
+  const mm = (d.getMonth() + 1).toString().padStart(2, '0');
+  const dayIdx = d.getDay() === 0 ? 6 : d.getDay() - 1;
+  const day = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'][dayIdx];
+  return `${dd}.${mm} ${day}`;
+}
+function formatCellDuration(min) {
+  if (min % 60 === 0) return (min / 60) + 'ч';
+  if (min % 30 === 0) return (min / 60).toFixed(1) + 'ч';
+  return min + 'мин';
+}
+function formatCellStatus(statusKey) {
+  if (statusKey === 'cancelled') return '<span class="history-status history-cancelled">Отм.</span>';
+  if (statusKey === 'planned')   return '<span class="history-status history-planned">⏳</span>';
+  return '<span class="history-status history-completed">✓</span>';
+}
+function formatCellPayment(payKey) {
+  if (payKey === 'approved') return '<span class="pay-paid">✓</span>';
+  if (payKey === 'pending')  return '<span class="pay-pending">⏳</span>';
+  return '<span class="pay-unpaid">✕</span>';
+}
+
+// Turn a display cell into an edit control seeded with the current value.
+// Returns the input/select element so the caller can wire up change/blur.
+function makeEditControl(cell) {
+  const field = cell.dataset.field;
+  if (field === 'date') {
+    const inp = document.createElement('input');
+    inp.type = 'date';
+    inp.value = cell.dataset.iso;
+    return inp;
+  }
+  if (field === 'time') {
+    const inp = document.createElement('input');
+    inp.type = 'time';
+    inp.value = cell.dataset.time;
+    inp.step = 60 * 30; // 30-minute grid, matches SLOT_MINUTES
+    return inp;
+  }
+  if (field === 'duration') {
+    const sel = document.createElement('select');
+    // Standard steps: 30 minutes → 4 hours in 30-min increments.
+    // Matches SLOT_MINUTES=30 elsewhere in the app.
+    const cur = parseInt(cell.dataset.minutes) || 90;
+    const opts = [30, 60, 90, 120, 150, 180, 210, 240];
+    if (!opts.includes(cur)) opts.push(cur);
+    opts.sort((a, b) => a - b);
+    sel.innerHTML = opts.map(m => `<option value="${m}" ${m === cur ? 'selected' : ''}>${formatCellDuration(m)}</option>`).join('');
+    return sel;
+  }
+  if (field === 'status') {
+    const sel = document.createElement('select');
+    // Three logical states surfaced to the teacher:
+    //   • "Проведено"  — lesson happened, active + past ⇒ status='active'
+    //   • "Ждёт"       — lesson is still upcoming or awaiting confirmation
+    //                     ⇒ also status='active' in DB (planned is a UI-only
+    //                     distinction based on end_time vs now)
+    //   • "Отменено"   — status='cancelled'
+    // "Проведено" and "Ждёт" both write status='active'; the display side
+    // (formatCellStatus + buildLessonsTable) chooses the icon based on time.
+    const cur = cell.dataset.status;
+    sel.innerHTML = `
+      <option value="active" ${cur === 'active' ? 'selected' : ''}>Проведено</option>
+      <option value="planned" ${cur === 'planned' ? 'selected' : ''}>Ждёт</option>
+      <option value="cancelled" ${cur === 'cancelled' ? 'selected' : ''}>Отменено</option>`;
+    return sel;
+  }
+  if (field === 'payment') {
+    const sel = document.createElement('select');
+    sel.innerHTML = `
+      <option value="approved" ${cell.dataset.payment === 'approved' ? 'selected' : ''}>Оплачено</option>
+      <option value="pending" ${cell.dataset.payment === 'pending' ? 'selected' : ''}>Ждёт подтверждения</option>
+      <option value="unpaid" ${cell.dataset.payment === 'unpaid' ? 'selected' : ''}>Не оплачено</option>`;
+    return sel;
+  }
+  return null;
+}
+
+// Apply the change to DB + local state. Returns true on success, false on
+// rejection (conflict / user cancel etc.) so the caller can revert.
+async function applyCellEdit(cell, newValue, studentId) {
+  const field = cell.dataset.field;
+  const lessonId = cell.dataset.lessonId;
+  console.log('[inline-edit] applyCellEdit start:', { field, lessonId, newValue, studentId });
+  if (!lessonId) { console.warn('[inline-edit] no lessonId, aborting'); return false; }
+
+  // Look up the current lesson from state — we need teacher_id, room, current
+  // start/end to compute the new slot and check conflicts.
+  const lesson = state.lessons.find(l => l.id === lessonId);
+  // NB: lesson may NOT be in state.lessons if it's from a different week than
+  // the currently displayed one. In that case we fall back to fetching from DB.
+  const getLessonDb = async () => {
+    const { data } = await db.from('lessons')
+      .select('id, teacher_id, room, start_time, end_time, status')
+      .eq('id', lessonId).maybeSingle();
+    return data;
+  };
+  const cur = lesson || await getLessonDb();
+  if (!cur) { showToast('Занятие не найдено', 'error'); return false; }
+
+  // ---- Date / time / duration: recompute start_time & end_time ----
+  if (field === 'date' || field === 'time' || field === 'duration') {
+    // Derive current values from `cur` (source of truth from state/DB).
+    // Previously we read them from cell.dataset — but each cell only carries
+    // its own attribute (date-cell has data-iso, time-cell has data-time
+    // and duration-cell has data-minutes), so reading a "foreign" attribute
+    // returned undefined and .split() crashed. `cur.start_time`/`cur.end_time`
+    // gives us all three components reliably regardless of which cell fired.
+    const curS = new Date(cur.start_time);
+    const curE = new Date(cur.end_time);
+    const curDurMin = Math.round((curE - curS) / 60000);
+    const curIso = `${curS.getFullYear()}-${(curS.getMonth() + 1).toString().padStart(2, '0')}-${curS.getDate().toString().padStart(2, '0')}`;
+    const curTimeStr = `${curS.getHours().toString().padStart(2, '0')}:${curS.getMinutes().toString().padStart(2, '0')}`;
+
+    let iso = curIso, timeStr = curTimeStr, durMin = curDurMin;
+    if (field === 'date')     iso = newValue;
+    if (field === 'time')     timeStr = newValue;
+    if (field === 'duration') durMin = parseInt(newValue);
+
+    // Build new start_time / end_time preserving local timezone (Europe/Moscow).
+    // Note: `new Date('2026-07-15T19:00')` treats it as LOCAL time in the browser
+    // — correct here since the schedule grid is rendered in local time.
+    const [hh, mmS] = timeStr.split(':').map(x => parseInt(x));
+    const newStart = new Date(iso + 'T00:00:00');
+    newStart.setHours(hh, mmS, 0, 0);
+    const newEnd = new Date(newStart.getTime() + durMin * 60000);
+
+    // Conflict check against ALL lessons of the same teacher+room in this
+    // slot (DB read, not state — the destination may be a different week).
+    const conflict = await findLessonConflict(cur.teacher_id, cur.room, newStart.toISOString(), newEnd.toISOString(), lessonId);
+    if (conflict) { showToast('Занят', 'error'); return false; }
+
+    const { error } = await db.from('lessons').update({
+      start_time: newStart.toISOString(),
+      end_time: newEnd.toISOString()
+    }).eq('id', lessonId);
+    if (error) { showToast('Ошибка: ' + error.message, 'error'); return false; }
+
+    // Recompute affected subscription usage (the slot may have shifted enough
+    // to no longer match a recurring template — recompute updates transfers_used).
+    await recomputeSubscriptionsByLesson(lessonId);
+
+    // Update local caches — if the lesson is in state.lessons, mutate it.
+    if (lesson) {
+      lesson.start_time = newStart.toISOString();
+      lesson.end_time = newEnd.toISOString();
+    }
+    // Reset the cell's data attributes AND text to match the new values —
+    // callers use these on subsequent edits.
+    const newDd = newStart.getDate().toString().padStart(2, '0');
+    const newMm = (newStart.getMonth() + 1).toString().padStart(2, '0');
+    const newIso = `${newStart.getFullYear()}-${newMm}-${newDd}`;
+    const newTime = `${newStart.getHours().toString().padStart(2,'0')}:${newStart.getMinutes().toString().padStart(2,'0')}`;
+
+    // Update all sibling cells' data attrs for the same lesson (they share it)
+    const row = cell.closest('tr');
+    if (row) {
+      row.querySelectorAll('[data-lesson-id="' + lessonId + '"]').forEach(c => {
+        c.dataset.iso = newIso;
+        c.dataset.time = newTime;
+        c.dataset.minutes = durMin;
+      });
+      const dateCell = row.querySelector('.sd-cell-date');
+      if (dateCell) dateCell.textContent = formatCellDate(newIso);
+      const timeCell = row.querySelector('.sd-cell-time');
+      if (timeCell) timeCell.textContent = newTime;
+      const durCell = row.querySelector('.sd-cell-duration');
+      if (durCell) durCell.textContent = formatCellDuration(durMin);
+    }
+    showToast('Сохранено', 'success');
+    return true;
+  }
+
+  // ---- Status: three UI states, two DB states.
+  //   Проведено (active) / Ждёт (planned) → both persist as status='active'
+  //   Отменено (cancelled)                → persist as status='cancelled'
+  // The Проведено/Ждёт split is a UI-only distinction; the icon shown is
+  // based on end_time vs now(), so the teacher can flip between them freely.
+  if (field === 'status') {
+    if (newValue !== 'active' && newValue !== 'planned' && newValue !== 'cancelled') return false;
+    const dbStatus = newValue === 'cancelled' ? 'cancelled' : 'active';
+    const { error } = await db.from('lessons').update({ status: dbStatus }).eq('id', lessonId);
+    if (error) { showToast('Ошибка: ' + error.message, 'error'); return false; }
+    await recomputeSubscriptionsByLesson(lessonId);
+    if (lesson) lesson.status = dbStatus;
+    cell.dataset.status = newValue;
+    cell.innerHTML = formatCellStatus(newValue);
+    showToast('Сохранено', 'success');
+    return true;
+  }
+
+  // ---- Payment: three states via the payments table ----
+  if (field === 'payment') {
+    // Existing payment row (if any)
+    const { data: existing } = await db.from('payments')
+      .select('id, status').eq('lesson_id', lessonId).eq('student_id', studentId).maybeSingle();
+
+    if (newValue === 'unpaid') {
+      if (existing) {
+        const { error } = await db.from('payments').delete().eq('id', existing.id);
+        if (error) { showToast('Ошибка: ' + error.message, 'error'); return false; }
+      }
+    } else if (existing) {
+      const updateRow = { status: newValue };
+      if (newValue === 'approved') {
+        updateRow.approved_at = new Date().toISOString();
+        updateRow.approved_by_id = state.user.id;
+      }
+      const { error } = await db.from('payments').update(updateRow).eq('id', existing.id);
+      if (error) { showToast('Ошибка: ' + error.message, 'error'); return false; }
+    } else {
+      // No row yet — INSERT. amount stays 0; teacher can set the real amount
+      // through the payment modal if precision matters. This inline flow is
+      // for quickly correcting "did the student pay or not".
+      const row = {
+        student_id: studentId,
+        lesson_id: lessonId,
+        amount: 0,
+        payment_method: 'cash',
+        status: newValue,
+        submitted_at: new Date().toISOString()
+      };
+      if (newValue === 'approved') {
+        row.approved_at = row.submitted_at;
+        row.approved_by_id = state.user.id;
+      }
+      const { error } = await db.from('payments').insert(row);
+      if (error) { showToast('Ошибка: ' + error.message, 'error'); return false; }
+    }
+    cell.dataset.payment = newValue;
+    cell.innerHTML = formatCellPayment(newValue);
+    showToast('Сохранено', 'success');
+    return true;
+  }
+
+  return false;
+}
+
+// Event delegation: one listener on the table body handles all cell clicks.
+// Guards against re-entering edit on an already-editing cell.
+// Active inline edits — used by saveStudentDetail() to force-commit any
+// in-flight edits before the modal closes. Without this, clicking "Сохранить"
+// in the card while a cell is still being edited would race the commit
+// (via blur) against modal teardown — resulting in the "изменил, нажал
+// Сохранить, старые данные" bug АМ hit.
+let activeCellCommits = new Map(); // HTMLElement (cell) → async commit fn
+
+async function flushActiveCellCommits() {
+  const pending = [...activeCellCommits.values()];
+  console.log('[inline-edit] flushActiveCellCommits: pending count =', pending.length);
+  activeCellCommits.clear();
+  for (const commitFn of pending) {
+    try { await commitFn(); } catch (e) { console.error('[inline-edit] flushActiveCellCommits error:', e); }
+  }
+  console.log('[inline-edit] flushActiveCellCommits done');
+}
+
+function bindHistoryTableEditing(container, studentId) {
+  container.querySelectorAll('.sd-table tbody').forEach(tbody => {
+    if (tbody.dataset.editingBound === '1') return;
+    tbody.dataset.editingBound = '1';
+    tbody.addEventListener('click', (e) => {
+      const cell = e.target.closest('.sd-cell');
+      if (!cell) return;
+      if (cell.querySelector('input, select')) return; // already editing
+      startCellEdit(cell, studentId);
+    });
+  });
+}
+
+function startCellEdit(cell, studentId) {
+  console.log('[inline-edit] startCellEdit for', cell.dataset.field, 'lesson', cell.dataset.lessonId);
+  const control = makeEditControl(cell);
+  if (!control) return;
+  const originalHTML = cell.innerHTML;
+  cell.innerHTML = '';
+  cell.appendChild(control);
+  control.focus();
+  if (control.tagName === 'SELECT' && typeof control.showPicker === 'function') {
+    // Try to open the dropdown right away — supported in modern browsers.
+    try { control.showPicker(); } catch (_) { /* no-op */ }
+  }
+
+  let commited = false;
+  const commit = async () => {
+    console.log('[inline-edit] commit called for', cell.dataset.field, 'commited?', commited);
+    if (commited) return;
+    commited = true;
+    // Always deregister BEFORE the async work so flushActiveCellCommits()
+    // doesn't loop forever if called mid-commit.
+    activeCellCommits.delete(cell);
+    const val = control.value;
+    console.log('[inline-edit] commit value:', val, 'vs current:', {
+      iso: cell.dataset.iso, time: cell.dataset.time,
+      minutes: cell.dataset.minutes, status: cell.dataset.status, payment: cell.dataset.payment
+    });
+    // If value didn't change, revert silently
+    const noChange = (
+      (cell.dataset.field === 'date' && val === cell.dataset.iso) ||
+      (cell.dataset.field === 'time' && val === cell.dataset.time) ||
+      (cell.dataset.field === 'duration' && parseInt(val) === parseInt(cell.dataset.minutes)) ||
+      (cell.dataset.field === 'status' && val === cell.dataset.status) ||
+      (cell.dataset.field === 'payment' && val === cell.dataset.payment)
+    );
+    if (noChange) {
+      console.log('[inline-edit] noChange — reverting');
+      cell.innerHTML = originalHTML;
+      return;
+    }
+
+    const ok = await applyCellEdit(cell, val, studentId);
+    console.log('[inline-edit] applyCellEdit returned:', ok);
+    if (!ok) cell.innerHTML = originalHTML;
+  };
+  const revert = () => {
+    if (!commited) {
+      commited = true;
+      activeCellCommits.delete(cell);
+      cell.innerHTML = originalHTML;
+    }
+  };
+
+  // Register this edit so saveStudentDetail() (or any other outer flow) can
+  // force-commit it before tearing the modal down.
+  activeCellCommits.set(cell, commit);
+
+  control.addEventListener('change', commit);
+  control.addEventListener('blur', commit);
+  control.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') revert();
+    if (e.key === 'Enter' && control.tagName === 'INPUT') control.blur();
+  });
+}
+
+async function refreshSubscriptionsPanel(studentId) {
+  try {
+    const listRes = await loadStudentSubscriptionsList(studentId);
+    if (studentDetailId !== studentId) return;
+    const container = document.getElementById('sd-sub-panel-container');
+    if (!container) return;
+
+    // Subjects list comes from state.students — kept in sync by add/remove
+    // helpers, so it's authoritative here.
+    const stu = state.students.find(s => s.id === studentId);
+    const studentSubjectNames = (stu && stu.subjects) ? stu.subjects : [];
+
+    const actives = listRes.active || [];
+    let html = '';
+    if (actives.length > 0) {
+      html = actives.map(sub => renderSubscriptionPanelHTML(sub, studentId)).join('');
+      const studentSubjectIds = studentSubjectNames
+        .map(name => (subjectsList.find(s => s.name === name) || {}).id)
+        .filter(Boolean);
+      const activeSubjectIds = new Set(actives.map(s => s.subject_id).filter(Boolean));
+      const uncovered = studentSubjectIds.filter(id => !activeSubjectIds.has(id));
+      if (uncovered.length > 0) {
+        html += `<button class="btn-secondary btn-sm" id="btn-activate-sub-extra" data-student-id="${studentId}" style="align-self:flex-start;margin-top:6px">+ Активировать ещё один абонемент</button>`;
+      }
+    } else {
+      html = renderSubscriptionPanelHTML(listRes.last, studentId);
+    }
+    container.innerHTML = html;
+
+    // Wire up buttons — same behaviour as bindSubPanelButtons() used to.
+    const activateSubBtn = container.querySelector('#btn-activate-sub');
+    if (activateSubBtn) {
+      activateSubBtn.addEventListener('click', () => openSubscriptionActivation(activateSubBtn.dataset.studentId));
+    }
+    const activateExtraBtn = container.querySelector('#btn-activate-sub-extra');
+    if (activateExtraBtn) {
+      activateExtraBtn.addEventListener('click', () => openSubscriptionActivation(activateExtraBtn.dataset.studentId));
+    }
+    container.querySelectorAll('#btn-delete-sub, .sub-panel-delete').forEach(btn => {
+      if (btn.dataset.bound === '1') return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', async () => {
+        const subId = btn.dataset.subId;
+        showConfirm('Удалить абонемент? Связанные занятия останутся в расписании и станут разовыми. Это действие нельзя отменить.', async () => {
+          const { error } = await db.from('subscriptions').delete().eq('id', subId);
+          if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
+          showToast('Абонемент удалён', 'success');
+          invalidateSubscriptionCache(studentId);
+          await refreshSubscriptionsPanel(studentId);
+        }, 'Удалить');
+      });
+    });
+    container.querySelectorAll('#btn-refund-sub, .sub-panel-refund').forEach(btn => {
+      if (btn.dataset.bound === '1') return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', () => openSubscriptionRefund(btn.dataset.subId));
+    });
+  } catch (e) {
+    console.error('refreshSubscriptionsPanel failed:', e);
+  }
+}
+
 function renderSdSubjectsEditor() {
   const wrap = document.getElementById('sd-subjects-editor');
   if (!wrap) return;
@@ -775,8 +1214,9 @@ function renderSdSubjectsEditor() {
 }
 
 // Add a subject to the currently-open student's card IMMEDIATELY:
-// write to student_subjects in the DB, sync local state, re-render, then
-// offer to activate a subscription for that subject.
+// write to student_subjects in the DB, sync local state, re-render editor,
+// and refresh the subscriptions panel — new subject → the "+ Активировать
+// ещё один абонемент" button naturally appears.
 async function addStudentSubjectImmediate(subjectName) {
   if (!studentDetailId) return;
   if (sdSubjects.includes(subjectName)) return; // already present
@@ -816,27 +1256,10 @@ async function addStudentSubjectImmediate(subjectName) {
     originalStudentSubjects.push(subjectName);
   }
 
-  // Offer to activate a subscription for the newly added subject. This is
-  // where АМ wants the "one predmet → one subscription" flow to click into
-  // place naturally: adding a subject is a strong signal the teacher will
-  // want to sell a subscription for it next.
-  showConfirm(
-    `Активировать абонемент по «${subjectName}»?`,
-    () => {
-      // Close the detail modal so the activation modal is the topmost UI —
-      // otherwise it would open behind, above the card. On confirm cancel
-      // the student's card is reopened automatically after activation.
-      const detailOverlay = document.getElementById('student-detail-overlay');
-      const wasOpen = detailOverlay && detailOverlay.classList.contains('active');
-      // Preselect subject for the activation form
-      pendingActivationSubject = subjectName;
-      if (typeof openSubscriptionActivation === 'function') {
-        openSubscriptionActivation(studentDetailId);
-      }
-    },
-    'Активировать',
-    'success'
-  );
+  // Refresh the subscriptions panel so the "+ Активировать ещё один абонемент"
+  // button appears (the new subject is now uncovered). Teacher clicks it
+  // when ready — no interrupting confirm dialog.
+  refreshSubscriptionsPanel(studentDetailId);
 }
 
 async function removeStudentSubjectImmediate(subjectName) {
@@ -845,19 +1268,53 @@ async function removeStudentSubjectImmediate(subjectName) {
   const subjectRec = subjectsList.find(s => s.name === subjectName);
   if (!subjectRec) { showToast('Предмет не найден в справочнике', 'error'); return; }
 
+  // Look up subscriptions bound to this subject for this student so we can
+  // tell the teacher what will be removed alongside the subject. Include
+  // all statuses — an expired/completed sub is still "attached to this subject"
+  // and would be orphaned if we left it.
+  const { data: relatedSubs } = await db.from('subscriptions')
+    .select('id, status')
+    .eq('student_id', studentDetailId)
+    .eq('subject_id', subjectRec.id);
+  const subCount = (relatedSubs || []).length;
+
+  const confirmText = subCount === 0
+    ? `Убрать предмет «${subjectName}» у ученика?`
+    : subCount === 1
+      ? `Убрать предмет «${subjectName}»? Также будет удалён 1 абонемент по этому предмету. Связанные занятия останутся как разовые.`
+      : `Убрать предмет «${subjectName}»? Также будут удалены абонементы по этому предмету (${subCount} шт.). Связанные занятия останутся как разовые.`;
+
   showConfirm(
-    `Убрать предмет «${subjectName}» у ученика?`,
+    confirmText,
     async () => {
       // Optimistic UI
       const prevList = [...sdSubjects];
       sdSubjects = sdSubjects.filter(s => s !== subjectName);
       renderSdSubjectsEditor();
 
+      // Step 1: delete all subscriptions for this (student, subject).
+      // FK on lesson_students.subscription_id is ON DELETE SET NULL, so
+      // the lessons themselves survive — they just become "разовые".
+      if (subCount > 0) {
+        const subIds = relatedSubs.map(s => s.id);
+        const { error: subDelErr } = await db.from('subscriptions').delete().in('id', subIds);
+        if (subDelErr) {
+          sdSubjects = prevList;
+          renderSdSubjectsEditor();
+          showToast('Не удалось удалить абонементы: ' + subDelErr.message, 'error');
+          return;
+        }
+        invalidateSubscriptionCache(studentDetailId);
+      }
+
+      // Step 2: delete the junction row itself.
       const { error } = await db.from('student_subjects')
         .delete()
         .eq('student_id', studentDetailId)
         .eq('subject_id', subjectRec.id);
       if (error) {
+        // Subscriptions are already gone at this point — no clean rollback.
+        // Toast + roll back the chip so the user sees the actual state.
         sdSubjects = prevList;
         renderSdSubjectsEditor();
         showToast('Не удалось убрать предмет: ' + error.message, 'error');
@@ -871,15 +1328,16 @@ async function removeStudentSubjectImmediate(subjectName) {
         if (typeof cacheSet === 'function') cacheSet('students', state.students);
       }
       originalStudentSubjects = originalStudentSubjects.filter(s => s !== subjectName);
+
+      // Refresh subscriptions panel so the removed subs disappear immediately.
+      refreshSubscriptionsPanel(studentDetailId);
     },
     'Убрать'
   );
 }
 
-// Preselected subject name for the very next openSubscriptionActivation()
-// call. Consumed and cleared inside that function. Only used by the
-// "just added a subject → activate right away?" flow above.
-let pendingActivationSubject = null;
+// (pendingActivationSubject removed: no longer needed — add-subject flow no
+// longer prompts to activate, so nothing preselects the activation subject.)
 
 async function openStudentDetail(studentId) {
   studentDetailId = studentId;
@@ -1064,6 +1522,7 @@ async function openStudentDetail(studentId) {
 
     group.forEach(l => {
       const s = new Date(l.start_time); const e = new Date(l.end_time);
+      const durMin = Math.round((e - s) / 60000);
       const dur = formatDur(e - s);
       const dd = s.getDate().toString().padStart(2,'0');
       const mm = (s.getMonth()+1).toString().padStart(2,'0');
@@ -1091,7 +1550,32 @@ async function openStudentDetail(studentId) {
       const delBtn = l.status === 'missed'
         ? ''
         : `<button class="btn-delete-lesson-row" data-lesson-id="${l.id}" title="Удалить запись">✕</button>`;
-      t += `<tr><td>${dd}.${mm} ${day}</td><td>${time}</td><td>${dur}</td><td>${statusStr}</td><td>${payStr}</td><td class="sd-table-actions">${delBtn}</td></tr>`;
+
+      // Synthetic missed rows have no lesson_id — they're not editable.
+      // Real lessons get inline-editable cells: click any of the 5 columns to
+      // edit that field. Data attributes carry both the current value (for
+      // rollback if the user cancels) and machine-readable version (ISO date,
+      // minutes) so the edit controls can seed themselves correctly.
+      if (l.status === 'missed') {
+        t += `<tr class="sd-row-missed"><td>${dd}.${mm} ${day}</td><td>${time}</td><td>${dur}</td><td>${statusStr}</td><td>${payStr}</td><td class="sd-table-actions">${delBtn}</td></tr>`;
+      } else {
+        const isoDate = `${s.getFullYear()}-${(s.getMonth()+1).toString().padStart(2,'0')}-${dd}`;
+        // For payment: 'approved' | 'pending' | 'unpaid' (unpaid = no row / rejected)
+        const payKey = past
+          ? (p?.status === 'approved' ? 'approved' : p?.status === 'pending' ? 'pending' : 'unpaid')
+          : null; // future lessons — payment not editable, shown as "—"
+        const statusKey = past
+          ? (l.status === 'cancelled' ? 'cancelled' : 'active')
+          : (l.status === 'cancelled' ? 'cancelled' : 'planned'); // future active = planned (view-only)
+        t += `<tr>
+          <td class="sd-cell sd-cell-date" data-lesson-id="${l.id}" data-field="date" data-iso="${isoDate}">${dd}.${mm} ${day}</td>
+          <td class="sd-cell sd-cell-time" data-lesson-id="${l.id}" data-field="time" data-time="${time}">${time}</td>
+          <td class="sd-cell sd-cell-duration" data-lesson-id="${l.id}" data-field="duration" data-minutes="${durMin}">${dur}</td>
+          <td class="sd-cell sd-cell-status" data-lesson-id="${l.id}" data-field="status" data-status="${statusKey}">${statusStr}</td>
+          <td class="${payKey !== null ? 'sd-cell sd-cell-payment' : ''}" ${payKey !== null ? `data-lesson-id="${l.id}" data-field="payment" data-payment="${payKey}"` : ''}>${payStr}</td>
+          <td class="sd-table-actions">${delBtn}</td>
+        </tr>`;
+      }
     });
 
     t += `</tbody></table></div>`;
@@ -1173,76 +1657,23 @@ async function openStudentDetail(studentId) {
     linkBtn.addEventListener('click', () => openLinkStudentModal(studentId, student.teacher_id));
   }
 
-  // Helper: bind buttons that live inside the (re-rendered) subscription panel
-  function bindSubPanelButtons() {
-    // With multiple active subscriptions we now have multiple delete/refund
-    // buttons in the DOM at once — bind them all, not just the first.
-    const activateSubBtn = body.querySelector('#btn-activate-sub');
-    if (activateSubBtn) {
-      activateSubBtn.addEventListener('click', () => openSubscriptionActivation(activateSubBtn.dataset.studentId));
-    }
-    const activateExtraBtn = body.querySelector('#btn-activate-sub-extra');
-    if (activateExtraBtn) {
-      activateExtraBtn.addEventListener('click', () => openSubscriptionActivation(activateExtraBtn.dataset.studentId));
-    }
-    body.querySelectorAll('#btn-delete-sub, .sub-panel-delete').forEach(btn => {
-      if (btn.dataset.bound === '1') return;
-      btn.dataset.bound = '1';
-      btn.addEventListener('click', async () => {
-        const subId = btn.dataset.subId;
-        showConfirm('Удалить абонемент? Связанные занятия останутся в расписании и станут разовыми. Это действие нельзя отменить.', async () => {
-          const { error } = await db.from('subscriptions').delete().eq('id', subId);
-          if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
-          showToast('Абонемент удалён', 'success');
-          invalidateSubscriptionCache(studentId);
-          await openStudentDetail(studentId);
-        }, 'Удалить');
-      });
-    });
-    body.querySelectorAll('#btn-refund-sub, .sub-panel-refund').forEach(btn => {
-      if (btn.dataset.bound === '1') return;
-      btn.dataset.bound = '1';
-      btn.addEventListener('click', () => openSubscriptionRefund(btn.dataset.subId));
-    });
-  }
-
   // Kick off the heavy subscription chain in the background — the card is already
-  // visible at this point. When ready, swap just the placeholder panel.
+  // visible at this point. When ready, refresh the sub-panel section.
   (async () => {
     try {
       await rebindOrphanLessonsForStudents([studentId]);
       await recomputeSubscriptionsForStudents([studentId]);
-      const listRes = await loadStudentSubscriptionsList(studentId);
-      // Guard: user may have closed the card or opened another one in the meantime.
       if (studentDetailId !== studentId) return;
-      const container = document.getElementById('sd-sub-panel-container');
-      if (!container) return;
-
-      const actives = listRes.active || [];
-      let html = '';
-      if (actives.length > 0) {
-        html = actives.map(sub => renderSubscriptionPanelHTML(sub, studentId)).join('');
-        // Show "activate more" button only if the student has subjects with
-        // no active subscription yet. Prevents opening the activation form
-        // with an empty subject picker.
-        const studentSubjectIds = (student.subjects || [])
-          .map(name => (subjectsList.find(s => s.name === name) || {}).id)
-          .filter(Boolean);
-        const activeSubjectIds = new Set(actives.map(s => s.subject_id).filter(Boolean));
-        const uncovered = studentSubjectIds.filter(id => !activeSubjectIds.has(id));
-        if (uncovered.length > 0) {
-          html += `<button class="btn-secondary btn-sm" id="btn-activate-sub-extra" data-student-id="${studentId}" style="align-self:flex-start;margin-top:6px">+ Активировать ещё один абонемент</button>`;
-        }
-      } else {
-        // No active subs — show the empty state (or last inactive for context).
-        html = renderSubscriptionPanelHTML(listRes.last, studentId);
-      }
-      container.innerHTML = html;
-      bindSubPanelButtons();
+      await refreshSubscriptionsPanel(studentId);
     } catch (e) {
       console.error('sub panel load failed:', e);
     }
   })();
+
+  // Inline editing for the "История занятий" table (per АМ): click a cell to
+  // edit the field, blur/Enter to save, Escape to revert. Read-only for
+  // synthetic "missed" rows — they have no lesson_id.
+  bindHistoryTableEditing(body, studentId);
 
   // Delete this student's record from a lesson (NEVER deletes the lesson itself — even if this was the only student)
   body.querySelectorAll('.btn-delete-lesson-row').forEach(btn => {
@@ -1272,7 +1703,14 @@ async function openStudentDetail(studentId) {
 }
 
 function closeStudentDetail() {
-  guardClose('student-detail-overlay', () => {
+  guardClose('student-detail-overlay', async () => {
+    // Force-fire blur on any live inline-edit control (see saveStudentDetail
+    // for why dispatchEvent instead of .blur()).
+    document
+      .querySelectorAll('#student-detail-overlay .sd-cell input, #student-detail-overlay .sd-cell select')
+      .forEach(el => { try { el.dispatchEvent(new Event('blur')); } catch (_) {} });
+    await new Promise(r => setTimeout(r, 0));
+    await flushActiveCellCommits();
     document.getElementById('student-detail-overlay').classList.remove('active');
     studentDetailId = null;
   });
@@ -1280,6 +1718,17 @@ function closeStudentDetail() {
 
 async function saveStudentDetail() {
   if (!studentDetailId) return;
+  // Force-fire blur on any live inline-edit control in the history table.
+  // Using dispatchEvent(new Event('blur')) rather than .blur() — the latter
+  // only fires if the element is currently focused, and by the time the
+  // user clicks Save the input may have lost focus without ever having
+  // triggered its blur handler naturally.
+  document
+    .querySelectorAll('#student-detail-overlay .sd-cell input, #student-detail-overlay .sd-cell select')
+    .forEach(el => { try { el.dispatchEvent(new Event('blur')); } catch (_) {} });
+  // Yield so blur handlers actually run and register their commits.
+  await new Promise(r => setTimeout(r, 0));
+  await flushActiveCellCommits();
   const firstName = document.getElementById('sd-first-name').value.trim();
   const lastName = document.getElementById('sd-last-name').value.trim();
   const typeVal = document.getElementById('sd-type').value;
