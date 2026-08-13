@@ -1,5 +1,5 @@
 // Bump CACHE_NAME on every deploy so clients refetch assets.
-const CACHE_NAME = 'tutorsync-v127';
+const CACHE_NAME = 'tutorsync-v128';
 
 // Compute base path dynamically so the SW works under any URL,
 // including GitHub Pages subpaths like /tutor-schedule/tutor-schedule/.
@@ -37,9 +37,30 @@ const ASSETS = [
   'assets/vendor/supabase.min.js'
 ].map(path => BASE + path);
 
+// Core assets: without these the app cannot boot offline at all, so a failure
+// here should fail the install and leave the previous SW in charge.
+const CORE_ASSETS = [
+  '',
+  'index.html',
+  'styles.css',
+  'app.js',
+  'modules/config.js',
+  'modules/state.js',
+  'assets/vendor/supabase.min.js'
+].map(path => BASE + path);
+
+// Everything else is cached best-effort. addAll() is atomic — one flaky request
+// on a poor mobile connection aborted the whole install, so users kept running an
+// old version with no indication why. These are fetched individually instead and
+// any misses are picked up later by the runtime fetch handler.
+const OPTIONAL_ASSETS = ASSETS.filter(url => !CORE_ASSETS.includes(url));
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS))
+    caches.open(CACHE_NAME).then(async cache => {
+      await cache.addAll(CORE_ASSETS);
+      await Promise.allSettled(OPTIONAL_ASSETS.map(url => cache.add(url)));
+    })
   );
 });
 

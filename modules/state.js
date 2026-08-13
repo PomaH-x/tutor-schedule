@@ -93,8 +93,15 @@ function getMonday(date) {
   return d;
 }
 
+// Format as YYYY-MM-DD from LOCAL date parts. Not toISOString(): that converts to
+// UTC first, so a local midnight Monday in UTC+3 serialises as the previous Sunday,
+// while the same week in a negative offset serialises as Monday — two users in
+// different zones would compute different week_start keys for the same week.
 function formatDate(date) {
-  return date.toISOString().split('T')[0];
+  const d = new Date(date);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
 function formatDateShort(date) {

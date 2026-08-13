@@ -638,9 +638,8 @@ async function deleteStudent() {
 
   closeStudentModal();
   showConfirm(`Удалить ${name}? Вся история и занятия будут удалены.`, async () => {
-    await db.from('lesson_students').delete().eq('student_id', id);
-    await db.from('cancellations').delete().eq('student_id', id);
-    await db.from('payments').delete().eq('student_id', id);
+    // Cascade is handled by ON DELETE CASCADE on every child table's FK, in one
+    // transaction. See the note on the student-detail delete handler.
     const { error } = await db.from('students').delete().eq('id', id);
     if (error) { showToast('Ошибка удаления', 'error'); return; }
     showToast('Ученик удалён', 'success');
@@ -712,9 +711,11 @@ function initStudents() {
     const id = studentDetailId;
     closeStudentDetail();
     showConfirm(`Удалить ${name}? Вся история и занятия будут удалены.`, async () => {
-      await db.from('lesson_students').delete().eq('student_id', id);
-      await db.from('cancellations').delete().eq('student_id', id);
-      await db.from('payments').delete().eq('student_id', id);
+      // Single delete: every child table (lesson_students, cancellations, payments,
+      // subscriptions, student_subjects, recurring_lesson_students, online_pinned_lessons)
+      // has ON DELETE CASCADE, so Postgres removes them in one transaction. The old
+      // sequential deletes were not transactional — a failure midway left the student
+      // in place with parts of their history already gone.
       const { error } = await db.from('students').delete().eq('id', id);
       if (error) { showToast('Ошибка удаления', 'error'); return; }
       showToast('Ученик удалён', 'success');

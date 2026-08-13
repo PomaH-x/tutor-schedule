@@ -2497,8 +2497,24 @@ async function loadLessons() {
   state.lessons = collapseOverlappingLessons(
     (data || []).filter(l => l.lesson_students?.length > 0 && l.room !== 0)
   );
-  const emptyIds = (data || []).filter(l => !l.lesson_students?.length).map(l => l.id);
-  if (emptyIds.length > 0) db.from('lessons').delete().in('id', emptyIds);
+  // Sweep of empty lessons. Deliberately narrow: a lesson is created first and
+  // students are attached a moment later, so anything recent may be another
+  // teacher's work-in-progress. Deleting it from a *read* path is how lessons
+  // silently vanish under concurrent editing. The real cleanup happens in
+  // cleanEmptyLesson() at the point the last student is removed; this is only a
+  // backstop for rows abandoned mid-creation.
+  const EMPTY_LESSON_GRACE_MS = 10 * 60 * 1000;
+  const cutoff = Date.now() - EMPTY_LESSON_GRACE_MS;
+  const myId = state.user?.id;
+  const emptyIds = (data || [])
+    .filter(l => !l.lesson_students?.length
+      && l.teacher_id === myId
+      && l.created_at && new Date(l.created_at).getTime() < cutoff)
+    .map(l => l.id);
+  if (emptyIds.length > 0) {
+    const { error: sweepErr } = await db.from('lessons').delete().in('id', emptyIds);
+    if (sweepErr) console.warn('empty lesson sweep failed:', sweepErr);
+  }
   if (!recurringByStudent) await loadRecurringByStudent();
   renderLessons();
 
