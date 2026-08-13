@@ -20,7 +20,7 @@
 //     LOADS overwrite the cache. Next reload picks up the latest snapshot.
 // =============================================================================
 
-const CACHE_PREFIX = 'tutor-schedule:cache:v1:';
+const CACHE_PREFIX = 'tutorsync:cache:v1:';
 
 function cacheSet(key, value) {
   try {
