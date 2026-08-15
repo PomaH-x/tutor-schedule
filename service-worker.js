@@ -1,5 +1,5 @@
 // Bump CACHE_NAME on every deploy so clients refetch assets.
-const CACHE_NAME = 'tutorsync-v128';
+const CACHE_NAME = 'tutorsync-v131';
 
 // Compute base path dynamically so the SW works under any URL,
 // including GitHub Pages subpaths like /tutor-schedule/tutor-schedule/.
@@ -14,6 +14,7 @@ const ASSETS = [
   'manifest.json',
   'modules/config.js',
   'modules/state.js',
+  'modules/money.js',
   'modules/cache.js',
   'modules/modal-guard.js',
   'modules/auth.js',
@@ -46,6 +47,7 @@ const CORE_ASSETS = [
   'app.js',
   'modules/config.js',
   'modules/state.js',
+  'modules/money.js',
   'assets/vendor/supabase.min.js'
 ].map(path => BASE + path);
 

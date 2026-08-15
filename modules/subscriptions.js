@@ -921,38 +921,16 @@ function closeSubscriptionRefund() {
   });
 }
 
-// Round refund up to multiples of 50 — center pays human-friendly amounts in cash
-function roundRefundUp50(n) {
-  if (n <= 0) return 0;
-  return Math.ceil(n / 50) * 50;
-}
-
 function refreshRefundCalc() {
   if (!refundCtx) return;
   const sub = refundCtx.sub;
   const sp = refundCtx.singlePrice;
-  const usedRaw = parseInt(document.getElementById('sub-refund-used').value);
-  const used = Math.max(0, Math.min(isNaN(usedRaw) ? 0 : usedRaw, sub.total_lessons));
-
-  // What the student "really paid" after refund: used × single tariff
-  const newPaidExact = used * sp.student_price;
-  const newTeacher = used * sp.teacher_profit;
-  const newCenter = used * sp.commission;
-
-  // Raw refund and rounded-up to multiples of 50
-  const refundExact = sub.paid_amount - newPaidExact;
-  const refund = roundRefundUp50(refundExact);
-  // Adjust effective paid (after rounding the refund up, slightly less stays in the system)
-  const effectivePaid = sub.paid_amount - refund;
-
-  // Splits of refund between teacher and center, by single-tariff proportion
-  // Round center part up to multiples of 50; teacher keeps the remainder (so the sum
-  // still equals the displayed total refund).
-  const teacherRatio = sp.student_price > 0 ? sp.teacher_profit / sp.student_price : 0;
-  const rawCenter = refund * (1 - teacherRatio);
-  let refundFromCenter = Math.ceil(rawCenter / 50) * 50;
-  if (refundFromCenter > refund) refundFromCenter = refund;
-  const refundFromTeacher = refund - refundFromCenter;
+  // All arithmetic lives in money.js so it can be unit-tested; this function only renders.
+  const {
+    used, newPaidExact, newTeacher, newCenter,
+    refundExact, refund, effectivePaid,
+    refundFromCenter, refundFromTeacher
+  } = calcRefund(sub, sp, document.getElementById('sub-refund-used').value);
 
   const calc = document.getElementById('sub-refund-calc');
   const roundedNote = refund !== refundExact

@@ -1,3 +1,8 @@
+// Timestamp of the most recent toast. The DB error interceptor (config.js) uses it to
+// stay quiet when the calling code already told the user something — otherwise a failed
+// save produces two toasts: the specific one from the handler and a generic one from us.
+let lastToastShownAt = 0;
+
 function showToast(message, type = 'info') {
   const toast = document.getElementById('toast');
   toast.textContent = message;
@@ -5,6 +10,7 @@ function showToast(message, type = 'info') {
   if (type === 'error') toast.classList.add('toast-error');
   if (type === 'success') toast.classList.add('toast-success');
   toast.classList.add('visible');
+  lastToastShownAt = Date.now();
   clearTimeout(toast._timeout);
   toast._timeout = setTimeout(() => toast.classList.remove('visible'), 3000);
 }

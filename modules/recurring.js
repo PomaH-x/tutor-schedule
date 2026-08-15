@@ -1200,7 +1200,11 @@ async function placeStudentOnRecurringCell(day, room, slot) {
     }).select().single();
     if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
 
-    await db.from('recurring_lesson_students').insert({ recurring_lesson_id: newRec.id, student_id: s.studentId });
+    // Verify the add before removing from the source template — an unchecked insert
+    // followed by a successful delete would drop the student from the recurring
+    // schedule entirely, and that only surfaces next week when lessons don't appear.
+    const { error: recMoveErr } = await db.from('recurring_lesson_students').insert({ recurring_lesson_id: newRec.id, student_id: s.studentId });
+    if (recMoveErr) { showToast('Не удалось перенести ученика', 'error'); cancelStudentDrag(); return; }
 
     if (sourceRecId) {
       await db.from('recurring_lesson_students').delete().eq('recurring_lesson_id', sourceRecId).eq('student_id', s.studentId);
@@ -1252,7 +1256,11 @@ async function placeStudentOnRecurringLesson(targetLessonId) {
     }).select().single();
     if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
 
-    await db.from('recurring_lesson_students').insert({ recurring_lesson_id: newRec.id, student_id: s.studentId });
+    // Verify the add before removing from the source template — an unchecked insert
+    // followed by a successful delete would drop the student from the recurring
+    // schedule entirely, and that only surfaces next week when lessons don't appear.
+    const { error: recMoveErr } = await db.from('recurring_lesson_students').insert({ recurring_lesson_id: newRec.id, student_id: s.studentId });
+    if (recMoveErr) { showToast('Не удалось перенести ученика', 'error'); cancelStudentDrag(); return; }
 
     if (sourceRecId) {
       await db.from('recurring_lesson_students').delete().eq('recurring_lesson_id', sourceRecId).eq('student_id', s.studentId);
@@ -1285,7 +1293,9 @@ async function placeStudentOnRecurringLesson(targetLessonId) {
   if (isInd && targetStudents.length > 0) { showToast('Индивидуальное занятие — только один ученик', 'error'); cancelStudentDrag(); return; }
   if (!isInd && targetHasIndividual) { showToast('В занятии уже индивидуальный ученик', 'error'); cancelStudentDrag(); return; }
 
-  await db.from('recurring_lesson_students').insert({ recurring_lesson_id: targetLessonId, student_id: s.studentId });
+  // Same add-then-remove guard as the other recurring transfers.
+  const { error: recMoveErr } = await db.from('recurring_lesson_students').insert({ recurring_lesson_id: targetLessonId, student_id: s.studentId });
+  if (recMoveErr) { showToast('Не удалось перенести ученика', 'error'); cancelStudentDrag(); return; }
 
   if (sourceRecId) {
     await db.from('recurring_lesson_students').delete().eq('recurring_lesson_id', sourceRecId).eq('student_id', s.studentId);

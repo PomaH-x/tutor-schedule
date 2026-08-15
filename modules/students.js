@@ -869,7 +869,6 @@ function makeEditControl(cell) {
 async function applyCellEdit(cell, newValue, studentId) {
   const field = cell.dataset.field;
   const lessonId = cell.dataset.lessonId;
-  console.log('[inline-edit] applyCellEdit start:', { field, lessonId, newValue, studentId });
   if (!lessonId) { console.warn('[inline-edit] no lessonId, aborting'); return false; }
 
   // Look up the current lesson from state — we need teacher_id, room, current
@@ -1035,12 +1034,10 @@ let activeCellCommits = new Map(); // HTMLElement (cell) → async commit fn
 
 async function flushActiveCellCommits() {
   const pending = [...activeCellCommits.values()];
-  console.log('[inline-edit] flushActiveCellCommits: pending count =', pending.length);
   activeCellCommits.clear();
   for (const commitFn of pending) {
     try { await commitFn(); } catch (e) { console.error('[inline-edit] flushActiveCellCommits error:', e); }
   }
-  console.log('[inline-edit] flushActiveCellCommits done');
 }
 
 function bindHistoryTableEditing(container, studentId) {
@@ -1057,7 +1054,6 @@ function bindHistoryTableEditing(container, studentId) {
 }
 
 function startCellEdit(cell, studentId) {
-  console.log('[inline-edit] startCellEdit for', cell.dataset.field, 'lesson', cell.dataset.lessonId);
   const control = makeEditControl(cell);
   if (!control) return;
   const originalHTML = cell.innerHTML;
@@ -1071,17 +1067,12 @@ function startCellEdit(cell, studentId) {
 
   let commited = false;
   const commit = async () => {
-    console.log('[inline-edit] commit called for', cell.dataset.field, 'commited?', commited);
     if (commited) return;
     commited = true;
     // Always deregister BEFORE the async work so flushActiveCellCommits()
     // doesn't loop forever if called mid-commit.
     activeCellCommits.delete(cell);
     const val = control.value;
-    console.log('[inline-edit] commit value:', val, 'vs current:', {
-      iso: cell.dataset.iso, time: cell.dataset.time,
-      minutes: cell.dataset.minutes, status: cell.dataset.status, payment: cell.dataset.payment
-    });
     // If value didn't change, revert silently
     const noChange = (
       (cell.dataset.field === 'date' && val === cell.dataset.iso) ||
@@ -1091,13 +1082,11 @@ function startCellEdit(cell, studentId) {
       (cell.dataset.field === 'payment' && val === cell.dataset.payment)
     );
     if (noChange) {
-      console.log('[inline-edit] noChange — reverting');
       cell.innerHTML = originalHTML;
       return;
     }
 
     const ok = await applyCellEdit(cell, val, studentId);
-    console.log('[inline-edit] applyCellEdit returned:', ok);
     if (!ok) cell.innerHTML = originalHTML;
   };
   const revert = () => {
@@ -1639,7 +1628,10 @@ async function openStudentDetail(studentId) {
 
   body.querySelectorAll('[data-approve]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      await db.from('payments').update({ status: 'approved', approved_at: new Date().toISOString(), approved_by_id: state.user.id }).eq('id', btn.dataset.approve);
+      // Money: never claim success without checking. A silent RLS failure here would
+      // tell the teacher the payment is confirmed while the student still shows unpaid.
+      const { error } = await db.from('payments').update({ status: 'approved', approved_at: new Date().toISOString(), approved_by_id: state.user.id }).eq('id', btn.dataset.approve);
+      if (error) { showToast('Не удалось подтвердить оплату', 'error'); return; }
       showToast('Оплата подтверждена', 'success');
       await openStudentDetail(studentId);
     });
@@ -1647,7 +1639,8 @@ async function openStudentDetail(studentId) {
 
   body.querySelectorAll('[data-reject]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      await db.from('payments').update({ status: 'rejected' }).eq('id', btn.dataset.reject);
+      const { error } = await db.from('payments').update({ status: 'rejected' }).eq('id', btn.dataset.reject);
+      if (error) { showToast('Не удалось отклонить оплату', 'error'); return; }
       showToast('Оплата отклонена', 'success');
       await openStudentDetail(studentId);
     });

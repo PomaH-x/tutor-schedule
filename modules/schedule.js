@@ -1858,7 +1858,11 @@ async function placeTransferredStudent(day, room, slot) {
         transfer_by_teacher: byTeacher
       }).select().single();
       if (error) { showToast('Ошибка', 'error'); return; }
-      await db.from('lesson_students').insert({ lesson_id: data.id, student_id: p.studentId });
+      // Add-then-remove ordering only protects the student if the add is verified:
+      // a silently failed insert followed by a successful delete drops them from both
+      // lessons. Abort here and the student simply stays where they were.
+      const { error: moveErr } = await db.from('lesson_students').insert({ lesson_id: data.id, student_id: p.studentId });
+      if (moveErr) { showToast('Не удалось перенести ученика', 'error'); return; }
       await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
       await attachActiveSubscriptionIfAny(data.id, p.studentId, p.teacherId);
       await recomputeSubscriptionsByLesson(p.lessonId);
@@ -1898,7 +1902,11 @@ async function placeTransferredStudentOnLesson(targetLessonId) {
       recomputeSubscriptionsByIds(rpcRes.affected_sub_ids);
     } else {
       // Legacy fallback
-      await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: p.studentId });
+      // Add-then-remove ordering only protects the student if the add is verified:
+      // a silently failed insert followed by a successful delete drops them from both
+      // lessons. Abort here and the student simply stays where they were.
+      const { error: moveErr } = await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: p.studentId });
+      if (moveErr) { showToast('Не удалось перенести ученика', 'error'); return; }
       await db.from('lesson_students').delete().eq('lesson_id', p.lessonId).eq('student_id', p.studentId);
       await attachActiveSubscriptionIfAny(targetLessonId, p.studentId, p.teacherId);
       await recomputeSubscriptionsByLesson(p.lessonId);
@@ -2001,7 +2009,11 @@ async function placeStudentOnCell(day, room, slot) {
         transfer_by_teacher: byTeacher
       }).select().single();
       if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
-      await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
+      // Add-then-remove ordering only protects the student if the add is verified:
+      // a silently failed insert followed by a successful delete drops them from both
+      // lessons. Abort here and the student simply stays where they were.
+      const { error: moveErr } = await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
+      if (moveErr) { showToast('Не удалось перенести ученика', 'error'); cancelStudentDrag(); return; }
       await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
       await attachActiveSubscriptionIfAny(data.id, s.studentId, s.teacherId);
       await recomputeSubscriptionsByLesson(s.lessonId);
@@ -2081,7 +2093,11 @@ async function placeStudentOnLesson(targetLessonId) {
         transfer_by_teacher: byTeacher
       }).select().single();
       if (error) { showToast('Ошибка', 'error'); cancelStudentDrag(); return; }
-      await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
+      // Add-then-remove ordering only protects the student if the add is verified:
+      // a silently failed insert followed by a successful delete drops them from both
+      // lessons. Abort here and the student simply stays where they were.
+      const { error: moveErr } = await db.from('lesson_students').insert({ lesson_id: data.id, student_id: s.studentId });
+      if (moveErr) { showToast('Не удалось перенести ученика', 'error'); cancelStudentDrag(); return; }
       await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
       await attachActiveSubscriptionIfAny(data.id, s.studentId, s.teacherId);
       await recomputeSubscriptionsByLesson(s.lessonId);
@@ -2125,7 +2141,9 @@ async function placeStudentOnLesson(targetLessonId) {
     recomputeSubscriptionsByIds(rpcRes.affected_sub_ids);
   } else {
     // Legacy fallback (RPC not installed)
-    await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: s.studentId });
+    // See the note on the other add-then-remove pairs: verify the add before deleting.
+    const { error: moveErr } = await db.from('lesson_students').insert({ lesson_id: targetLessonId, student_id: s.studentId });
+    if (moveErr) { showToast('Не удалось перенести ученика', 'error'); return; }
     await db.from('lesson_students').delete().eq('lesson_id', s.lessonId).eq('student_id', s.studentId);
     await attachActiveSubscriptionIfAny(targetLessonId, s.studentId, s.teacherId);
     await recomputeSubscriptionsByLesson(s.lessonId);

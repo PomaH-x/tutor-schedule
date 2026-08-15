@@ -337,14 +337,13 @@ async function selectColor(color) {
 
 function deleteTeacher(teacherId, name) {
   showConfirm(`Удалить ${name}? Все занятия и ученики будут удалены.`, async () => {
-    const lessonIds = (await db.from('lessons').select('id').eq('teacher_id', teacherId)).data?.map(l => l.id) || [];
-    if (lessonIds.length > 0) {
-      await db.from('lesson_students').delete().in('lesson_id', lessonIds);
-    }
-    await db.from('lessons').delete().eq('teacher_id', teacherId);
-    await db.from('recurring_lessons').delete().eq('teacher_id', teacherId);
-    await db.from('students').delete().eq('teacher_id', teacherId);
-    await db.from('profiles').delete().eq('id', teacherId);
+    // One delete: lessons, recurring_lessons, students, cancellations, subscriptions,
+    // teacher_subjects, push_subscriptions and the rest all have ON DELETE CASCADE on
+    // their teacher FK, so Postgres removes them in a single transaction. The previous
+    // sequence of six deletes was not transactional — a failure partway (RLS, network)
+    // left the teacher in place with their lessons already gone.
+    const { error } = await db.from('profiles').delete().eq('id', teacherId);
+    if (error) { showToast('Не удалось удалить преподавателя', 'error'); return; }
 
     // Immediately update state so grid reflects deletion without reload
     state.lessons = state.lessons.filter(l => l.teacher_id !== teacherId);
@@ -446,8 +445,8 @@ async function openTeacherSubjectsModal(teacherId, teacherName) {
   list.innerHTML = (subjects || []).map(s => {
     const checked = selected.has(s.id);
     return `<label class="lesson-student-row${checked ? ' checked' : ''}">
-      <span class="lesson-student-name">${s.name}</span>
-      <input type="checkbox" class="lesson-checkbox" data-id="${s.id}" ${checked ? 'checked' : ''}>
+      <span class="lesson-student-name">${escapeHtml(s.name)}</span>
+      <input type="checkbox" class="lesson-checkbox" data-id="${escapeHtml(s.id)}" ${checked ? 'checked' : ''}>
     </label>`;
   }).join('') || '<div class="lesson-no-students">Нет предметов</div>';
 

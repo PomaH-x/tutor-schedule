@@ -748,6 +748,9 @@ input, textarea, select {
   border-bottom: 1px solid var(--border);
   position: relative;
   cursor: crosshair;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .grid-cell-hour {
@@ -784,16 +787,7 @@ input, textarea, select {
   background: rgba(220, 53, 69, 0.25);
 }
 
-.lesson-card-dragging {
-  opacity: 0.3;
-  pointer-events: none;
-}
 
-.lesson-card-drop-target {
-  box-shadow: 0 0 0 2px var(--accent), var(--shadow) !important;
-  transform: scale(1.05);
-  z-index: 10 !important;
-}
 
 .grid-dragging .lesson-card {
   pointer-events: none;
@@ -1152,6 +1146,7 @@ input, textarea, select {
 
 .lesson-card-drop-target {
   box-shadow: 0 0 0 2px var(--accent), var(--shadow) !important;
+  transform: scale(1.05);
   z-index: 10 !important;
 }
 
@@ -2509,10 +2504,6 @@ input, textarea, select {
   color: var(--success);
 }
 
-.badge-transferred {
-  background: rgba(245, 197, 24, 0.15);
-  color: #f5c518;
-}
 
 .badge-transferred {
   background: rgba(245, 197, 24, 0.15);
@@ -2968,12 +2959,13 @@ input, textarea, select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 14px 16px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   cursor: pointer;
-  transition: all 0.15s;
+  flex-shrink: 0;
+  transition: all 0.3s;
 }
 
 .student-card:hover {
@@ -3846,15 +3838,6 @@ input, textarea, select {
   align-content: flex-start;
 }
 
-.student-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  display: flex;
-  flex-shrink: 0;
-  transition: all 0.3s;
-}
 
 .student-card-cancelled {
   opacity: 0.5;
@@ -4553,14 +4536,11 @@ input, textarea, select {
 }
 
 .reason-img-empty,
-.reason-img-error {
-  color: var(--text-muted);
-  font-size: 13px;
-  text-align: center;
-}
 
 .reason-img-error {
   color: var(--danger);
+  font-size: 13px;
+  text-align: center;
 }
 
 .reason-edit-controls {
@@ -5161,7 +5141,7 @@ input, textarea, select {
 
 /* Delete subscription button inside active panel */
 .sub-panel-delete {
-  margin-left: 6px;
+  margin-left: 0;
   width: 24px;
   height: 24px;
   display: inline-flex;
@@ -5427,9 +5407,6 @@ input, textarea, select {
   color: var(--accent);
   border-color: var(--accent);
 }
-.sub-panel-delete {
-  margin-left: 0;
-}
 
 /* Refunded subscription panel */
 .sub-panel-refunded {
@@ -5648,11 +5625,6 @@ input, textarea, select {
 
 /* Suppress system selection/callout on cards & cells during touch */
 .lesson-card,
-.grid-cell {
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  user-select: none;
-}
 
 /* Z-cycle button on the topmost card of an overlap stack (mobile + desktop) */
 .lc-zcycle {

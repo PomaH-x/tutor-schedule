@@ -241,7 +241,7 @@ async function loadPayroll() {
       renderPayroll(
         cached.lessons || [], cached.cancellations || [],
         cached.soldSubs || [], cached.refundedSubs || [],
-        cached.subsById || {}, cached.isAdmin
+        cached.subsById || {}, cached.isAdmin, cached.subOrder || {}
       );
       didHydrateFromCache = true;
     }
@@ -297,14 +297,38 @@ async function loadPayroll() {
     if (ls.subscription_id) subIds.add(ls.subscription_id);
   }));
   let subsById = {};
+  let subOrder = {};
   if (subIds.size > 0) {
     const { data: subs } = await db.from('subscriptions')
       .select('id, total_lessons, paid_amount, teacher_share, center_share, status, pricing:pricing_id(duration_minutes, format, is_individual, is_online)')
       .in('id', Array.from(subIds));
     (subs || []).forEach(s => { subsById[s.id] = s; });
+
+    // Position of each lesson inside its subscription, across ALL weeks — not just the
+    // one on screen. subscriptionLessonShare() needs a stable index so the same lesson
+    // is worth the same amount no matter which week's payroll is being rendered.
+    const { data: subLinks } = await db.from('lesson_students')
+      .select('lesson_id, subscription_id, lesson:lesson_id(start_time)')
+      .in('subscription_id', Array.from(subIds));
+    const grouped = {};
+    (subLinks || []).forEach(r => {
+      if (!r.subscription_id) return;
+      (grouped[r.subscription_id] = grouped[r.subscription_id] || []).push({
+        lessonId: r.lesson_id,
+        startTime: r.lesson?.start_time || ''
+      });
+    });
+    Object.keys(grouped).forEach(subId => {
+      // start_time first, lesson_id as tie-breaker so the order never depends on
+      // whatever sequence Postgres happened to return.
+      grouped[subId].sort((a, b) =>
+        a.startTime.localeCompare(b.startTime) || String(a.lessonId).localeCompare(String(b.lessonId)));
+      subOrder[subId] = {};
+      grouped[subId].forEach((r, i) => { subOrder[subId][r.lessonId] = i; });
+    });
   }
 
-  renderPayroll(lessons || [], cancellations || [], soldSubs || [], refundedSubs || [], subsById, isAdmin);
+  renderPayroll(lessons || [], cancellations || [], soldSubs || [], refundedSubs || [], subsById, isAdmin, subOrder);
   // Persist this week's full input set so we can replay renderPayroll offline
   if (typeof cacheSet === 'function') {
     cacheSet('payroll:' + ws, {
@@ -313,6 +337,7 @@ async function loadPayroll() {
       soldSubs: soldSubs || [],
       refundedSubs: refundedSubs || [],
       subsById,
+      subOrder,
       isAdmin
     });
   }
@@ -354,7 +379,7 @@ function ensureTeacherBucket(tId, lesson, cancellation, sub, soldList) {
 // caused visible flashing of the numbers.
 let lastPayrollSignature = null;
 
-function renderPayroll(lessons, cancellations, soldSubs, refundedSubs, subsById, isAdmin) {
+function renderPayroll(lessons, cancellations, soldSubs, refundedSubs, subsById, isAdmin, subOrder) {
   const container = document.getElementById('payroll-content');
   if (!container) return;
 
@@ -416,10 +441,14 @@ function renderPayroll(lessons, cancellations, soldSubs, refundedSubs, subsById,
         td.subStudents[sKey].amount += perRevenue;
         td.subStudents[sKey].count++;
       } else if (sub) {
-        // Active/expired subscription lesson — spread profit across all lessons
+        // Active/expired subscription lesson — spread profit across all lessons.
+        // The index comes from subOrder so the parts sum to exactly paid_amount
+        // across the whole subscription instead of drifting a few rubles per week.
         const total = sub.total_lessons || 8;
-        const perProfit = Math.round((isTeacherAdmin ? sub.paid_amount : sub.teacher_share) / total);
-        const perRevenue = Math.round(sub.paid_amount / total);
+        const idx = subOrder?.[sub.id]?.[lesson.id];
+        const perProfit = subscriptionLessonShare(
+          isTeacherAdmin ? sub.paid_amount : sub.teacher_share, total, idx);
+        const perRevenue = subscriptionLessonShare(sub.paid_amount, total, idx);
         td.subProfit += perProfit;
         td.subRevenue += perRevenue;
         const fmt = sub.pricing?.format === 'sub4' ? 4 : 8;
@@ -476,10 +505,15 @@ function renderPayroll(lessons, cancellations, soldSubs, refundedSubs, subsById,
 
     let amount = 0;
     if (cancelledLessonSubId && subsById[cancelledLessonSubId]) {
-      // Subscription-linked cancellation: amount shown is "per-lesson" spread, just for display
+      // Subscription-linked cancellation: amount shown is "per-lesson" spread, just for display.
+      // Same share function as the lesson loop so the cancelled lesson displays the exact
+      // value it would have had — the paired lesson id gives us the index.
       const sub = subsById[cancelledLessonSubId];
       const total = sub.total_lessons || 8;
-      amount = Math.round((td.role === 'admin' ? sub.paid_amount : sub.teacher_share) / total);
+      const pairedLesson = lessons.find(l => l.teacher_id === tId && l.status === 'cancelled' && l.start_time === c.lesson_start_time);
+      const idx = pairedLesson ? subOrder?.[sub.id]?.[pairedLesson.id] : undefined;
+      amount = subscriptionLessonShare(
+        td.role === 'admin' ? sub.paid_amount : sub.teacher_share, total, idx);
     } else if (cancelledLessonDur) {
       // One-off cancellation: precise tariff lookup by duration + student params
       const priceObj = findPricing(cancelledLessonDur, s.is_individual || false, s.price_type || 'new', s.is_online || false);

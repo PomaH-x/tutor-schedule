@@ -18,3 +18,58 @@ const VAPID_PUBLIC_KEY = 'BMO2VlnD8SenOLZ05QtRd26q0lMz0nArSHrQyYOy7aGKO9CXecMa-J
 try { localStorage.removeItem('sb_endpoint'); } catch (_) {}
 
 const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ===== WRITE ERROR INTERCEPTOR =====
+// Supabase resolves rather than throws: a failed insert/update/delete comes back as
+// { data: null, error } and a caller that doesn't destructure `error` proceeds as if
+// the write succeeded. The UI then shows a saved state the database never recorded —
+// the "I saved it and it's gone" class of bug, and the hardest to reproduce because
+// nothing appears in any log.
+//
+// Rather than editing 100+ call sites (a large diff with a mistake in every one a
+// possibility), this wraps db.from() once and instruments the four write builders.
+// The resolved value is passed through untouched, so every existing `if (error)`
+// branch keeps working exactly as before — this only adds reporting on top.
+const RAW_FROM = db.from.bind(db);
+const WRITE_OPS = ['insert', 'update', 'delete', 'upsert'];
+
+function reportWriteError(table, op, error) {
+  console.error(`[db.${op}] ${table}:`, error);
+  // Give the caller's own handler a moment to surface something specific. If it did,
+  // stay quiet — two toasts for one failure is worse than one good message.
+  setTimeout(() => {
+    try {
+      if (Date.now() - lastToastShownAt < 500) return;
+      showToast('Не удалось сохранить изменения. Проверьте связь и повторите', 'error');
+    } catch (_) { /* toast layer unavailable — console already has it */ }
+  }, 300);
+}
+
+function instrumentWrite(query, table, op) {
+  // PostgrestFilterBuilder is a thenable; chaining (.eq/.select/...) returns the same
+  // instance, so patching then() here survives the whole chain.
+  if (!query || typeof query.then !== 'function') return query;
+  const originalThen = query.then.bind(query);
+  query.then = function (onFulfilled, onRejected) {
+    return originalThen(
+      (result) => {
+        if (result && result.error) reportWriteError(table, op, result.error);
+        return onFulfilled ? onFulfilled(result) : result;
+      },
+      onRejected
+    );
+  };
+  return query;
+}
+
+db.from = function (table) {
+  const builder = RAW_FROM(table);
+  WRITE_OPS.forEach(op => {
+    const original = builder[op];
+    if (typeof original !== 'function') return;
+    builder[op] = function (...args) {
+      return instrumentWrite(original.apply(this, args), table, op);
+    };
+  });
+  return builder;
+};

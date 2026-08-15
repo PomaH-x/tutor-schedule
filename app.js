@@ -239,3 +239,35 @@ function promptForUpdate(newWorker) {
   };
   document.getElementById('pwa-update-dismiss').onclick = () => banner.remove();
 }
+
+// ===== GLOBAL ERROR TRAPS =====
+// Supabase returns { data, error } rather than throwing, so most failures surface
+// as handled branches. These traps catch what's left: real exceptions and rejected
+// promises that nothing awaited. Without them a thrown error mid-render leaves a
+// half-drawn screen and the user has no idea anything went wrong.
+//
+// Deliberately quiet: one toast per 10s, because a failure inside a render loop or
+// a realtime handler can fire repeatedly and a toast storm is worse than silence.
+let lastErrorToastAt = 0;
+const ERROR_TOAST_COOLDOWN_MS = 10000;
+
+function reportUnexpectedError(source, err) {
+  console.error(`[${source}]`, err);
+  const now = Date.now();
+  if (now - lastErrorToastAt < ERROR_TOAST_COOLDOWN_MS) return;
+  lastErrorToastAt = now;
+  try {
+    showToast('Что-то пошло не так. Если проблема повторится — обновите страницу', 'error');
+  } catch (_) { /* toast system itself is down — console already has the details */ }
+}
+
+window.addEventListener('error', (ev) => {
+  // Ignore resource load failures (img/script 404s); they surface as ErrorEvent
+  // with no `error` object and would otherwise toast on every broken avatar.
+  if (!ev.error) return;
+  reportUnexpectedError('window.error', ev.error);
+});
+
+window.addEventListener('unhandledrejection', (ev) => {
+  reportUnexpectedError('unhandledrejection', ev.reason);
+});
