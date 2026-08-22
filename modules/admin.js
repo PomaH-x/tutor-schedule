@@ -119,29 +119,63 @@ async function approveUser(userId) {
   const user = pendingUsers.find(u => u.id === userId);
   if (!user) return;
 
-  // For students — create one students record per (teacher, subject) pair
+  // For students — ONE students record per teacher, with the chosen subjects linked
+  // through student_subjects. Creating a row per (teacher, subject) pair — as this did
+  // before — gave the teacher the same child twice under different subjects, with the
+  // lesson history and subscriptions split across two unrelated cards.
   if (user.role === 'student' && Array.isArray(user.joinRequests) && user.joinRequests.length > 0) {
     const firstName = user.full_name.split(' ')[0] || user.full_name;
     const lastName = user.full_name.split(' ').slice(1).join(' ') || '';
-    const rows = user.joinRequests
-      .filter(r => r.teacher_id && r.subject?.name)
-      .map(r => ({
-        first_name: firstName,
-        last_name: lastName,
-        subject: r.subject.name,
-        grade: r.grade || user.requested_grade || null,
-        teacher_id: r.teacher_id,
-        profile_id: user.id,
-        is_individual: false,
-        is_online: false,
-        price_type: 'new'
-      }));
+
+    // Group the requests by teacher, collecting each teacher's subjects.
+    const byTeacher = new Map();
+    user.joinRequests
+      .filter(r => r.teacher_id && r.subject?.id)
+      .forEach(r => {
+        if (!byTeacher.has(r.teacher_id)) {
+          byTeacher.set(r.teacher_id, { grade: r.grade || user.requested_grade || null, subjects: [] });
+        }
+        const entry = byTeacher.get(r.teacher_id);
+        if (!entry.subjects.some(s => s.id === r.subject.id)) entry.subjects.push(r.subject);
+      });
+
+    const rows = Array.from(byTeacher.entries()).map(([teacherId, entry]) => ({
+      first_name: firstName,
+      last_name: lastName,
+      // Legacy single-subject column: keep the first subject so older views that
+      // still read students.subject show something sensible. The junction table
+      // below is the real source of truth.
+      subject: entry.subjects[0]?.name || null,
+      grade: entry.grade,
+      teacher_id: teacherId,
+      profile_id: user.id,
+      is_individual: false,
+      is_online: false,
+      price_type: 'new'
+    }));
+
     if (rows.length > 0) {
-      const { error: studentErr } = await db.from('students').insert(rows);
+      const { data: created, error: studentErr } = await db.from('students').insert(rows).select('id, teacher_id');
       if (studentErr) {
         console.error('Student create error:', studentErr);
         showToast('Ошибка создания учеников: ' + studentErr.message, 'error');
         return;
+      }
+      // Link every requested subject to the matching card.
+      const links = [];
+      (created || []).forEach(s => {
+        const entry = byTeacher.get(s.teacher_id);
+        (entry?.subjects || []).forEach(sub => {
+          links.push({ student_id: s.id, subject_id: sub.id });
+        });
+      });
+      if (links.length > 0) {
+        const { error: ssErr } = await db.from('student_subjects')
+          .upsert(links, { onConflict: 'student_id,subject_id', ignoreDuplicates: true });
+        if (ssErr) {
+          console.error('student_subjects insert error:', ssErr);
+          showToast('Ученик создан, но предметы не привязались', 'error');
+        }
       }
     }
     // Clean up the join requests
@@ -407,7 +441,18 @@ function renderSubjectsAdmin(subjects) {
   list.querySelectorAll('.btn-delete-subject').forEach(btn => {
     btn.addEventListener('click', () => {
       showConfirm(`Удалить предмет "${btn.dataset.name}"?`, async () => {
-        await db.from('subjects').delete().eq('id', btn.dataset.id);
+        const { error } = await db.from('subjects').delete().eq('id', btn.dataset.id);
+        if (error) {
+          // FKs from lesson_students, student_subjects and subscriptions are
+          // ON DELETE RESTRICT — the database refuses to delete a subject that is
+          // still referenced, deliberately, so history doesn't lose what was taught.
+          // 23503 is foreign_key_violation.
+          const inUse = error.code === '23503';
+          showToast(inUse
+            ? 'Предмет используется в занятиях или абонементах — удалить нельзя'
+            : 'Не удалось удалить предмет', 'error');
+          return;
+        }
         showToast('Предмет удалён', 'success');
         await loadSubjectsAdmin();
         await loadSubjects();

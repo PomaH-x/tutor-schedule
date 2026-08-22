@@ -515,8 +515,9 @@ function initStudent() {
     renderStudentHistory();
   });
 
-  document.getElementById('btn-profile-student').addEventListener('click', () => showScreen('screen-profile'));
-  document.getElementById('btn-profile-student-history').addEventListener('click', () => showScreen('screen-profile'));
+  // Students have no profile screen — the icon logs them out instead.
+  document.getElementById('btn-profile-student').addEventListener('click', handleLogout);
+  document.getElementById('btn-profile-student-history').addEventListener('click', handleLogout);
 
   document.getElementById('btn-payment-cancel').addEventListener('click', closePaymentModal);
   document.getElementById('btn-payment-submit').addEventListener('click', submitPayment);

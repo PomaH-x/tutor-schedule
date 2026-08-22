@@ -342,29 +342,31 @@ input, textarea, select {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   overflow: hidden;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, background 0.15s;
 }
 
-.reg-teacher-item.expanded {
+.reg-teacher-item:hover {
   border-color: var(--accent);
+}
+
+.reg-teacher-item.selected {
+  border-color: var(--accent);
+  background: var(--bg-elevated);
 }
 
 .reg-teacher-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   cursor: pointer;
   user-select: none;
 }
 
+/* The checkbox stays in the DOM (the label drives it) but is never drawn — the
+   selected state reads from the highlighted card instead, matching the rest of the UI. */
 .reg-teacher-head input[type=checkbox] {
-  margin: 0;
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-  accent-color: var(--accent);
-  flex-shrink: 0;
+  display: none;
 }
 
 .reg-teacher-color {
@@ -380,48 +382,57 @@ input, textarea, select {
   color: var(--text);
 }
 
-.reg-teacher-arrow {
-  color: var(--text-muted);
-  font-size: 18px;
-  transform: rotate(0deg);
-  transition: transform 0.15s;
-}
-
-.reg-teacher-item.expanded .reg-teacher-arrow {
-  transform: rotate(90deg);
+/* Explicit [hidden] rule: the display:flex below would otherwise override the
+   browser default and leave the subject list visible before a teacher is picked. */
+.reg-subjects-list[hidden] {
+  display: none;
 }
 
 .reg-subjects-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 6px;
-  padding: 0 10px 10px 36px;
+  padding: 0 12px 12px 12px;
 }
 
-.reg-subject-item {
+.reg-subjects-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.reg-subject-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reg-subject-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: var(--bg-elevated);
+  padding: 5px 12px;
+  background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 999px;
   font-size: 13px;
+  color: var(--text);
   cursor: pointer;
   user-select: none;
   transition: background 0.15s, border-color 0.15s;
 }
 
-.reg-subject-item:hover {
+.reg-subject-chip:hover {
   border-color: var(--accent);
 }
 
-.reg-subject-item input[type=checkbox] {
-  margin: 0;
-  width: 14px;
-  height: 14px;
-  cursor: pointer;
-  accent-color: var(--accent);
+.reg-subject-chip:has(input:checked) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.reg-subject-chip input[type=checkbox] {
+  display: none;
 }
 
 .btn-primary {
@@ -748,9 +759,6 @@ input, textarea, select {
   border-bottom: 1px solid var(--border);
   position: relative;
   cursor: crosshair;
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  user-select: none;
 }
 
 .grid-cell-hour {
@@ -787,7 +795,16 @@ input, textarea, select {
   background: rgba(220, 53, 69, 0.25);
 }
 
+.lesson-card-dragging {
+  opacity: 0.3;
+  pointer-events: none;
+}
 
+.lesson-card-drop-target {
+  box-shadow: 0 0 0 2px var(--accent), var(--shadow) !important;
+  transform: scale(1.05);
+  z-index: 10 !important;
+}
 
 .grid-dragging .lesson-card {
   pointer-events: none;
@@ -1146,7 +1163,6 @@ input, textarea, select {
 
 .lesson-card-drop-target {
   box-shadow: 0 0 0 2px var(--accent), var(--shadow) !important;
-  transform: scale(1.05);
   z-index: 10 !important;
 }
 
@@ -2504,6 +2520,10 @@ input, textarea, select {
   color: var(--success);
 }
 
+.badge-transferred {
+  background: rgba(245, 197, 24, 0.15);
+  color: #f5c518;
+}
 
 .badge-transferred {
   background: rgba(245, 197, 24, 0.15);
@@ -2959,13 +2979,12 @@ input, textarea, select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
+  padding: 12px 16px;
   background: var(--bg-surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  flex-shrink: 0;
-  transition: all 0.3s;
+  transition: all 0.15s;
 }
 
 .student-card:hover {
@@ -3838,6 +3857,23 @@ input, textarea, select {
   align-content: flex-start;
 }
 
+/* Lesson card on the student's own schedule. Scoped to #student-lessons-list because
+   .student-card is also the teacher's student-list row (defined earlier, as a
+   space-between row) — unscoped, that rule's align-items/justify-content leak in here
+   and lay the header and body side by side instead of stacking them. */
+#student-lessons-list .student-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 10px;
+  flex-shrink: 0;
+  transition: all 0.3s;
+}
 
 .student-card-cancelled {
   opacity: 0.5;
@@ -4003,7 +4039,7 @@ input, textarea, select {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  margin: 0 12px 12px;
+  margin: 12px 12px 12px;
 }
 
 .month-nav {
@@ -4536,11 +4572,14 @@ input, textarea, select {
 }
 
 .reason-img-empty,
+.reason-img-error {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
 
 .reason-img-error {
   color: var(--danger);
-  font-size: 13px;
-  text-align: center;
 }
 
 .reason-edit-controls {
@@ -4991,7 +5030,6 @@ input, textarea, select {
 .sub-act-option {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
   padding: 10px 12px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -5009,13 +5047,12 @@ input, textarea, select {
   background: var(--accent-soft);
 }
 
+/* The radio is never drawn: the selected tariff reads from the highlighted card
+   (.sub-act-option:has(input:checked) above). It stays in the DOM so the label keeps
+   driving selection and keyboard/browser behaviour is unchanged. Mobile already hid
+   it; this just applies the same treatment at every width. */
 .sub-act-option input[type=radio] {
-  margin: 3px 0 0 0;
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-  accent-color: var(--accent);
-  flex-shrink: 0;
+  display: none;
 }
 
 .sub-act-option-body {
@@ -5141,7 +5178,7 @@ input, textarea, select {
 
 /* Delete subscription button inside active panel */
 .sub-panel-delete {
-  margin-left: 0;
+  margin-left: 6px;
   width: 24px;
   height: 24px;
   display: inline-flex;
@@ -5407,6 +5444,9 @@ input, textarea, select {
   color: var(--accent);
   border-color: var(--accent);
 }
+.sub-panel-delete {
+  margin-left: 0;
+}
 
 /* Refunded subscription panel */
 .sub-panel-refunded {
@@ -5572,11 +5612,6 @@ input, textarea, select {
   .sub-act-info-grid {
     grid-template-columns: 1fr;
   }
-  /* Радио-кнопки выбора тарифа — скрыть (выделение остаётся через :has(input:checked)) */
-  .sub-act-option input[type=radio] {
-    display: none;
-  }
-
   /* Статистика: панели выручка/прибыль/комиссия — компактнее, чтобы числа влезали */
   .payroll-total {
     padding: 10px;
@@ -5625,6 +5660,11 @@ input, textarea, select {
 
 /* Suppress system selection/callout on cards & cells during touch */
 .lesson-card,
+.grid-cell {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
 
 /* Z-cycle button on the topmost card of an overlap stack (mobile + desktop) */
 .lc-zcycle {

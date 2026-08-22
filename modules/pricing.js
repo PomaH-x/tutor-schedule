@@ -209,7 +209,16 @@ async function deletePricingEntry() {
   markPristine('pricing-overlay');
   const id = editingPricingId; closePricingModal();
   showConfirm('Удалить тариф?', async () => {
-    await db.from('pricing').delete().eq('id', id);
+    const { error } = await db.from('pricing').delete().eq('id', id);
+    if (error) {
+      // Same RESTRICT story as subjects: subscriptions reference their pricing row,
+      // and removing it would leave sold subscriptions with no tariff to price them.
+      const inUse = error.code === '23503';
+      showToast(inUse
+        ? 'Тариф используется в абонементах — удалить нельзя'
+        : 'Не удалось удалить тариф', 'error');
+      return;
+    }
     showToast('Тариф удалён', 'success');
     await loadPricing();
     await loadPricingAdmin();

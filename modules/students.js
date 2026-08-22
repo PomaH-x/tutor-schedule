@@ -1338,7 +1338,7 @@ async function openStudentDetail(studentId) {
       .select('*, teacher:profiles!teacher_id(full_name, color), student_subjects(subject_id, subjects(id, name))')
       .eq('id', studentId).single(),
     db.from('lessons')
-      .select('id, start_time, end_time, status, subject, week_start, lesson_students!inner(student_id)')
+      .select('id, start_time, end_time, status, subject, week_start, lesson_students!inner(student_id, subscription_id)')
       .eq('lesson_students.student_id', studentId)
       .in('status', ['active', 'cancelled'])
       .order('start_time', { ascending: false }),
@@ -1415,6 +1415,15 @@ async function openStudentDetail(studentId) {
   const pendingPayments = (payments || []).filter(p => p.status === 'pending');
   const paymentsByLesson = {};
   (payments || []).forEach(p => { paymentsByLesson[p.lesson_id] = p; });
+
+  // Lessons attached to a subscription are paid for by that subscription, whether or
+  // not a payments row exists — so they show as paid, past or future, and the payment
+  // cell isn't editable (the subscription decides it, not a per-lesson payment).
+  const subLessonIds = new Set(
+    (lessons || [])
+      .filter(l => (l.lesson_students || []).some(ls => ls.student_id === studentId && ls.subscription_id))
+      .map(l => l.id)
+  );
 
   // Group lessons by subject (including synthetic missed rows)
   const lessonList = [...(lessons || []), ...missedRows]
@@ -1531,7 +1540,10 @@ async function openStudentDetail(studentId) {
         statusStr = '<span class="history-status history-planned">⏳</span>';
       }
       const p = paymentsByLesson[l.id];
-      const payStr = (l.status === 'missed' || !past) ? '—'
+      const bySub = subLessonIds.has(l.id);
+      const payStr = (l.status === 'missed') ? '—'
+        : bySub ? '<span class="pay-paid">✓</span>'
+        : !past ? '—'
         : p?.status === 'approved' ? '<span class="pay-paid">✓</span>'
         : p?.status === 'pending' ? '<span class="pay-pending">⏳</span>'
         : '<span class="pay-unpaid">✕</span>';
@@ -1551,9 +1563,11 @@ async function openStudentDetail(studentId) {
       } else {
         const isoDate = `${s.getFullYear()}-${(s.getMonth()+1).toString().padStart(2,'0')}-${dd}`;
         // For payment: 'approved' | 'pending' | 'unpaid' (unpaid = no row / rejected)
-        const payKey = past
-          ? (p?.status === 'approved' ? 'approved' : p?.status === 'pending' ? 'pending' : 'unpaid')
-          : null; // future lessons — payment not editable, shown as "—"
+        const payKey = bySub
+          ? null
+          : past
+            ? (p?.status === 'approved' ? 'approved' : p?.status === 'pending' ? 'pending' : 'unpaid')
+            : null; // future lessons — payment not editable, shown as "—"
         const statusKey = past
           ? (l.status === 'cancelled' ? 'cancelled' : 'active')
           : (l.status === 'cancelled' ? 'cancelled' : 'planned'); // future active = planned (view-only)

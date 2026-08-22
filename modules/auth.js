@@ -118,7 +118,7 @@ function showScreen(screenId) {
 const _SCREEN_ALLOWLIST = {
   admin:   ['screen-schedule', 'screen-recurring', 'screen-online', 'screen-profile'],
   teacher: ['screen-schedule', 'screen-recurring', 'screen-online', 'screen-profile'],
-  student: ['screen-student', 'screen-student-history', 'screen-profile']
+  student: ['screen-student', 'screen-student-history']
 };
 
 // Called from onAuthSuccess AFTER the default screen + inits have run.
@@ -278,9 +278,12 @@ async function loadTeachersForRegistration() {
     const subjects = subjectsByTeacher[t.id] || [];
     if (subjects.length === 0) return ''; // hide teachers without subjects — they can't be picked anyway
     const color = t.color || 'var(--accent)';
+    // Checkboxes are hidden in CSS and the whole row is the hit target; selection
+    // reads as a highlighted card rather than a form control, which matches the rest
+    // of the app. The inputs stay in the DOM so the browser handles toggling for us.
     const subjectsHTML = subjects
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map(s => `<label class="reg-subject-item">
+      .map(s => `<label class="reg-subject-chip">
         <input type="checkbox" data-subject-id="${s.id}" data-subject-name="${escapeHtml(s.name)}">
         <span>${escapeHtml(s.name)}</span>
       </label>`).join('');
@@ -289,26 +292,25 @@ async function loadTeachersForRegistration() {
         <input type="checkbox" data-teacher-toggle>
         <span class="reg-teacher-color" style="background:${escapeHtml(color)}"></span>
         <span class="reg-teacher-name">${escapeHtml(t.full_name)}</span>
-        <span class="reg-teacher-arrow">›</span>
       </label>
       <div class="reg-subjects-list" hidden>
-        ${subjectsHTML}
+        <div class="reg-subjects-label">Предмет</div>
+        <div class="reg-subject-chips">${subjectsHTML}</div>
       </div>
     </div>`;
   }).join('');
 
-  // Toggle subjects on teacher checkbox
+  // Subjects appear only once a teacher is picked — showing every teacher's subjects
+  // at once made the form a wall of options before the student had chosen anything.
   list.querySelectorAll('[data-teacher-toggle]').forEach(cb => {
     cb.addEventListener('change', () => {
       const item = cb.closest('.reg-teacher-item');
       const subs = item.querySelector('.reg-subjects-list');
-      if (cb.checked) {
-        subs.hidden = false;
-        item.classList.add('expanded');
-      } else {
-        subs.hidden = true;
-        item.classList.remove('expanded');
-        // Uncheck all of this teacher's subjects when teacher is deselected
+      item.classList.toggle('selected', cb.checked);
+      subs.hidden = !cb.checked;
+      if (!cb.checked) {
+        // Deselecting a teacher clears their subjects, so a collapsed teacher can
+        // never contribute a hidden pick to the submitted set.
         subs.querySelectorAll('input[type=checkbox]').forEach(b => { b.checked = false; });
       }
     });
@@ -398,7 +400,10 @@ async function handleRegister() {
       return;
     }
     if (selectedPairs.length === 0) {
-      showToast('Выберите хотя бы одного преподавателя и предмет', 'error');
+      const anyTeacherChecked = !!document.querySelector('#reg-teachers-list [data-teacher-toggle]:checked');
+      showToast(anyTeacherChecked
+        ? 'Выберите предмет у преподавателя'
+        : 'Выберите хотя бы одного преподавателя', 'error');
       return;
     }
   }
