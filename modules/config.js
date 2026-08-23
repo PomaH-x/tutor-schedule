@@ -35,12 +35,17 @@ const WRITE_OPS = ['insert', 'update', 'delete', 'upsert'];
 
 function reportWriteError(table, op, error) {
   console.error(`[db.${op}] ${table}:`, error);
-  // Give the caller's own handler a moment to surface something specific. If it did,
-  // stay quiet — two toasts for one failure is worse than one good message.
+  // 23P01 = exclusion_violation. The only exclusion constraints here guard room
+  // overlaps, so this means another teacher took the slot between our client-side
+  // check and the insert reaching the server. Say what actually happened instead of
+  // the generic save failure.
+  const isRoomClash = error?.code === '23P01';
   setTimeout(() => {
     try {
       if (Date.now() - lastToastShownAt < 500) return;
-      showToast('Не удалось сохранить изменения. Проверьте связь и повторите', 'error');
+      showToast(isRoomClash
+        ? 'Кабинет только что занял другой преподаватель. Обновите расписание'
+        : 'Не удалось сохранить изменения. Проверьте связь и повторите', 'error');
     } catch (_) { /* toast layer unavailable — console already has it */ }
   }, 300);
 }
